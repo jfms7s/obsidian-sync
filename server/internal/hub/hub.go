@@ -37,6 +37,10 @@ type Vaults interface {
 type Options struct {
 	AuthTimeout  time.Duration
 	WriteTimeout time.Duration
+	// IdleTimeout closes an authenticated socket that sends no frame for
+	// this long. Clients ping every 30s, so the default of 90s tolerates two
+	// lost pings, and a revoked device that stops pinging is cut off.
+	IdleTimeout time.Duration
 }
 
 type Hub struct {
@@ -45,6 +49,7 @@ type Hub struct {
 	bus    bus.Bus
 	log    *slog.Logger
 	opts   Options
+	wg     sync.WaitGroup // connection and forward goroutines
 }
 
 func New(a Authenticator, v Vaults, b bus.Bus, log *slog.Logger, opts Options) *Hub {
@@ -54,10 +59,21 @@ func New(a Authenticator, v Vaults, b bus.Bus, log *slog.Logger, opts Options) *
 	if opts.WriteTimeout == 0 {
 		opts.WriteTimeout = 10 * time.Second
 	}
+	if opts.IdleTimeout == 0 {
+		opts.IdleTimeout = 90 * time.Second
+	}
 	return &Hub{auth: a, vaults: v, bus: b, log: log, opts: opts}
 }
 
+// Wait blocks until every socket the hub is serving has finished. Call it
+// after http.Server.Shutdown (which does not wait for hijacked connections)
+// has returned and the sockets' request contexts are cancelled, and before
+// closing the store. No new sockets may be accepted once Wait is called.
+func (h *Hub) Wait() { h.wg.Wait() }
+
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.wg.Add(1)
+	defer h.wg.Done()
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		// The Origin header is not checked: the socket is authenticated by a
 		// token in its first frame, never by cookies, so a cross-origin page
@@ -97,7 +113,7 @@ func (c *conn) run() error {
 	}
 	for {
 		var f obsyncv1.ClientFrame
-		if err := c.read(c.ctx, &f); err != nil {
+		if err := c.readIdle(&f); err != nil {
 			return err
 		}
 		switch m := f.Frame.(type) {
@@ -115,6 +131,15 @@ func (c *conn) run() error {
 			return c.fail(apperr.New(apperr.Invalid, "unexpected frame"))
 		}
 	}
+}
+
+// readIdle reads the next frame, closing the socket if none arrives within
+// IdleTimeout. This reaps half-open sockets and bounds how long a revoked
+// device that never pings can keep receiving notifications.
+func (c *conn) readIdle(f *obsyncv1.ClientFrame) error {
+	ctx, cancel := context.WithTimeout(c.ctx, c.hub.opts.IdleTimeout)
+	defer cancel()
+	return c.read(ctx, f) // a cancelled Read closes the socket
 }
 
 func (c *conn) authenticate() error {
@@ -166,7 +191,7 @@ func (c *conn) subscribe(vaultIDs []string) {
 		}
 		seen[id] = struct{}{}
 		if !ids.Valid(id) {
-			c.sendError(apperr.New(apperr.NotFound, "vault %q not found", id))
+			c.sendError(apperr.New(apperr.NotFound, "vault not found"))
 			continue
 		}
 		// Subscribe before reading the seq, so a commit landing in between is
@@ -176,7 +201,7 @@ func (c *conn) subscribe(vaultIDs []string) {
 		if err != nil {
 			cancel()
 			if errors.Is(err, store.ErrNotFound) {
-				c.sendError(apperr.New(apperr.NotFound, "vault %s not found", id))
+				c.sendError(apperr.New(apperr.NotFound, "vault not found"))
 			} else {
 				c.hub.log.Error("subscribe", "vault", id, "err", err)
 				c.sendError(apperr.New(apperr.Internal, "internal error"))
@@ -189,15 +214,26 @@ func (c *conn) subscribe(vaultIDs []string) {
 		}
 		c.subs[id] = cancel
 		c.mu.Unlock()
+		c.hub.wg.Add(1)
 		go c.forward(id, v.Seq, ch)
 	}
 }
 
+// forward sends the vault's current seq, then each live notification. The
+// bus subscription is opened before seq is read, so a delayed publish can
+// carry a seq at or below one already sent; those are dropped so the client
+// only ever sees seq increase.
 func (c *conn) forward(vaultID string, seq int64, ch <-chan bus.Notify) {
+	defer c.hub.wg.Done()
 	if err := c.sendNotify(vaultID, seq); err != nil {
 		return
 	}
+	last := seq
 	for n := range ch {
+		if n.Seq <= last {
+			continue
+		}
+		last = n.Seq
 		if err := c.sendNotify(n.VaultID, n.Seq); err != nil {
 			return
 		}

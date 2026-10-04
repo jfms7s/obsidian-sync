@@ -30,12 +30,18 @@ type env struct {
 	st    *store.Store
 	bus   *bus.Memory
 	auth  *auth.Service
+	hub   *hub.Hub
 	token string
 	dev   store.Device
 	vault store.Vault
 }
 
 func newEnv(t *testing.T) *env {
+	t.Helper()
+	return newEnvOpts(t, hub.Options{AuthTimeout: 200 * time.Millisecond})
+}
+
+func newEnvOpts(t *testing.T, opts hub.Options) *env {
 	t.Helper()
 	st, clk := storetest.New(t)
 	authSvc, err := auth.NewService(st, auth.Options{Params: auth.FastParams, Now: clk.Now})
@@ -52,10 +58,10 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	b := bus.NewMemory()
-	h := hub.New(authSvc, st, b, slog.New(slog.NewTextHandler(io.Discard, nil)), hub.Options{AuthTimeout: 200 * time.Millisecond})
+	h := hub.New(authSvc, st, b, slog.New(slog.NewTextHandler(io.Discard, nil)), opts)
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &env{t: t, url: "ws" + strings.TrimPrefix(srv.URL, "http"), st: st, bus: b, auth: authSvc,
+	return &env{t: t, url: "ws" + strings.TrimPrefix(srv.URL, "http"), st: st, bus: b, auth: authSvc, hub: h,
 		token: res.Token, dev: res.Device, vault: storetest.SeedVault(t, st, user.ID)}
 }
 
@@ -239,4 +245,92 @@ func TestResubscribeReplacesExistingSubscription(t *testing.T) {
 		t.Fatalf("live notify = %v", n)
 	}
 	expectPongNext(t, c, 2)
+}
+
+func TestIdleSocketIsClosed(t *testing.T) {
+	e := newEnvOpts(t, hub.Options{IdleTimeout: 300 * time.Millisecond})
+	c := e.authed()
+	expectClosed(t, c)
+}
+
+func TestPingingSocketStaysOpen(t *testing.T) {
+	e := newEnvOpts(t, hub.Options{IdleTimeout: 300 * time.Millisecond})
+	c := e.authed()
+	for i := uint64(1); i <= 10; i++ {
+		time.Sleep(100 * time.Millisecond)
+		expectPongNext(t, c, i)
+	}
+}
+
+// A revoked device that never pings must not keep receiving notifications:
+// the idle timeout closes the socket.
+func TestRevokedSilentSocketStopsGettingNotifies(t *testing.T) {
+	e := newEnvOpts(t, hub.Options{IdleTimeout: 300 * time.Millisecond})
+	c := e.authed()
+	send(t, c, subscribeFrame(e.vault.ID))
+	if n := recv(t, c).GetNotify(); n.GetSeq() != 0 {
+		t.Fatalf("initial notify = %v", n)
+	}
+	if err := e.st.RevokeDevice(ctx, e.dev.UserID, e.dev.ID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if err := e.bus.Publish(ctx, bus.Notify{VaultID: e.vault.ID, Seq: 5}); err != nil {
+		t.Fatal(err)
+	}
+	expectClosed(t, c)
+}
+
+func TestNotifiesAreMonotonic(t *testing.T) {
+	e := newEnv(t)
+	c := e.authed()
+	send(t, c, subscribeFrame(e.vault.ID))
+	if n := recv(t, c).GetNotify(); n.GetSeq() != 0 {
+		t.Fatalf("initial notify = %v", n)
+	}
+	// A stale publish (not higher than what was already sent) is dropped.
+	if err := e.bus.Publish(ctx, bus.Notify{VaultID: e.vault.ID, Seq: 0}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := e.bus.Publish(ctx, bus.Notify{VaultID: e.vault.ID, Seq: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if n := recv(t, c).GetNotify(); n.GetSeq() != 3 {
+		t.Fatalf("notify = %v, want seq 3", n)
+	}
+	if err := e.bus.Publish(ctx, bus.Notify{VaultID: e.vault.ID, Seq: 2}); err != nil {
+		t.Fatal(err)
+	}
+	expectPongNext(t, c, 1)
+}
+
+func TestWaitReturnsAfterSocketsClose(t *testing.T) {
+	e := newEnv(t)
+	c := e.authed()
+	send(t, c, subscribeFrame(e.vault.ID))
+	recv(t, c)
+	done := make(chan struct{})
+	go func() { e.hub.Wait(); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("Wait returned while a socket was open")
+	case <-time.After(100 * time.Millisecond):
+	}
+	c.Close(websocket.StatusNormalClosure, "")
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Wait did not return after the socket closed")
+	}
+}
+
+func TestSubscribeNotFoundDoesNotEchoInput(t *testing.T) {
+	e := newEnv(t)
+	c := e.authed()
+	send(t, c, subscribeFrame("<script>"))
+	f := recv(t, c).GetError()
+	if f.GetCode() != apperr.NotFound || strings.Contains(f.GetMessage(), "script") {
+		t.Fatalf("error = %v", f)
+	}
 }
