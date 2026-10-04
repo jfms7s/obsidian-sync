@@ -254,7 +254,12 @@ func (c Config) Validate() error {
 		add("blob_backend %q is not supported (use \"fs\")", c.BlobBackend)
 	}
 	if c.Cluster {
-		add("cluster mode is not available yet")
+		if c.BlobBackend == "s3" {
+			add("cluster mode is not available yet")
+		} else {
+			// The fs backend and its temp sweep assume one node owns data_dir.
+			add(`cluster mode is not available yet; when it arrives it requires blob_backend "s3" (the fs backend is single-node only)`)
+		}
 	}
 	if c.DefaultQuotaBytes <= 0 {
 		add("default_quota_bytes must be positive")

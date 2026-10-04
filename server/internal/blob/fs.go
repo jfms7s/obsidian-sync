@@ -16,7 +16,9 @@ import (
 // no published blob can match it.
 const tempPrefix = ".tmp-"
 
-// FS stores blobs as files under a root directory.
+// FS stores blobs as files under a root directory. It is single-node only:
+// it and SweepTemp assume one server owns root, so clustered deployments use
+// object storage (blob_backend "s3") instead; config.Validate enforces this.
 type FS struct{ root string }
 
 // NewFS creates root if needed. It does not scan the tree; stale temp files

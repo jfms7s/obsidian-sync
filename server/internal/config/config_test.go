@@ -95,6 +95,18 @@ func TestValidateRejectsUnavailableModes(t *testing.T) {
 	}
 }
 
+func TestValidateClusterRequiresS3Blobs(t *testing.T) {
+	_, err := config.Load("", env(map[string]string{"OBSYNC_CLUSTER": "true", "OBSYNC_BLOB_BACKEND": "fs"}))
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, want := range []string{"cluster mode is not available yet", `requires blob_backend "s3"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
 func TestValidateRejectsBadDatabaseScheme(t *testing.T) {
 	_, err := config.Load("", env(map[string]string{"OBSYNC_DATABASE_URL": "postgres://db/obsync"}))
 	if err == nil || !strings.Contains(err.Error(), `"postgres"`) {

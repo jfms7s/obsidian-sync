@@ -28,7 +28,8 @@ const (
 
 // TempSweeper is implemented by blob stores that can leave temp files behind
 // after a crash (blob.FS). The runner sweeps them once per pass when the
-// store supports it.
+// store supports it. blob.FS is single-node only; clustered deployments use
+// object storage, which has no temp files to sweep.
 type TempSweeper interface {
 	SweepTemp(ctx context.Context, olderThan time.Duration) (int, error)
 }
