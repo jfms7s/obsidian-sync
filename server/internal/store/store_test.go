@@ -155,3 +155,46 @@ func TestRemoteUnreachableDoesNotLeakAuthToken(t *testing.T) {
 		t.Fatalf("migrate err = %v", err)
 	}
 }
+
+// Credentials in the URL itself (userinfo, and query parameters such as
+// remoteEncryptionKey) are redacted from remote errors like the auth token.
+func TestRemoteErrorsDoNotLeakURLCredentials(t *testing.T) {
+	const (
+		user   = "dbadmin-Us3r"
+		pass   = "pw-Hunter2+/=secret"
+		encKey = "enc-K3y+/=value"
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		// A misbehaving proxy reflecting the whole request.
+		fmt.Fprintf(w, "garbage url=%q headers=%q", r.URL.String(), r.Header)
+		if u, p, ok := r.BasicAuth(); ok {
+			fmt.Fprintf(w, " basic=%q:%q", u, p)
+		}
+		fmt.Fprintf(w, " echo=%q %q %q %q", user, pass, url.QueryEscape(pass), encKey+" "+url.QueryEscape(encKey))
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	u, _ := url.Parse(srv.URL)
+	u.User = url.UserPassword(user, pass)
+	u.RawQuery = "remoteEncryptionKey=" + url.QueryEscape(encKey)
+	st, err := store.Open(ctx, store.Options{URL: u.String(), AuthToken: "tok"})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+	err = st.Migrate(ctx)
+	if err == nil {
+		t.Fatal("migrate succeeded against a failing server")
+	}
+	msg := err.Error()
+	for _, s := range []string{user, pass, url.QueryEscape(pass), encKey, url.QueryEscape(encKey)} {
+		if strings.Contains(msg, s) {
+			t.Fatalf("error leaks %q: %q", s, msg)
+		}
+	}
+	if !strings.Contains(msg, "REDACTED") {
+		t.Fatalf("error = %q; want credentials redacted", msg)
+	}
+}

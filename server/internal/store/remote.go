@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -23,10 +24,14 @@ import (
 //     ("api error: status=500 …, body=…"), so a proxy or server that echoes the
 //     request headers puts the bearer token in every query error.
 //
-// remoteConnector therefore wraps the driver's connector and redacts the token
-// from every error it, its connections, statements, transactions and rows
-// return. Errors without the token pass through unchanged, so error matching
-// (isUniqueViolation, sql.ErrNoRows) is unaffected.
+// The same goes for the other credentials a URL can carry: the userinfo and
+// secret-named query parameters such as remoteEncryptionKey (which the driver
+// sends as the X-Turso-Encryption-Key header).
+//
+// remoteConnector therefore wraps the driver's connector and redacts those
+// secrets from every error it, its connections, statements, transactions and
+// rows return. Errors without a secret pass through unchanged, so error
+// matching (isUniqueViolation, sql.ErrNoRows) is unaffected.
 
 const redacted = "REDACTED"
 
@@ -55,14 +60,7 @@ func openRemote(rawURL, authToken string) (*sql.DB, error) {
 		q.Set("authToken", authToken)
 		u.RawQuery = q.Encode()
 	}
-	var secrets []string
-	if tok := q.Get("authToken"); tok != "" {
-		secrets = append(secrets, tok)
-		if esc := url.QueryEscape(tok); esc != tok {
-			secrets = append(secrets, esc)
-		}
-	}
-	r := redactor(secrets)
+	r := urlSecrets(u)
 	drv, err := libsqlDriver()
 	if err != nil {
 		return nil, err
@@ -76,6 +74,57 @@ func openRemote(rawURL, authToken string) (*sql.DB, error) {
 		return nil, fmt.Errorf("open database: %w", r.err(err))
 	}
 	return sql.OpenDB(&redactConnector{c: c, r: r}), nil
+}
+
+// urlSecrets collects every credential u carries, raw and escaped: the
+// userinfo name and password, and the value of each query parameter whose
+// key names a secret (authToken, remoteEncryptionKey, …).
+func urlSecrets(u *url.URL) redactor {
+	var r redactor
+	add := func(s string) {
+		if s == "" {
+			return
+		}
+		for _, v := range []string{s, url.QueryEscape(s), url.PathEscape(s)} {
+			if !slices.Contains(r, v) {
+				r = append(r, v)
+			}
+		}
+	}
+	if u.User != nil {
+		add(u.User.Username())
+		if p, ok := u.User.Password(); ok {
+			add(p)
+		}
+		// The userinfo as the URL spells it, in its own escaping.
+		if raw := u.User.String(); raw != "" {
+			for _, part := range strings.SplitN(raw, ":", 2) {
+				add(part)
+			}
+		}
+	}
+	for k, vs := range u.Query() {
+		if !isSecretParam(k) {
+			continue
+		}
+		for _, v := range vs {
+			add(v)
+		}
+	}
+	// Longest first, so a secret that contains another is replaced whole.
+	slices.SortStableFunc(r, func(a, b string) int { return len(b) - len(a) })
+	return r
+}
+
+// isSecretParam reports whether a query parameter key names a credential.
+func isSecretParam(key string) bool {
+	k := strings.ToLower(key)
+	for _, w := range []string{"key", "token", "secret", "password"} {
+		if strings.Contains(k, w) {
+			return true
+		}
+	}
+	return false
 }
 
 // redactor replaces each secret in error text with REDACTED.

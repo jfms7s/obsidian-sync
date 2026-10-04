@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/jfms7s/obsidian-sync/server/internal/apperr"
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
@@ -48,6 +50,8 @@ type handlers struct {
 	ready  func(ctx context.Context) error
 	log    *slog.Logger
 	limits *limiters
+
+	readyCache readyCache
 }
 
 func NewHandler(d Deps) http.Handler {
@@ -242,8 +246,40 @@ func (h *handlers) healthz(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
+// /readyz is unauthenticated and unlimited, so its result is reused for
+// readyCacheTTL rather than pinging the database and blob store per request.
+var (
+	readyCacheTTL = time.Second
+	readyNow      = time.Now
+)
+
+// readyCache holds the last readiness result. The mutex is held across the
+// check, so concurrent callers in a window wait for and share one result.
+type readyCache struct {
+	mu      sync.Mutex
+	checked time.Time
+	err     error
+	valid   bool
+}
+
+func (c *readyCache) check(ctx context.Context, ready func(context.Context) error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := readyNow()
+	if c.valid && now.Sub(c.checked) < readyCacheTTL && !now.Before(c.checked) {
+		return c.err
+	}
+	err := ready(ctx)
+	// A check cut short by this caller going away says nothing about the
+	// server, so it is not cached for others.
+	if ctx.Err() == nil {
+		c.checked, c.err, c.valid = now, err, true
+	}
+	return err
+}
+
 func (h *handlers) readyz(w http.ResponseWriter, r *http.Request) {
-	if err := h.ready(r.Context()); err != nil {
+	if err := h.readyCache.check(r.Context(), h.ready); err != nil {
 		h.log.Warn("not ready", "err", err)
 		http.Error(w, "not ready", http.StatusServiceUnavailable)
 		return

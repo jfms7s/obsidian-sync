@@ -21,7 +21,9 @@ func New(trusted []netip.Prefix) *Resolver {
 }
 
 // Key returns the rate-limit key for r's client: an IPv4 address in full, an
-// IPv6 address as its /64 (one subscriber usually holds a whole /64). If the
+// IPv6 address as its /56. One subscriber usually holds at least a /56 (often
+// more), so keying by /64 would let a single actor mint 256 keys per /56 and
+// fill the limiter's key table. If the
 // peer address does not parse, it is used verbatim. untrustedXFF reports that
 // r carried X-Forwarded-For that was ignored because the peer is not trusted,
 // a hint that trusted_proxies may be misconfigured.
@@ -102,9 +104,12 @@ func parseHop(s string) (netip.Addr, bool) {
 
 func normalize(a netip.Addr) netip.Addr { return a.Unmap().WithZone("") }
 
+// ipv6KeyBits is the IPv6 prefix length that counts as one client.
+const ipv6KeyBits = 56
+
 func keyFor(a netip.Addr) string {
 	if a.Is6() {
-		return netip.PrefixFrom(a, 64).Masked().String()
+		return netip.PrefixFrom(a, ipv6KeyBits).Masked().String()
 	}
 	return a.String()
 }

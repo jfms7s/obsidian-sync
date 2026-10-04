@@ -172,10 +172,10 @@ func TestTrustedProxyKeying(t *testing.T) {
 	notLimited(t, e.serve("POST", "/v1/auth/login", "", "203.0.113.9:1", "1.1.1.1"))
 	wantLimited(t, e.serve("POST", "/v1/auth/login", "", "203.0.113.9:1", "2.2.2.2"), "1")
 
-	// One IPv6 /64 is one client.
+	// One IPv6 /56 is one client, even across its /64s.
 	notLimited(t, e.serve("POST", "/v1/auth/login", "", "[2001:db8:0:1::1]:1"))
-	wantLimited(t, e.serve("POST", "/v1/auth/login", "", "[2001:db8:0:1::2]:1"), "1")
-	notLimited(t, e.serve("POST", "/v1/auth/login", "", "[2001:db8:0:2::1]:1"))
+	wantLimited(t, e.serve("POST", "/v1/auth/login", "", "[2001:db8:0:2::2]:1"), "1")
+	notLimited(t, e.serve("POST", "/v1/auth/login", "", "[2001:db8:0:100::1]:1"))
 }
 
 // With no limits configured (the zero RateLimits) nothing is throttled.

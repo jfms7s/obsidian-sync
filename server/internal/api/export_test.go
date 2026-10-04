@@ -17,3 +17,14 @@ func SetChunkWriteTimeout(d time.Duration) (restore func()) {
 	chunkWriteTimeout = d
 	return func() { chunkWriteTimeout = old }
 }
+
+// SetReadyClock makes the /readyz result cache read the time from now for a
+// test and returns a function that restores the real clock.
+func SetReadyClock(now func() time.Time) (restore func()) {
+	old := readyNow
+	readyNow = now
+	return func() { readyNow = old }
+}
+
+// ReadyCacheTTL is how long a /readyz result is reused.
+func ReadyCacheTTL() time.Duration { return readyCacheTTL }

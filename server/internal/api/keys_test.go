@@ -55,9 +55,38 @@ func TestReplacingKeysWithoutPasswordIsRejected(t *testing.T) {
 	wantErr(t, status, apiErr, http.StatusForbidden, apperr.WrongPassword)
 	e.wantStoredBundle(token, validBundle())
 
-	// Even resending the identical bundle needs the password.
-	status, apiErr = e.do("PUT", "/v1/keys", token, validBundle(), nil)
+	// Any difference from the stored bundle needs the password, however
+	// small: here only the KDF parameters change.
+	kb := validBundle()
+	kb.PassParams.Iterations++
+	status, apiErr = e.do("PUT", "/v1/keys", token, kb, nil)
 	wantErr(t, status, apiErr, http.StatusForbidden, apperr.WrongPassword)
+	e.wantStoredBundle(token, validBundle())
+}
+
+// A client retrying a first upload whose response was lost resends the very
+// bundle already stored. That changes nothing, so it succeeds without the
+// password, and without spending a password attempt even when one is sent.
+func TestResendingIdenticalKeyBundleIsIdempotent(t *testing.T) {
+	e, token := keysEnv(t)
+	if status, apiErr := e.do("PUT", "/v1/keys", token, validBundle(), nil); status != http.StatusNoContent {
+		t.Fatalf("identical resend without a password = %d %v", status, apiErr)
+	}
+	// Wrong passwords on identical resends are never checked: 5 of them
+	// would otherwise exhaust alice's login budget.
+	for i := 0; i < 5; i++ {
+		kb := validBundle()
+		kb.CurrentPassword = "guess"
+		if status, apiErr := e.do("PUT", "/v1/keys", token, kb, nil); status != http.StatusNoContent {
+			t.Fatalf("identical resend %d = %d %v", i, status, apiErr)
+		}
+	}
+	for i := 0; i < 4; i++ {
+		status, apiErr := e.do("POST", "/v1/auth/login", "", &obsyncv1.LoginRequest{Username: "alice", Password: "guess"}, nil)
+		wantErr(t, status, apiErr, http.StatusUnauthorized, apperr.Unauthorized)
+	}
+	e.login("alice", "correct horse") // fails the test if rate limited
+	e.wantStoredBundle(token, validBundle())
 }
 
 func TestReplacingKeysWithWrongPasswordIsRejectedAndCounted(t *testing.T) {

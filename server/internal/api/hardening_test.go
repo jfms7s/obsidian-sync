@@ -2,11 +2,16 @@ package api_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -152,5 +157,74 @@ func TestNilReadyMeansReady(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/readyz", nil))
 	if rec.Code != 200 {
 		t.Fatalf("readyz = %d", rec.Code)
+	}
+}
+
+// /readyz is unauthenticated and unlimited, so it must not ping the database
+// and blob store on every request: a result, failing or not, is reused for a
+// short window, and concurrent callers share it.
+func TestReadyzCachesResult(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Unix(1_700_000_000, 0)
+	restore := api.SetReadyClock(func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+	defer restore()
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+
+	var calls atomic.Int32
+	var fail atomic.Bool
+	h := api.NewHandler(api.Deps{
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Ready: func(context.Context) error {
+			calls.Add(1)
+			if fail.Load() {
+				return errors.New("db down")
+			}
+			return nil
+		},
+	})
+	get := func() int {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/readyz", nil))
+		return rec.Code
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if code := get(); code != 200 {
+				t.Errorf("readyz = %d", code)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("20 calls within the window ran Ready %d times", n)
+	}
+
+	// Within the window the cached success stands even though Ready would
+	// now fail.
+	fail.Store(true)
+	advance(api.ReadyCacheTTL() - time.Millisecond)
+	if code := get(); code != 200 || calls.Load() != 1 {
+		t.Fatalf("within window: %d, %d calls", code, calls.Load())
+	}
+
+	// After the window it re-checks, and the failure is cached too.
+	advance(2 * time.Millisecond)
+	for i := 0; i < 5; i++ {
+		if code := get(); code != http.StatusServiceUnavailable {
+			t.Fatalf("after window: %d", code)
+		}
+	}
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("Ready ran %d times; want 2", n)
+	}
+
+	fail.Store(false)
+	advance(api.ReadyCacheTTL())
+	if code := get(); code != 200 || calls.Load() != 3 {
+		t.Fatalf("recovered: %d, %d calls", code, calls.Load())
 	}
 }

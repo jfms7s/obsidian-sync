@@ -37,11 +37,13 @@ func TestResolve(t *testing.T) {
 		{"multiple XFF headers form one list", proxied, req("10.0.0.2:80", "1.2.3.4", "198.51.100.1,10.1.1.1"), "198.51.100.1", false},
 		{"all trusted: left-most", proxied, req("10.0.0.2:80", "10.9.9.9, 10.1.1.1"), "10.9.9.9", false},
 		{"garbage beyond trusted hops stops the walk", proxied, req("10.0.0.2:80", "198.51.100.1, nonsense, 10.1.1.1"), "10.1.1.1", false},
-		{"IPv6 client grouped by /64", none, req("[2001:db8:1:2:aaaa::1]:443"), "2001:db8:1:2::/64", false},
-		{"IPv6 via trusted v6 proxy", proxied, req("[fd00::1]:80", "2001:db8:1:2:ffff::9"), "2001:db8:1:2::/64", false},
+		{"IPv6 client grouped by /56", none, req("[2001:db8:1:2:aaaa::1]:443"), "2001:db8:1::/56", false},
+		{"IPv6 /56 spans subnets 00-ff", none, req("[2001:db8:1:ff:aaaa::1]:443"), "2001:db8:1::/56", false},
+		{"IPv6 next /56 is another key", none, req("[2001:db8:1:100::1]:443"), "2001:db8:1:100::/56", false},
+		{"IPv6 via trusted v6 proxy", proxied, req("[fd00::1]:80", "2001:db8:1:2:ffff::9"), "2001:db8:1::/56", false},
 		{"IPv4-mapped IPv6 treated as IPv4", none, req("[::ffff:203.0.113.5]:1"), "203.0.113.5", false},
 		{"XFF entry with port", proxied, req("10.0.0.2:80", "198.51.100.1:5555"), "198.51.100.1", false},
-		{"XFF bracketed v6 with port", proxied, req("10.0.0.2:80", "[2001:db8::1]:5555"), "2001:db8::/64", false},
+		{"XFF bracketed v6 with port", proxied, req("10.0.0.2:80", "[2001:db8::1]:5555"), "2001:db8::/56", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			key, untrustedFF := tc.res.Key(tc.r)

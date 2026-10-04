@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net/http"
@@ -44,7 +45,8 @@ func (h *handlers) getKeys(w http.ResponseWriter, r *http.Request, sess auth.Ses
 // putKeys stores the user's first key bundle, or replaces it (a passphrase
 // change). The first upload needs only the device token; a replacement also
 // needs the account password, so a stolen token cannot overwrite the wrapped
-// private keys or their KDF parameters and break recovery.
+// private keys or their KDF parameters and break recovery. Resending exactly
+// the stored bundle changes nothing and succeeds without the password.
 func (h *handlers) putKeys(w http.ResponseWriter, r *http.Request, sess auth.Session) {
 	var req obsyncv1.KeyBundle
 	if err := readProto(w, r, &req, keysBodyLimit); err != nil {
@@ -54,25 +56,6 @@ func (h *handlers) putKeys(w http.ResponseWriter, r *http.Request, sess auth.Ses
 	if err := validateKeyBundle(&req); err != nil {
 		h.writeError(w, r, err)
 		return
-	}
-	// A password sent with a first upload is ignored. Two first uploads
-	// racing past this check are settled by the store: the later one must
-	// carry the very public keys the earlier one just stored, which no one
-	// else knows before they are uploaded.
-	_, err := h.store.KeyBundle(r.Context(), sess.UserID)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-	case err != nil:
-		h.writeError(w, r, err)
-		return
-	default:
-		if err := h.auth.VerifyUserPassword(r.Context(), sess.UserID, req.CurrentPassword); err != nil {
-			if errors.Is(err, auth.ErrPasswordRequired) {
-				err = apperr.New(apperr.WrongPassword, "replacing the key bundle requires the account password in current_password")
-			}
-			h.writeError(w, r, err)
-			return
-		}
 	}
 	// Store only the validated fields, never whatever else came in (and
 	// never the password).
@@ -92,6 +75,31 @@ func (h *handlers) putKeys(w http.ResponseWriter, r *http.Request, sess auth.Ses
 		h.writeError(w, r, err)
 		return
 	}
+	// A password sent with a first upload is ignored. Two first uploads
+	// racing past this check are settled by the store: the later one must
+	// carry the very public keys the earlier one just stored, which no one
+	// else knows before they are uploaded.
+	existing, err := h.store.KeyBundle(r.Context(), sess.UserID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		h.writeError(w, r, err)
+		return
+	case sameKeyBundle(existing, kb, data):
+		// A retry of an upload that already landed (its response lost):
+		// it would change nothing, so it needs no password, and any
+		// password sent is not checked (and spends no attempt).
+		w.WriteHeader(http.StatusNoContent)
+		return
+	default:
+		if err := h.auth.VerifyUserPassword(r.Context(), sess.UserID, req.CurrentPassword); err != nil {
+			if errors.Is(err, auth.ErrPasswordRequired) {
+				err = apperr.New(apperr.WrongPassword, "replacing the key bundle requires the account password in current_password")
+			}
+			h.writeError(w, r, err)
+			return
+		}
+	}
 	err = h.store.PutKeyBundle(r.Context(), sess.UserID, store.KeyBundle{
 		PublicEncKey: kb.PublicEncKey, PublicSignKey: kb.PublicSignKey, Bundle: data,
 	})
@@ -104,6 +112,24 @@ func (h *handlers) putKeys(w http.ResponseWriter, r *http.Request, sess auth.Ses
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// sameKeyBundle reports whether the stored bundle equals the validated
+// incoming one, data being its encoding, in every stored field: the public
+// key columns byte for byte, and the stored encoding either byte for byte or,
+// should an encoder change make the bytes differ, field for field.
+func sameKeyBundle(stored store.KeyBundle, kb *obsyncv1.KeyBundle, data []byte) bool {
+	if !bytes.Equal(stored.PublicEncKey, kb.PublicEncKey) || !bytes.Equal(stored.PublicSignKey, kb.PublicSignKey) {
+		return false
+	}
+	if bytes.Equal(stored.Bundle, data) {
+		return true
+	}
+	var old obsyncv1.KeyBundle
+	if err := unmarshalOpts.Unmarshal(stored.Bundle, &old); err != nil {
+		return false
+	}
+	return proto.Equal(&old, kb)
 }
 
 func validateKeyBundle(kb *obsyncv1.KeyBundle) error {
