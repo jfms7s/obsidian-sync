@@ -3,10 +3,13 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -29,7 +32,46 @@ type testEnv struct {
 	url      string
 	st       *store.Store
 	blobRoot string
+	// failBlobReads makes every blob read return a few bytes and then an
+	// error, simulating storage failing mid-download.
+	failBlobReads *atomic.Bool
+	// handler is the API handler, for tests that serve it themselves.
+	handler http.Handler
 }
+
+// faultyBlobs wraps a blob store so tests can make reads fail mid-stream.
+type faultyBlobs struct {
+	blob.Store
+	fail *atomic.Bool
+}
+
+func (f faultyBlobs) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	rc, err := f.Store.Get(ctx, key)
+	if err != nil || !f.fail.Load() {
+		return rc, err
+	}
+	return &failingReader{rc: rc, left: 3}, nil
+}
+
+// failingReader passes through left bytes, then fails.
+type failingReader struct {
+	rc   io.ReadCloser
+	left int
+}
+
+func (r *failingReader) Read(p []byte) (int, error) {
+	if r.left == 0 {
+		return 0, errors.New("injected blob read failure")
+	}
+	if len(p) > r.left {
+		p = p[:r.left]
+	}
+	n, err := r.rc.Read(p)
+	r.left -= n
+	return n, err
+}
+
+func (r *failingReader) Close() error { return r.rc.Close() }
 
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
@@ -44,11 +86,12 @@ func newTestEnv(t *testing.T) *testEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	syncSvc := syncsvc.New(st, blobs, bus.NewMemory(), syncsvc.Limits{MaxFileSizeBytes: 64 << 20}, log)
+	failBlobReads := new(atomic.Bool)
+	syncSvc := syncsvc.New(st, faultyBlobs{Store: blobs, fail: failBlobReads}, bus.NewMemory(), syncsvc.Limits{MaxFileSizeBytes: 64 << 20}, log)
 	h := api.NewHandler(api.Deps{Auth: authSvc, Sync: syncSvc, Store: st, Ready: st.Ping, Log: log})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &testEnv{t: t, url: srv.URL, st: st, blobRoot: blobRoot}
+	return &testEnv{t: t, url: srv.URL, st: st, blobRoot: blobRoot, failBlobReads: failBlobReads, handler: h}
 }
 
 func (e *testEnv) createUser(username, password string) store.User {
@@ -104,7 +147,20 @@ func (e *testEnv) do(method, path, token string, in, out proto.Message) (int, *o
 	return status, nil
 }
 
+// doRaw sends body with the Content-Type a well-behaved client uses: raw
+// bytes for a chunk upload, protobuf for everything else.
 func (e *testEnv) doRaw(method, path, token string, body []byte) (int, []byte) {
+	e.t.Helper()
+	ct := "application/x-protobuf"
+	if method == "PUT" && strings.Contains(path, "/chunks/") {
+		ct = "application/octet-stream"
+	}
+	return e.doContentType(method, path, token, ct, body)
+}
+
+// doContentType sends body with Content-Type ct, omitting the header if ct
+// is empty.
+func (e *testEnv) doContentType(method, path, token, ct string, body []byte) (int, []byte) {
 	e.t.Helper()
 	var r io.Reader
 	if body != nil {
@@ -116,6 +172,9 @@ func (e *testEnv) doRaw(method, path, token string, body []byte) (int, []byte) {
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if ct != "" {
+		req.Header.Set("Content-Type", ct)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

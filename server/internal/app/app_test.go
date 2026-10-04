@@ -151,6 +151,11 @@ func (c *client) raw(method, path string, body []byte, wantStatus int) []byte {
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
+	if method == "PUT" && strings.Contains(path, "/chunks/") {
+		req.Header.Set("Content-Type", "application/octet-stream")
+	} else {
+		req.Header.Set("Content-Type", "application/x-protobuf")
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		c.t.Fatal(err)

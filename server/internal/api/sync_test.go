@@ -5,8 +5,6 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -73,24 +71,9 @@ func TestGetChunkAbortsOnBlobReadFailure(t *testing.T) {
 	id := bytes.Repeat([]byte{0xcd}, 32)
 	e.putChunk(token, vault, id, "ciphertext")
 
-	// Replace the blob file with a directory: Open succeeds, Read fails.
-	var files []string
-	filepath.WalkDir(e.blobRoot, func(p string, d os.DirEntry, err error) error {
-		if err == nil && d.Type().IsRegular() {
-			files = append(files, p)
-		}
-		return nil
-	})
-	if len(files) != 1 {
-		t.Fatalf("blob files = %v, want 1", files)
-	}
-	if err := os.Remove(files[0]); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(files[0], 0o700); err != nil {
-		t.Fatal(err)
-	}
-
+	// The blob opens fine but fails after the first few bytes, once the
+	// 200 status line is already on the wire.
+	e.failBlobReads.Store(true)
 	resp, data, err := e.getChunk(token, vault, hex.EncodeToString(id))
 	if err == nil {
 		t.Fatalf("get chunk = %d %q with no error, want a transport error", resp.StatusCode, data)

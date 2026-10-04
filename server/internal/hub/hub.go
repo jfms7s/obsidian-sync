@@ -41,6 +41,12 @@ type Options struct {
 	// this long. Clients ping every 30s, so the default of 90s tolerates two
 	// lost pings, and a revoked device that stops pinging is cut off.
 	IdleTimeout time.Duration
+	// MinSubscribeInterval is the least time allowed between two Subscribe
+	// frames on one socket (default 1s). Each Subscribe runs a membership
+	// query per vault, so a client re-subscribing in a tight loop would load
+	// the store; a well-behaved client subscribes once per (re)connect and
+	// when its vault list changes, so a faster one is closed.
+	MinSubscribeInterval time.Duration
 }
 
 type Hub struct {
@@ -61,6 +67,9 @@ func New(a Authenticator, v Vaults, b bus.Bus, log *slog.Logger, opts Options) *
 	}
 	if opts.IdleTimeout == 0 {
 		opts.IdleTimeout = 90 * time.Second
+	}
+	if opts.MinSubscribeInterval == 0 {
+		opts.MinSubscribeInterval = time.Second
 	}
 	return &Hub{auth: a, vaults: v, bus: b, log: log, opts: opts}
 }
@@ -103,6 +112,8 @@ type conn struct {
 	token string
 	sess  auth.Session
 
+	lastSubscribe time.Time // zero until the first Subscribe
+
 	mu   sync.Mutex
 	subs map[string]func() // vault id → bus cancel
 }
@@ -123,8 +134,14 @@ func (c *conn) run() error {
 		}
 		switch m := f.Frame.(type) {
 		case *obsyncv1.ClientFrame_Subscribe:
+			now := time.Now()
+			if !c.lastSubscribe.IsZero() && now.Sub(c.lastSubscribe) < c.hub.opts.MinSubscribeInterval {
+				return c.fail(apperr.New(apperr.RateLimited, "subscribe sent too soon after the previous one"))
+			}
+			c.lastSubscribe = now
 			c.subscribe(m.Subscribe.GetVaultIds())
 		case *obsyncv1.ClientFrame_Ping:
+			c.recheckMembership()
 			pong := &obsyncv1.ServerFrame{Frame: &obsyncv1.ServerFrame_Pong{Pong: &obsyncv1.Pong{Nonce: m.Ping.GetNonce()}}}
 			if err := c.send(pong); err != nil {
 				return err
@@ -238,6 +255,35 @@ func (c *conn) forward(vaultID string, seq int64, ch <-chan bus.Notify) {
 		last = n.Seq
 		if err := c.sendNotify(n.VaultID, n.Seq); err != nil {
 			return
+		}
+	}
+}
+
+// recheckMembership drops subscriptions to vaults the user can no longer
+// access. Membership is otherwise checked only at Subscribe, so without this
+// a removed member would keep receiving notifications for as long as the
+// socket stays open. Lookup failures other than not-found keep the
+// subscription: a transient store error must not silently unsubscribe.
+func (c *conn) recheckMembership() {
+	c.mu.Lock()
+	vaultIDs := make([]string, 0, len(c.subs))
+	for id := range c.subs {
+		vaultIDs = append(vaultIDs, id)
+	}
+	c.mu.Unlock()
+	for _, id := range vaultIDs {
+		_, err := c.hub.vaults.VaultForMember(c.ctx, id, c.sess.UserID)
+		switch {
+		case err == nil:
+		case errors.Is(err, store.ErrNotFound):
+			c.mu.Lock()
+			if cancel, ok := c.subs[id]; ok {
+				cancel()
+				delete(c.subs, id)
+			}
+			c.mu.Unlock()
+		default:
+			c.hub.log.Error("recheck membership", "vault", id, "err", err)
 		}
 	}
 }

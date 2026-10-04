@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jfms7s/obsidian-sync/server/internal/apperr"
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
@@ -57,8 +58,15 @@ func (h *handlers) chunksExist(w http.ResponseWriter, r *http.Request, sess auth
 }
 
 func (h *handlers) putChunk(w http.ResponseWriter, r *http.Request, sess auth.Session) {
+	// Set the deadline before any early rejection: net/http drains a small
+	// unread body before sending the response, and that drain must be bounded.
+	lift := setBodyDeadline(w, chunkBodyTimeout)
 	id, err := pathID(r, "chunk")
 	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	if err := requireMediaType(r, "application/octet-stream", ""); err != nil {
 		h.writeError(w, r, err)
 		return
 	}
@@ -66,7 +74,6 @@ func (h *handlers) putChunk(w http.ResponseWriter, r *http.Request, sess auth.Se
 		h.writeError(w, r, apperr.New(apperr.Invalid, "Content-Length is required"))
 		return
 	}
-	lift := setBodyDeadline(w, chunkBodyTimeout)
 	body := http.MaxBytesReader(w, r.Body, syncsvc.MaxChunkCipherBytes+1)
 	if err := h.sync.PutChunk(r.Context(), sess.UserID, r.PathValue("vault"), id, body, r.ContentLength); err != nil {
 		// Keep the deadline: an unread or stalled body must not hold the
@@ -95,6 +102,11 @@ func (h *handlers) getChunk(w http.ResponseWriter, r *http.Request, sess auth.Se
 	hdr.Set("Content-Length", strconv.FormatInt(size, 10))
 	hdr.Set("Cache-Control", "no-store")
 	hdr.Set("X-Content-Type-Options", "nosniff")
+	// Bound the download so a client that stops reading cannot hold the
+	// connection and this handler forever. Writers that cannot set deadlines
+	// (http.ErrNotSupported) are left unbounded. net/http flushes the tail
+	// under this deadline and clears it before the connection's next request.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(chunkWriteTimeout))
 	w.WriteHeader(http.StatusOK)
 	src := &readErrReader{r: rc}
 	n, err := io.Copy(w, src)

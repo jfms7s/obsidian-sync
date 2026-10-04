@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,21 +25,47 @@ import (
 
 var ctx = context.Background()
 
+// revocableVaults wraps the store so a test can take away a user's access
+// to a vault (the store has no remove-member operation).
+type revocableVaults struct {
+	*store.Store
+	mu      sync.Mutex
+	revoked map[string]bool // vault id
+}
+
+func (v *revocableVaults) VaultForMember(ctx context.Context, vaultID, userID string) (store.Vault, error) {
+	v.mu.Lock()
+	revoked := v.revoked[vaultID]
+	v.mu.Unlock()
+	if revoked {
+		return store.Vault{}, store.ErrNotFound
+	}
+	return v.Store.VaultForMember(ctx, vaultID, userID)
+}
+
+func (v *revocableVaults) revoke(vaultID string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.revoked[vaultID] = true
+}
+
 type env struct {
-	t     *testing.T
-	url   string
-	st    *store.Store
-	bus   *bus.Memory
-	auth  *auth.Service
-	hub   *hub.Hub
-	token string
-	dev   store.Device
-	vault store.Vault
+	t      *testing.T
+	url    string
+	st     *store.Store
+	vaults *revocableVaults
+	bus    *bus.Memory
+	auth   *auth.Service
+	hub    *hub.Hub
+	token  string
+	dev    store.Device
+	vault  store.Vault
 }
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	return newEnvOpts(t, hub.Options{AuthTimeout: 200 * time.Millisecond})
+	// Several tests re-subscribe back to back; the pacing rule has its own test.
+	return newEnvOpts(t, hub.Options{AuthTimeout: 200 * time.Millisecond, MinSubscribeInterval: time.Nanosecond})
 }
 
 func newEnvOpts(t *testing.T, opts hub.Options) *env {
@@ -58,10 +85,11 @@ func newEnvOpts(t *testing.T, opts hub.Options) *env {
 		t.Fatal(err)
 	}
 	b := bus.NewMemory()
-	h := hub.New(authSvc, st, b, slog.New(slog.NewTextHandler(io.Discard, nil)), opts)
+	vaults := &revocableVaults{Store: st, revoked: map[string]bool{}}
+	h := hub.New(authSvc, vaults, b, slog.New(slog.NewTextHandler(io.Discard, nil)), opts)
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &env{t: t, url: "ws" + strings.TrimPrefix(srv.URL, "http"), st: st, bus: b, auth: authSvc, hub: h,
+	return &env{t: t, url: "ws" + strings.TrimPrefix(srv.URL, "http"), st: st, vaults: vaults, bus: b, auth: authSvc, hub: h,
 		token: res.Token, dev: res.Device, vault: storetest.SeedVault(t, st, user.ID)}
 }
 
@@ -350,6 +378,70 @@ func TestSubscribeRevalidatesToken(t *testing.T) {
 	send(t, c, subscribeFrame(e.vault.ID))
 	if f := recv(t, c); f.GetError().GetCode() != apperr.DeviceRevoked {
 		t.Fatalf("frame = %v", f)
+	}
+	expectClosed(t, c)
+}
+
+// Membership is rechecked on every Ping: once the user loses access to a
+// vault, its subscription is dropped and no further notifies arrive, while
+// subscriptions to vaults still accessible keep working.
+func TestPingDropsSubscriptionsToVaultsNoLongerAccessible(t *testing.T) {
+	e := newEnv(t)
+	other := storetest.SeedVault(t, e.st, e.dev.UserID)
+	c := e.authed()
+	send(t, c, subscribeFrame(e.vault.ID, other.ID))
+	got := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		got[recv(t, c).GetNotify().GetVaultId()] = true
+	}
+	if !got[e.vault.ID] || !got[other.ID] {
+		t.Fatalf("initial notifies for %v", got)
+	}
+	e.vaults.revoke(e.vault.ID)
+	expectPongNext(t, c, 1)
+	if err := e.bus.Publish(ctx, bus.Notify{VaultID: e.vault.ID, Seq: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.bus.Publish(ctx, bus.Notify{VaultID: other.ID, Seq: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if n := recv(t, c).GetNotify(); n.GetVaultId() != other.ID || n.GetSeq() != 3 {
+		t.Fatalf("notify = %v, want only the still-accessible vault", n)
+	}
+	expectPongNext(t, c, 2)
+}
+
+// A Subscribe sent sooner than MinSubscribeInterval after the previous one is
+// answered with RATE_LIMITED and the socket is closed; one sent after the
+// interval is accepted.
+func TestSubscribeIsRateLimited(t *testing.T) {
+	e := newEnvOpts(t, hub.Options{MinSubscribeInterval: 300 * time.Millisecond})
+	c := e.authed()
+	send(t, c, subscribeFrame(e.vault.ID))
+	if n := recv(t, c).GetNotify(); n.GetSeq() != 0 {
+		t.Fatalf("initial notify = %v", n)
+	}
+	time.Sleep(350 * time.Millisecond)
+	send(t, c, subscribeFrame(e.vault.ID))
+	if n := recv(t, c).GetNotify(); n.GetSeq() != 0 {
+		t.Fatalf("paced re-subscribe notify = %v", n)
+	}
+	send(t, c, subscribeFrame(e.vault.ID))
+	if f := recv(t, c); f.GetError().GetCode() != apperr.RateLimited {
+		t.Fatalf("frame = %v, want RATE_LIMITED", f)
+	}
+	expectClosed(t, c)
+}
+
+// With no MinSubscribeInterval set, the default (1s) applies.
+func TestSubscribeRateLimitDefault(t *testing.T) {
+	e := newEnvOpts(t, hub.Options{})
+	c := e.authed()
+	send(t, c, subscribeFrame(e.vault.ID))
+	recv(t, c)
+	send(t, c, subscribeFrame(e.vault.ID))
+	if f := recv(t, c); f.GetError().GetCode() != apperr.RateLimited {
+		t.Fatalf("frame = %v, want RATE_LIMITED", f)
 	}
 	expectClosed(t, c)
 }

@@ -3,7 +3,9 @@ package api
 import (
 	"errors"
 	"io"
+	"mime"
 	"net/http"
+	"slices"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -37,15 +39,45 @@ var (
 	protoBodyTimeout = 30 * time.Second
 	// chunkBodyTimeout bounds a chunk upload (up to 4 MiB) on a slow link.
 	chunkBodyTimeout = 5 * time.Minute
+	// chunkWriteTimeout bounds sending a chunk download, so a client that
+	// stops reading cannot hold the connection and handler forever.
+	chunkWriteTimeout = 5 * time.Minute
 )
 
 // unmarshalOpts drops unknown fields so a client cannot smuggle extra bytes
 // past field-level size checks into anything the server re-marshals.
 var unmarshalOpts = proto.UnmarshalOptions{DiscardUnknown: true}
 
-// readProto decodes a request body of at most limit bytes into m.
+// errUnsupportedMediaType is answered with 415 rather than statusFor's 400.
+var errUnsupportedMediaType = apperr.New(apperr.Invalid, "unsupported Content-Type")
+
+// requireMediaType rejects a request whose Content-Type (ignoring parameters
+// such as charset) is not one of allowed. An allowed "" accepts a request
+// without the header.
+func requireMediaType(r *http.Request, allowed ...string) error {
+	ct := r.Header.Get("Content-Type")
+	mt := ""
+	if ct != "" {
+		var err error
+		if mt, _, err = mime.ParseMediaType(ct); err != nil {
+			return errUnsupportedMediaType
+		}
+	}
+	if slices.Contains(allowed, mt) {
+		return nil
+	}
+	return errUnsupportedMediaType
+}
+
+// readProto decodes a request body of at most limit bytes into m. The body
+// must be labelled application/x-protobuf.
 func readProto(w http.ResponseWriter, r *http.Request, m proto.Message, limit int64) error {
+	// Set the deadline before any early rejection: net/http drains a small
+	// unread body before sending the response, and that drain must be bounded.
 	lift := setBodyDeadline(w, protoBodyTimeout)
+	if err := requireMediaType(r, protoContentType); err != nil {
+		return err
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
 		var tooBig *http.MaxBytesError
@@ -125,5 +157,9 @@ func (h *handlers) writeError(w http.ResponseWriter, r *http.Request, err error)
 		h.log.Error("request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 		ae = apperr.New(apperr.Internal, "internal error")
 	}
-	writeProto(w, statusFor(ae.Code), &obsyncv1.Error{Code: ae.Code, Message: ae.Msg})
+	status := statusFor(ae.Code)
+	if ae == errUnsupportedMediaType {
+		status = http.StatusUnsupportedMediaType
+	}
+	writeProto(w, status, &obsyncv1.Error{Code: ae.Code, Message: ae.Msg})
 }
