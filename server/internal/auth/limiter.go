@@ -7,7 +7,8 @@ import (
 )
 
 // LoginLimiter is a token bucket per key (a lowercased username): Burst
-// failed attempts, refilled at one attempt per Refill. Successes reset it.
+// attempts, refilled at one attempt per Refill. Every attempt takes a token
+// before the password is checked; a successful login resets the bucket.
 type LoginLimiter struct {
 	mu      sync.Mutex
 	burst   float64
@@ -23,44 +24,40 @@ type bucket struct {
 
 const maxTrackedKeys = 10000
 
+// NewLoginLimiter panics if burst < 1 or refill <= 0, either of which would
+// disable or break limiting.
 func NewLoginLimiter(burst int, refill time.Duration, now func() time.Time) *LoginLimiter {
+	if burst < 1 || refill <= 0 {
+		panic("auth: NewLoginLimiter needs burst >= 1 and refill > 0")
+	}
 	return &LoginLimiter{burst: float64(burst), refill: refill, now: now, buckets: map[string]*bucket{}}
 }
 
-// refreshed returns key's bucket with tokens refilled up to now, or nil if
-// the key has no failures on record. Caller holds mu.
-func (l *LoginLimiter) refreshed(key string) *bucket {
+// Take consumes one attempt for key and reports whether one was available.
+// Checking and consuming happen under one lock, so concurrent attempts can't
+// all pass before any of them is counted.
+func (l *LoginLimiter) Take(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
 	b, ok := l.buckets[key]
 	if !ok {
-		return nil
-	}
-	now := l.now()
-	b.tokens = math.Min(l.burst, b.tokens+float64(now.Sub(b.last))/float64(l.refill))
-	b.last = now
-	return b
-}
-
-func (l *LoginLimiter) Allow(key string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	b := l.refreshed(key)
-	return b == nil || b.tokens >= 1
-}
-
-func (l *LoginLimiter) Fail(key string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	b := l.refreshed(key)
-	if b == nil {
 		if len(l.buckets) >= maxTrackedKeys {
-			l.evictFull()
+			l.evictFull(now)
 		}
-		b = &bucket{tokens: l.burst, last: l.now()}
+		b = &bucket{tokens: l.burst, last: now}
 		l.buckets[key] = b
 	}
-	b.tokens = math.Max(0, b.tokens-1)
+	b.tokens = math.Min(l.burst, b.tokens+float64(now.Sub(b.last))/float64(l.refill))
+	b.last = now
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
 }
 
+// Reset forgets key, restoring its full burst.
 func (l *LoginLimiter) Reset(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -68,8 +65,7 @@ func (l *LoginLimiter) Reset(key string) {
 }
 
 // evictFull forgets keys whose bucket has refilled completely. Caller holds mu.
-func (l *LoginLimiter) evictFull() {
-	now := l.now()
+func (l *LoginLimiter) evictFull(now time.Time) {
 	for k, b := range l.buckets {
 		if b.tokens+float64(now.Sub(b.last))/float64(l.refill) >= l.burst {
 			delete(l.buckets, k)

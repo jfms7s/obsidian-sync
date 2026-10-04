@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -37,10 +38,16 @@ type Session struct {
 	DeviceID string
 }
 
+// maxPasswordBytes bounds the input to a password check.
+const maxPasswordBytes = 1024
+
 type Options struct {
-	Params  Params // cost of the timing-equalising dummy hash; match real hashes
+	Params  Params // cost of the timing-equalising dummy hash; match real hashes. Zero = DefaultParams
 	Now     func() time.Time
 	Limiter *LoginLimiter
+	// MaxConcurrentVerifies bounds how many password checks (each allocating
+	// Params.Memory) run at once. Zero = runtime.GOMAXPROCS(0).
+	MaxConcurrentVerifies int
 }
 
 type Service struct {
@@ -48,6 +55,8 @@ type Service struct {
 	now       func() time.Time
 	limiter   *LoginLimiter
 	dummyHash string
+	verifying chan struct{}                                // semaphore around verify
+	verify    func(password, encoded string) (bool, error) // VerifyPassword; replaced in tests
 }
 
 func NewService(st Store, opts Options) (*Service, error) {
@@ -57,11 +66,30 @@ func NewService(st Store, opts Options) (*Service, error) {
 	if opts.Limiter == nil {
 		opts.Limiter = NewLoginLimiter(5, time.Minute, opts.Now)
 	}
+	if opts.Params == (Params{}) {
+		opts.Params = DefaultParams
+	}
+	if opts.MaxConcurrentVerifies <= 0 {
+		opts.MaxConcurrentVerifies = runtime.GOMAXPROCS(0)
+	}
 	dummy, err := HashPassword("obsync-timing-dummy", opts.Params)
 	if err != nil {
 		return nil, fmt.Errorf("dummy hash: %w", err)
 	}
-	return &Service{st: st, now: opts.Now, limiter: opts.Limiter, dummyHash: dummy}, nil
+	return &Service{st: st, now: opts.Now, limiter: opts.Limiter, dummyHash: dummy,
+		verifying: make(chan struct{}, opts.MaxConcurrentVerifies), verify: VerifyPassword}, nil
+}
+
+// checkPassword runs verify once a semaphore slot is free. If ctx ends while
+// waiting it gives up with ErrRateLimited: the server is saturated with checks.
+func (s *Service) checkPassword(ctx context.Context, password, encoded string) (bool, error) {
+	select {
+	case s.verifying <- struct{}{}:
+	case <-ctx.Done():
+		return false, ErrRateLimited
+	}
+	defer func() { <-s.verifying }()
+	return s.verify(password, encoded)
 }
 
 type LoginRequest struct {
@@ -77,26 +105,34 @@ type LoginResult struct {
 }
 
 func (s *Service) Login(ctx context.Context, req LoginRequest) (LoginResult, error) {
+	if len(req.Password) > maxPasswordBytes {
+		return LoginResult{}, apperr.New(apperr.Invalid, "password must be at most %d bytes", maxPasswordBytes)
+	}
 	key := strings.ToLower(strings.TrimSpace(req.Username))
-	if !s.limiter.Allow(key) {
+	// Every attempt spends a token up front; only a successful login gives
+	// them back. Lookup errors and corrupt hashes therefore count too.
+	if !s.limiter.Take(key) {
 		return LoginResult{}, ErrRateLimited
 	}
 	user, err := s.st.UserByUsername(ctx, strings.TrimSpace(req.Username))
 	if errors.Is(err, store.ErrNotFound) {
 		// Spend the same time as a real check so unknown usernames don't show.
-		_, _ = VerifyPassword(req.Password, s.dummyHash)
-		s.limiter.Fail(key)
+		if _, err := s.checkPassword(ctx, req.Password, s.dummyHash); errors.Is(err, ErrRateLimited) {
+			return LoginResult{}, err
+		}
 		return LoginResult{}, ErrInvalidCredentials
 	}
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("look up user: %w", err)
 	}
-	ok, err := VerifyPassword(req.Password, user.PasswordHash)
+	ok, err := s.checkPassword(ctx, req.Password, user.PasswordHash)
+	if errors.Is(err, ErrRateLimited) {
+		return LoginResult{}, err
+	}
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("verify password: %w", err)
 	}
 	if !ok {
-		s.limiter.Fail(key)
 		return LoginResult{}, ErrInvalidCredentials
 	}
 	s.limiter.Reset(key)
@@ -136,9 +172,9 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Session, erro
 		return Session{}, ErrDeviceRevoked
 	}
 	if s.now().UnixMilli()-dev.LastSeenAtMs > touchInterval.Milliseconds() {
-		if err := s.st.TouchDevice(ctx, dev.ID); err != nil {
-			return Session{}, err
-		}
+		// Best effort: last-seen is informational and must not reject a
+		// valid token.
+		_ = s.st.TouchDevice(ctx, dev.ID)
 	}
 	return Session{UserID: dev.UserID, DeviceID: dev.ID}, nil
 }
