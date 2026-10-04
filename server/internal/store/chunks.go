@@ -16,10 +16,16 @@ type Chunk struct {
 
 // InsertChunk records an uploaded chunk and adds its size to the vault's
 // usage. It returns false when the chunk was already recorded; the caller
-// must then delete the blob it just wrote.
+// must then delete the blob it just wrote. A new chunk that would take the
+// vault owner's usage (across all their vaults) past their quota is not
+// recorded and ErrQuotaExceeded is returned; the check and the insert share
+// one transaction, so concurrent uploads cannot overshoot the quota.
+// ErrNotFound means the vault does not exist.
 func (s *Store) InsertChunk(ctx context.Context, c Chunk) (bool, error) {
 	var inserted bool
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		// Write first so the transaction holds the write lock before it
+		// reads usage (see commitTx).
 		res, err := tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO chunks (vault_id, chunk_id, blob_key, size, touched_at) VALUES (?, ?, ?, ?, ?)`,
 			c.VaultID, c.ChunkID, c.BlobKey, c.Size, s.nowMs())
@@ -33,14 +39,36 @@ func (s *Store) InsertChunk(ctx context.Context, c Chunk) (bool, error) {
 		if n == 0 {
 			return nil
 		}
-		inserted = true
+		var ownerID string
+		var quota int64
+		err = tx.QueryRowContext(ctx,
+			`SELECT u.id, u.quota_bytes FROM vaults v JOIN users u ON u.id = v.owner_id WHERE v.id = ?`,
+			c.VaultID).Scan(&ownerID, &quota)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("load vault owner: %w", err)
+		}
+		var used int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(SUM(bytes_used), 0) FROM vaults WHERE owner_id = ?`, ownerID).Scan(&used); err != nil {
+			return fmt.Errorf("usage: %w", err)
+		}
+		if used+c.Size > quota {
+			return ErrQuotaExceeded // rolls back the insert
+		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE vaults SET bytes_used = bytes_used + ? WHERE id = ?`, c.Size, c.VaultID); err != nil {
 			return fmt.Errorf("add usage: %w", err)
 		}
+		inserted = true
 		return nil
 	})
-	return inserted, err
+	if err != nil {
+		return false, err
+	}
+	return inserted, nil
 }
 
 // TouchChunks reports which chunks exist and refreshes their touched_at, so

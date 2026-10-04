@@ -63,7 +63,10 @@ func New(st Store, blobs blob.Store, b bus.Bus, limits Limits, log *slog.Logger)
 	return &Service{st: st, blobs: blobs, bus: b, limits: limits, log: log}
 }
 
-var errVaultNotFound = apperr.New(apperr.NotFound, "vault not found")
+var (
+	errVaultNotFound = apperr.New(apperr.NotFound, "vault not found")
+	errQuotaExceeded = apperr.New(apperr.QuotaExceeded, "storage quota exceeded")
+)
 
 // vault loads vaultID if userID is a member. Anything else is NotFound so a
 // vault's existence never leaks to outsiders.
@@ -128,13 +131,19 @@ func (s *Service) PutChunk(ctx context.Context, userID, vaultID string, chunkID 
 		return err
 	}
 	if used+size > owner.QuotaBytes {
-		return apperr.New(apperr.QuotaExceeded, "storage quota exceeded")
+		// A fast path only: InsertChunk makes the authoritative check, since
+		// concurrent uploads can all pass this one.
+		return errQuotaExceeded
 	}
 
 	key := blobKey(vaultID)
-	counted := &countingReader{r: io.LimitReader(body, size+1)}
+	counted := &bodyReader{r: io.LimitReader(body, size+1)}
 	if err := s.blobs.Put(ctx, key, counted); err != nil {
 		s.deleteBlob(ctx, key) // Put can fail after publishing (e.g. the dir fsync)
+		if counted.err != nil {
+			// The client disconnected or sent a short body.
+			return apperr.New(apperr.Invalid, "reading chunk body: %v", counted.err)
+		}
 		return fmt.Errorf("store chunk: %w", err)
 	}
 	if counted.n != size {
@@ -144,6 +153,12 @@ func (s *Service) PutChunk(ctx context.Context, userID, vaultID string, chunkID 
 	inserted, err := s.st.InsertChunk(ctx, store.Chunk{VaultID: vaultID, ChunkID: chunkID, BlobKey: key, Size: size})
 	if err != nil {
 		s.deleteBlob(ctx, key)
+		switch {
+		case errors.Is(err, store.ErrQuotaExceeded):
+			return errQuotaExceeded
+		case errors.Is(err, store.ErrNotFound):
+			return errVaultNotFound // deleted while the chunk was uploading
+		}
 		return err
 	}
 	if !inserted {
@@ -203,6 +218,11 @@ func (s *Service) Commit(ctx context.Context, userID, deviceID, vaultID string, 
 		c.DeviceID = deviceID
 		out, err := s.st.Commit(ctx, c)
 		if err != nil {
+			// Commits earlier in the batch are stored; tell subscribers.
+			s.publish(ctx, vaultID, newest)
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, 0, errVaultNotFound // deleted concurrently
+			}
 			return nil, 0, fmt.Errorf("commit: %w", err)
 		}
 		switch out.Reason {
@@ -220,14 +240,19 @@ func (s *Service) Commit(ctx context.Context, userID, deviceID, vaultID string, 
 			results[i].Err = apperr.New(apperr.Invalid, "%s", out.Detail)
 		}
 	}
-	vaultSeq := max(v.Seq, newest)
-	if newest > 0 {
-		if err := s.bus.Publish(ctx, bus.Notify{VaultID: vaultID, Seq: newest}); err != nil {
-			// Clients still converge through their next pull or reconcile.
-			s.log.Error("publish notification", "vault", vaultID, "err", err)
-		}
+	s.publish(ctx, vaultID, newest)
+	return results, max(v.Seq, newest), nil
+}
+
+// publish notifies vaultID's subscribers of seq, if any commit was accepted.
+func (s *Service) publish(ctx context.Context, vaultID string, seq int64) {
+	if seq == 0 {
+		return
 	}
-	return results, vaultSeq, nil
+	if err := s.bus.Publish(context.WithoutCancel(ctx), bus.Notify{VaultID: vaultID, Seq: seq}); err != nil {
+		// Clients still converge through their next pull or reconcile.
+		s.log.Error("publish notification", "vault", vaultID, "err", err)
+	}
 }
 
 func (s *Service) validateCommit(c store.Version) *apperr.Error {
@@ -323,8 +348,11 @@ func (s *Service) Trash(ctx context.Context, userID, vaultID string) ([]store.Ve
 	return s.st.Trash(ctx, vaultID)
 }
 
+// deleteBlob removes a blob no chunk row refers to. It runs even when the
+// request was cancelled (e.g. the client disconnected), which is often why
+// the blob needs removing.
 func (s *Service) deleteBlob(ctx context.Context, key string) {
-	if err := s.blobs.Delete(ctx, key); err != nil {
+	if err := s.blobs.Delete(context.WithoutCancel(ctx), key); err != nil {
 		s.log.Warn("delete orphaned blob", "blob_key", key, "err", err)
 	}
 }
@@ -342,13 +370,20 @@ func clampLimit(n, def, maxN int) int {
 	return min(n, maxN)
 }
 
-type countingReader struct {
-	r io.Reader
-	n int64
+// bodyReader counts the bytes read from a request body and remembers a read
+// failure, so PutChunk can tell a client-side failure (short body,
+// disconnect) from a blob store failure whatever the blob store wraps.
+type bodyReader struct {
+	r   io.Reader
+	n   int64
+	err error // the first read error other than io.EOF
 }
 
-func (c *countingReader) Read(p []byte) (int, error) {
-	n, err := c.r.Read(p)
-	c.n += int64(n)
+func (b *bodyReader) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	b.n += int64(n)
+	if err != nil && err != io.EOF && b.err == nil {
+		b.err = err
+	}
 	return n, err
 }

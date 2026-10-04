@@ -9,6 +9,9 @@ var (
 	ErrNotFound    = errors.New("store: not found")
 	ErrExists      = errors.New("store: already exists")
 	ErrKeyMismatch = errors.New("store: public keys differ from the stored key bundle")
+	// ErrQuotaExceeded is returned by InsertChunk when a new chunk would take
+	// the vault owner's usage past their quota.
+	ErrQuotaExceeded = errors.New("store: storage quota exceeded")
 )
 
 func isUniqueViolation(err error) bool {

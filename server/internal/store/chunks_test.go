@@ -82,3 +82,47 @@ func TestDeleteUserRemovesEverythingAndReturnsBlobKeys(t *testing.T) {
 }
 
 func hexOf(b []byte) string { return hex.EncodeToString(b) }
+
+func TestInsertChunkEnforcesOwnerQuota(t *testing.T) {
+	st, _ := storetest.New(t)
+	small := store.User{ID: "0123456789abcdef0123456789abcdef", Username: "small", PasswordHash: "x", QuotaBytes: 8}
+	if err := st.CreateUser(ctx, small); err != nil {
+		t.Fatal(err)
+	}
+	v1 := storetest.SeedVault(t, st, small.ID)
+	v2 := storetest.SeedVault(t, st, small.ID)
+
+	if ok, err := st.InsertChunk(ctx, store.Chunk{VaultID: v1.ID, ChunkID: storetest.ChunkID(1), BlobKey: "k1", Size: 5}); err != nil || !ok {
+		t.Fatalf("first insert ok=%v err=%v", ok, err)
+	}
+	// Usage counts every vault the owner has.
+	_, err := st.InsertChunk(ctx, store.Chunk{VaultID: v2.ID, ChunkID: storetest.ChunkID(2), BlobKey: "k2", Size: 5})
+	if !errors.Is(err, store.ErrQuotaExceeded) {
+		t.Fatalf("over-quota insert err = %v, want ErrQuotaExceeded", err)
+	}
+	if _, err := st.ChunkBlobKey(ctx, v2.ID, storetest.ChunkID(2)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("over-quota chunk was recorded: %v", err)
+	}
+	if used, _ := st.UsageBytes(ctx, small.ID); used != 5 {
+		t.Fatalf("usage = %d, want 5", used)
+	}
+	// Exactly filling the quota is allowed.
+	if ok, err := st.InsertChunk(ctx, store.Chunk{VaultID: v2.ID, ChunkID: storetest.ChunkID(3), BlobKey: "k3", Size: 3}); err != nil || !ok {
+		t.Fatalf("filling insert ok=%v err=%v", ok, err)
+	}
+	// A chunk the vault already has costs nothing, even at the quota.
+	if ok, err := st.InsertChunk(ctx, store.Chunk{VaultID: v1.ID, ChunkID: storetest.ChunkID(1), BlobKey: "k4", Size: 5}); err != nil || ok {
+		t.Fatalf("duplicate insert ok=%v err=%v, want false, nil", ok, err)
+	}
+	if used, _ := st.UsageBytes(ctx, small.ID); used != 8 {
+		t.Fatalf("usage = %d, want 8", used)
+	}
+}
+
+func TestInsertChunkUnknownVault(t *testing.T) {
+	st, _ := storetest.New(t)
+	_, err := st.InsertChunk(ctx, store.Chunk{VaultID: "0123456789abcdef0123456789abcdef", ChunkID: storetest.ChunkID(1), BlobKey: "k", Size: 1})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
