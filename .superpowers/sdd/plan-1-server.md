@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go 1.23, `github.com/tursodatabase/go-libsql` (CGO), `google.golang.org/protobuf` + `buf`, `github.com/coder/websocket`, `golang.org/x/crypto/argon2`, `gopkg.in/yaml.v3`, `golang.org/x/term`.
 
-**Spec:** `docs/superpowers/specs/2026-10-03-obsidian-sync-design.md` (sections 4.1, 5, 6.6, 7, 8, 9).
+**Spec:** `.superpowers/sdd/spec.md` (sections 4.1, 5, 6.6, 7, 8, 9).
 
 **Where this plan sits:** sub-project 1 has three plans, and each produces software that can be tested on its own:
 1. **This plan: the server**, tested with Go unit, integration and HTTP/WebSocket end-to-end tests.
