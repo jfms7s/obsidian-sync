@@ -231,6 +231,10 @@ func (s *Store) DeleteUser(ctx context.Context, userID string) ([]string, error)
 			}
 			blobKeys = append(blobKeys, k)
 		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("list blobs: %w", err)
+		}
 		if err := rows.Close(); err != nil {
 			return err
 		}

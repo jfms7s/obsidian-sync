@@ -26,7 +26,11 @@ func (s *Store) InsertChunk(ctx context.Context, c Chunk) (bool, error) {
 		if err != nil {
 			return fmt.Errorf("insert chunk: %w", err)
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("insert chunk: %w", err)
+		}
+		if n == 0 {
 			return nil
 		}
 		inserted = true
@@ -51,7 +55,10 @@ func (s *Store) TouchChunks(ctx context.Context, vaultID string, chunkIDs [][]by
 			if err != nil {
 				return fmt.Errorf("touch chunk: %w", err)
 			}
-			n, _ := res.RowsAffected()
+			n, err := res.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("touch chunk: %w", err)
+			}
 			exists[i] = n == 1
 		}
 		return nil
