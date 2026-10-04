@@ -63,3 +63,18 @@ func SeedUser(t testing.TB, st *store.Store, username string) store.User {
 	}
 	return got
 }
+
+// SeedVault creates a vault owned by ownerID with placeholder keys for epochs 0 and 1.
+func SeedVault(t testing.TB, st *store.Store, ownerID string) store.Vault {
+	t.Helper()
+	v := store.Vault{ID: ids.New(), OwnerID: ownerID, EncName: []byte("vault-name")}
+	keys := []store.VaultKey{{Epoch: 0, SealedKey: []byte("naming")}, {Epoch: 1, SealedKey: []byte("epoch-1")}}
+	if err := st.CreateVault(context.Background(), v, keys); err != nil {
+		t.Fatalf("seed vault: %v", err)
+	}
+	got, err := st.VaultForMember(context.Background(), v.ID, ownerID)
+	if err != nil {
+		t.Fatalf("seed vault: %v", err)
+	}
+	return got
+}
