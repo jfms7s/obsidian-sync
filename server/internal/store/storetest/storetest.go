@@ -3,7 +3,9 @@
 package storetest
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -77,4 +79,16 @@ func SeedVault(t testing.TB, st *store.Store, ownerID string) store.Vault {
 		t.Fatalf("seed vault: %v", err)
 	}
 	return got
+}
+
+// ChunkID returns a 32-byte id filled with b.
+func ChunkID(b byte) []byte { return bytes.Repeat([]byte{b}, 32) }
+
+// SeedChunk records a chunk row with blob key "test/<hex id>" (no blob is written).
+func SeedChunk(t testing.TB, st *store.Store, vaultID string, id []byte, size int64) {
+	t.Helper()
+	c := store.Chunk{VaultID: vaultID, ChunkID: id, BlobKey: "test/" + hex.EncodeToString(id), Size: size}
+	if _, err := st.InsertChunk(context.Background(), c); err != nil {
+		t.Fatalf("seed chunk: %v", err)
+	}
 }

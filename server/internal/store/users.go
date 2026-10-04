@@ -210,3 +210,60 @@ func (s *Store) PutKeyBundle(ctx context.Context, userID string, kb KeyBundle) e
 		return nil
 	})
 }
+
+// DeleteUser removes the user, their devices and key bundle, every vault they
+// own with all of its contents, and their membership of other vaults. It
+// returns the blob keys of the deleted chunks so the caller can delete the
+// blobs.
+func (s *Store) DeleteUser(ctx context.Context, userID string) ([]string, error) {
+	var blobKeys []string
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx,
+			`SELECT blob_key FROM chunks WHERE vault_id IN (SELECT id FROM vaults WHERE owner_id = ?)`, userID)
+		if err != nil {
+			return fmt.Errorf("list blobs: %w", err)
+		}
+		for rows.Next() {
+			var k string
+			if err := rows.Scan(&k); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan blob key: %w", err)
+			}
+			blobKeys = append(blobKeys, k)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+
+		const owned = `(SELECT id FROM vaults WHERE owner_id = ?)`
+		for _, stmt := range []string{
+			`DELETE FROM version_chunks WHERE vault_id IN ` + owned,
+			`DELETE FROM versions WHERE vault_id IN ` + owned,
+			`DELETE FROM files WHERE vault_id IN ` + owned,
+			`DELETE FROM chunks WHERE vault_id IN ` + owned,
+			`DELETE FROM vault_keys WHERE vault_id IN ` + owned,
+			`DELETE FROM vault_members WHERE vault_id IN ` + owned,
+			`DELETE FROM vaults WHERE owner_id = ?`,
+			`DELETE FROM vault_keys WHERE user_id = ?`,
+			`DELETE FROM vault_members WHERE user_id = ?`,
+			`DELETE FROM devices WHERE user_id = ?`,
+			`DELETE FROM key_bundles WHERE user_id = ?`,
+		} {
+			if _, err := tx.ExecContext(ctx, stmt, userID); err != nil {
+				return fmt.Errorf("delete user data: %w", err)
+			}
+		}
+		res, err := tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, userID)
+		if err != nil {
+			return fmt.Errorf("delete user: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return blobKeys, nil
+}
