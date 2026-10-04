@@ -292,3 +292,35 @@ func TestChangesPaging(t *testing.T) {
 		t.Fatalf("negative since err = %v", err)
 	}
 }
+
+// Review Focus 4: a full last page reports more=true and the page after it is
+// empty with more=false, for both Changes and Heads.
+func TestPagingAtExactPageBoundary(t *testing.T) {
+	f := newFixture(t)
+	for b := byte(1); b <= 4; b++ {
+		if _, _, err := f.svc.Commit(ctx, f.user.ID, "d", f.vault.ID, []store.Version{version(b, nil)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := f.svc.Changes(ctx, f.user.ID, f.vault.ID, 2, 2)
+	if err != nil || len(page.Versions) != 2 || !page.More {
+		t.Fatalf("full last changes page = %+v, err %v", page, err)
+	}
+	page, err = f.svc.Changes(ctx, f.user.ID, f.vault.ID, 4, 2)
+	if err != nil || len(page.Versions) != 0 || page.More || page.VaultSeq != 4 {
+		t.Fatalf("changes page after boundary = %+v, err %v", page, err)
+	}
+
+	heads, err := f.svc.Heads(ctx, f.user.ID, f.vault.ID, nil, 2)
+	if err != nil || len(heads.Heads) != 2 || !heads.More {
+		t.Fatalf("heads page 1 = %+v, err %v", heads, err)
+	}
+	heads, err = f.svc.Heads(ctx, f.user.ID, f.vault.ID, heads.Heads[1].FileID, 2)
+	if err != nil || len(heads.Heads) != 2 || !heads.More {
+		t.Fatalf("full last heads page = %+v, err %v", heads, err)
+	}
+	heads, err = f.svc.Heads(ctx, f.user.ID, f.vault.ID, heads.Heads[1].FileID, 2)
+	if err != nil || len(heads.Heads) != 0 || heads.More {
+		t.Fatalf("heads page after boundary = %+v, err %v", heads, err)
+	}
+}

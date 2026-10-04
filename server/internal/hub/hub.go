@@ -116,13 +116,15 @@ func (c *conn) run() error {
 		if err := c.readIdle(&f); err != nil {
 			return err
 		}
+		// Every frame revalidates the token, so a revoked device can't stay
+		// connected by sending frames other than Ping.
+		if _, err := c.hub.auth.Authenticate(c.ctx, c.token); err != nil {
+			return c.fail(err)
+		}
 		switch m := f.Frame.(type) {
 		case *obsyncv1.ClientFrame_Subscribe:
 			c.subscribe(m.Subscribe.GetVaultIds())
 		case *obsyncv1.ClientFrame_Ping:
-			if _, err := c.hub.auth.Authenticate(c.ctx, c.token); err != nil {
-				return c.fail(err)
-			}
 			pong := &obsyncv1.ServerFrame{Frame: &obsyncv1.ServerFrame_Pong{Pong: &obsyncv1.Pong{Nonce: m.Ping.GetNonce()}}}
 			if err := c.send(pong); err != nil {
 				return err

@@ -334,3 +334,22 @@ func TestSubscribeNotFoundDoesNotEchoInput(t *testing.T) {
 		t.Fatalf("error = %v", f)
 	}
 }
+
+// Any frame, not just Ping, revalidates the token: a revoked device that keeps
+// the socket alive with Subscribe frames must still be cut off.
+func TestSubscribeRevalidatesToken(t *testing.T) {
+	e := newEnv(t)
+	c := e.authed()
+	send(t, c, subscribeFrame(e.vault.ID))
+	if n := recv(t, c).GetNotify(); n.GetSeq() != 0 {
+		t.Fatalf("initial notify = %v", n)
+	}
+	if err := e.st.RevokeDevice(ctx, e.dev.UserID, e.dev.ID); err != nil {
+		t.Fatal(err)
+	}
+	send(t, c, subscribeFrame(e.vault.ID))
+	if f := recv(t, c); f.GetError().GetCode() != apperr.DeviceRevoked {
+		t.Fatalf("frame = %v", f)
+	}
+	expectClosed(t, c)
+}
