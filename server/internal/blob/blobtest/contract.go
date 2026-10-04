@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"sync"
 	"testing"
 
 	"github.com/jfms7s/obsidian-sync/server/internal/blob"
@@ -74,6 +76,79 @@ func Run(t *testing.T, newStore func(t *testing.T) blob.Store) {
 		}
 		if _, err := s.Get(ctx, "k"); !errors.Is(err, blob.ErrNotFound) {
 			t.Fatalf("partial blob visible: %v", err)
+		}
+	})
+
+	t.Run("cancelled context fails put and leaves nothing", func(t *testing.T) {
+		s := newStore(t)
+		cctx, cancel := context.WithCancel(ctx)
+		cancel()
+		if err := s.Put(cctx, "k", bytes.NewReader([]byte("x"))); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Put err = %v, want context.Canceled", err)
+		}
+		if _, err := s.Get(ctx, "k"); !errors.Is(err, blob.ErrNotFound) {
+			t.Fatalf("blob visible after cancelled put: %v", err)
+		}
+		if _, err := s.Get(cctx, "k"); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Get err = %v, want context.Canceled", err)
+		}
+		if err := s.Delete(cctx, "k"); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Delete err = %v, want context.Canceled", err)
+		}
+	})
+
+	t.Run("get of a key prefix is not found", func(t *testing.T) {
+		s := newStore(t)
+		if err := s.Put(ctx, "v1/ab/abcd", bytes.NewReader([]byte("x"))); err != nil {
+			t.Fatal(err)
+		}
+		rc, err := s.Get(ctx, "v1/ab")
+		if err == nil {
+			rc.Close()
+		}
+		if !errors.Is(err, blob.ErrNotFound) {
+			t.Fatalf("err = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("large blob round-trips", func(t *testing.T) {
+		s := newStore(t)
+		want := make([]byte, 4<<20+64)
+		for i := range want {
+			want[i] = byte(i*31 + i>>8)
+		}
+		if err := s.Put(ctx, "big", bytes.NewReader(want)); err != nil {
+			t.Fatal(err)
+		}
+		if got := read(t, s, "big"); got != string(want) {
+			t.Fatalf("round-trip mismatch: got %d bytes, want %d", len(got), len(want))
+		}
+	})
+
+	t.Run("concurrent puts of one key leave one complete payload", func(t *testing.T) {
+		s := newStore(t)
+		const n = 8
+		payloads := make(map[string]bool, n)
+		var wg sync.WaitGroup
+		errs := make(chan error, n)
+		for i := 0; i < n; i++ {
+			p := bytes.Repeat([]byte(fmt.Sprintf("writer-%d;", i)), 4096)
+			payloads[string(p)] = true
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs <- s.Put(ctx, "v1/same", bytes.NewReader(p))
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := read(t, s, "v1/same"); !payloads[got] {
+			t.Fatalf("stored blob (%d bytes) is not any single writer's payload", len(got))
 		}
 	})
 

@@ -8,7 +8,17 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 )
+
+// tempPrefix names in-flight Put files. Valid keys never start with '.', so
+// no published blob can match it.
+const tempPrefix = ".tmp-"
+
+// staleTempAge is how old a temp file must be before NewFS deletes it; younger
+// ones may belong to a Put still running in another process.
+const staleTempAge = time.Hour
 
 // FS stores blobs as files under a root directory.
 type FS struct{ root string }
@@ -17,7 +27,34 @@ func NewFS(root string) (*FS, error) {
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return nil, fmt.Errorf("create blob dir: %w", err)
 	}
+	if err := sweepTemps(root, time.Now().Add(-staleTempAge)); err != nil {
+		return nil, fmt.Errorf("sweep blob temp files: %w", err)
+	}
 	return &FS{root: root}, nil
+}
+
+// sweepTemps removes temp files left by Puts interrupted by a crash, which GC
+// never sees because they have no database row. Only failure to read the root
+// itself is an error; unreadable subtrees and failed removals are skipped.
+func sweepTemps(root string, olderThan time.Time) error {
+	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if p == root {
+				return err
+			}
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() || !strings.HasPrefix(d.Name(), tempPrefix) {
+			return nil
+		}
+		if info, err := d.Info(); err == nil && info.ModTime().Before(olderThan) {
+			_ = os.Remove(p)
+		}
+		return nil
+	})
 }
 
 func (f *FS) path(key string) (string, error) {
@@ -27,7 +64,10 @@ func (f *FS) path(key string) (string, error) {
 	return filepath.Join(f.root, filepath.FromSlash(key)), nil
 }
 
-func (f *FS) Put(_ context.Context, key string, r io.Reader) error {
+func (f *FS) Put(ctx context.Context, key string, r io.Reader) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	p, err := f.path(key)
 	if err != nil {
 		return err
@@ -36,7 +76,7 @@ func (f *FS) Put(_ context.Context, key string, r io.Reader) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create blob dir: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	tmp, err := os.CreateTemp(dir, tempPrefix+"*")
 	if err != nil {
 		return fmt.Errorf("create temp blob: %w", err)
 	}
@@ -90,7 +130,10 @@ func syncDir(dir string) error {
 	return d.Close()
 }
 
-func (f *FS) Get(_ context.Context, key string) (io.ReadCloser, error) {
+func (f *FS) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	p, err := f.path(key)
 	if err != nil {
 		return nil, err
@@ -102,10 +145,24 @@ func (f *FS) Get(_ context.Context, key string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open blob: %w", err)
 	}
+	// A key that is a prefix of other keys names a directory, which opens
+	// fine but fails on Read.
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, fmt.Errorf("stat blob: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		file.Close()
+		return nil, ErrNotFound
+	}
 	return file, nil
 }
 
-func (f *FS) Delete(_ context.Context, key string) error {
+func (f *FS) Delete(ctx context.Context, key string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	p, err := f.path(key)
 	if err != nil {
 		return err
