@@ -11,10 +11,14 @@ import (
 // attempts, refilled at one attempt per Refill. Every attempt takes a token
 // before the password is checked; a successful login resets the bucket.
 //
-// At most maxKeys buckets are tracked. They are kept in least-recently-used
-// order, and once the limiter is full a new key evicts the bucket that was
-// used longest ago, so a flood of distinct usernames costs O(1) per attempt
-// and bounded memory, while a key under active attack keeps its bucket.
+// At most maxKeys buckets are tracked, in least-recently-used order. Once the
+// limiter is full, a new key evicts the least recently used bucket that has
+// refilled to Burst, looking at no more than evictScan buckets from the LRU
+// end. A bucket that is still restricting is never evicted, since forgetting
+// it would restore its burst: flooding throwaway usernames would otherwise
+// reset a victim's lockout. If no bucket can be evicted the new key is
+// refused, so under such a flood unknown keys fail closed while memory stays
+// bounded and each attempt costs O(1).
 type LoginLimiter struct {
 	mu      sync.Mutex
 	burst   float64
@@ -31,7 +35,10 @@ type bucket struct {
 	last   time.Time
 }
 
-const maxTrackedKeys = 10000
+const (
+	maxTrackedKeys = 10000
+	evictScan      = 8
+)
 
 // NewLoginLimiter panics if burst < 1 or refill <= 0, either of which would
 // disable or break limiting.
@@ -57,10 +64,8 @@ func (l *LoginLimiter) Take(key string) bool {
 		l.lru.MoveToFront(e)
 		b = e.Value.(*bucket)
 	} else {
-		if l.lru.Len() >= l.maxKeys {
-			oldest := l.lru.Back()
-			l.lru.Remove(oldest)
-			delete(l.buckets, oldest.Value.(*bucket).key)
+		if l.lru.Len() >= l.maxKeys && !l.evict(now) {
+			return false
 		}
 		b = &bucket{key: key, tokens: l.burst, last: now}
 		l.buckets[key] = l.lru.PushFront(b)
@@ -72,6 +77,21 @@ func (l *LoginLimiter) Take(key string) bool {
 	}
 	b.tokens--
 	return true
+}
+
+// evict removes the least recently used bucket that is full at now, scanning
+// at most evictScan buckets from the back, and reports whether it found one.
+func (l *LoginLimiter) evict(now time.Time) bool {
+	e := l.lru.Back()
+	for i := 0; i < evictScan && e != nil; i, e = i+1, e.Prev() {
+		b := e.Value.(*bucket)
+		if b.tokens+float64(now.Sub(b.last))/float64(l.refill) >= l.burst {
+			l.lru.Remove(e)
+			delete(l.buckets, b.key)
+			return true
+		}
+	}
+	return false
 }
 
 // Reset forgets key, restoring its full burst.

@@ -13,3 +13,11 @@ func TrackedKeys(l *LoginLimiter) int {
 	defer l.mu.Unlock()
 	return len(l.buckets)
 }
+
+// Tracks reports whether l currently holds a bucket for key.
+func Tracks(l *LoginLimiter, key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, ok := l.buckets[key]
+	return ok
+}

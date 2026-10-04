@@ -47,6 +47,11 @@ type Options struct {
 	// the store; a well-behaved client subscribes once per (re)connect and
 	// when its vault list changes, so a faster one is closed.
 	MinSubscribeInterval time.Duration
+	// MembershipRecheckInterval is the least time between two membership
+	// rechecks on one socket (default 15s). The recheck runs on Ping and costs
+	// a query per subscribed vault; Pings are not rate limited, so without
+	// this a client pinging in a loop would load the store.
+	MembershipRecheckInterval time.Duration
 }
 
 type Hub struct {
@@ -70,6 +75,9 @@ func New(a Authenticator, v Vaults, b bus.Bus, log *slog.Logger, opts Options) *
 	}
 	if opts.MinSubscribeInterval == 0 {
 		opts.MinSubscribeInterval = time.Second
+	}
+	if opts.MembershipRecheckInterval == 0 {
+		opts.MembershipRecheckInterval = 15 * time.Second
 	}
 	return &Hub{auth: a, vaults: v, bus: b, log: log, opts: opts}
 }
@@ -113,6 +121,7 @@ type conn struct {
 	sess  auth.Session
 
 	lastSubscribe time.Time // zero until the first Subscribe
+	lastRecheck   time.Time // zero until the first membership recheck
 
 	mu   sync.Mutex
 	subs map[string]func() // vault id → bus cancel
@@ -260,11 +269,18 @@ func (c *conn) forward(vaultID string, seq int64, ch <-chan bus.Notify) {
 }
 
 // recheckMembership drops subscriptions to vaults the user can no longer
-// access. Membership is otherwise checked only at Subscribe, so without this
-// a removed member would keep receiving notifications for as long as the
-// socket stays open. Lookup failures other than not-found keep the
+// access, telling the client with a NOT_FOUND Error frame for each (the
+// socket stays open). Membership is otherwise checked only at Subscribe, so
+// without this a removed member would keep receiving notifications for as
+// long as the socket stays open. It runs at most once per
+// MembershipRecheckInterval. Lookup failures other than not-found keep the
 // subscription: a transient store error must not silently unsubscribe.
 func (c *conn) recheckMembership() {
+	now := time.Now()
+	if !c.lastRecheck.IsZero() && now.Sub(c.lastRecheck) < c.hub.opts.MembershipRecheckInterval {
+		return
+	}
+	c.lastRecheck = now
 	c.mu.Lock()
 	vaultIDs := make([]string, 0, len(c.subs))
 	for id := range c.subs {
@@ -277,11 +293,17 @@ func (c *conn) recheckMembership() {
 		case err == nil:
 		case errors.Is(err, store.ErrNotFound):
 			c.mu.Lock()
-			if cancel, ok := c.subs[id]; ok {
+			cancel, ok := c.subs[id]
+			if ok {
 				cancel()
 				delete(c.subs, id)
 			}
 			c.mu.Unlock()
+			if ok {
+				// The Error frame has no vault field, so the message is the
+				// same fixed one Subscribe sends.
+				c.sendError(apperr.New(apperr.NotFound, "vault not found"))
+			}
 		default:
 			c.hub.log.Error("recheck membership", "vault", id, "err", err)
 		}

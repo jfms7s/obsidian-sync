@@ -75,6 +75,13 @@ func (r *failingReader) Close() error { return r.rc.Close() }
 
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
+	return newTestEnvWrapped(t, nil)
+}
+
+// newTestEnvWrapped is newTestEnv with the API handler's store replaced by
+// wrap(store), so a test can inject store behaviour; a nil wrap uses the store.
+func newTestEnvWrapped(t *testing.T, wrap func(*store.Store) api.Store) *testEnv {
+	t.Helper()
 	st, clk := storetest.New(t)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	authSvc, err := auth.NewService(st, auth.Options{Params: auth.FastParams, Now: clk.Now})
@@ -88,7 +95,11 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 	failBlobReads := new(atomic.Bool)
 	syncSvc := syncsvc.New(st, faultyBlobs{Store: blobs, fail: failBlobReads}, bus.NewMemory(), syncsvc.Limits{MaxFileSizeBytes: 64 << 20}, log)
-	h := api.NewHandler(api.Deps{Auth: authSvc, Sync: syncSvc, Store: st, Ready: st.Ping, Log: log})
+	var apiStore api.Store = st
+	if wrap != nil {
+		apiStore = wrap(st)
+	}
+	h := api.NewHandler(api.Deps{Auth: authSvc, Sync: syncSvc, Store: apiStore, Ready: st.Ping, Log: log})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	return &testEnv{t: t, url: srv.URL, st: st, blobRoot: blobRoot, failBlobReads: failBlobReads, handler: h}

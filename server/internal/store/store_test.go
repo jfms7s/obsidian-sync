@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,5 +51,20 @@ func TestOpenWaitsForAnotherWriter(t *testing.T) {
 	}
 	if err := <-released; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A database URL that does not parse must not be echoed in the error: it can
+// carry credentials in its userinfo or query.
+func TestOpenParseErrorDoesNotLeakURL(t *testing.T) {
+	_, err := store.Open(context.Background(), store.Options{
+		URL:       "libsql://admin:hunter2@db example.com/%zz?authToken=hunter2",
+		AuthToken: "tok",
+	})
+	if err == nil {
+		t.Fatal("Open succeeded on an invalid URL")
+	}
+	if strings.Contains(err.Error(), "hunter2") || err.Error() != "parse database url: invalid URL" {
+		t.Fatalf("err = %q", err)
 	}
 }

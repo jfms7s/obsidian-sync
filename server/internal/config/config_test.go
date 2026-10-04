@@ -160,6 +160,12 @@ func TestLogValueRedactsCredentials(t *testing.T) {
 		"userinfo password": "libsql://admin:hunter2-secret@db.example.com/obsync",
 		"authToken query":   "libsql://db.example.com/obsync?authToken=hunter2-secret&tls=1",
 		"unparseable":       "libsql://db example.com/%zz?authToken=hunter2-secret",
+		"fragment":          "libsql://h#authToken=hunter2-secret",
+		"access_token":      "libsql://h/db?access_token=hunter2-secret",
+		"client_secret":     "libsql://h/db?Client_Secret=hunter2-secret",
+		"api key":           "libsql://h/db?apiKey=hunter2-secret",
+		"db password":       "libsql://h/db?DB_PASSWORD=hunter2-secret",
+		"jwt":               "libsql://h/db?JWT=hunter2-secret",
 	}
 	for name, dbURL := range cases {
 		t.Run(name, func(t *testing.T) {

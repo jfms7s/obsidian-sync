@@ -230,8 +230,8 @@ func (c Config) Validate() error {
 const redacted = "REDACTED"
 
 // LogValue lets a Config be logged without leaking credentials: the auth
-// token is replaced, and so are a password in the database URL's userinfo
-// and any authToken query parameter.
+// token is replaced, and so are the database URL's userinfo password,
+// fragment and credential-like query parameters.
 func (c Config) LogValue() slog.Value {
 	token := ""
 	if c.DatabaseAuthToken != "" {
@@ -258,8 +258,10 @@ func (c Config) LogValue() slog.Value {
 	)
 }
 
-// redactURL hides the userinfo and any token-like query parameter. A URL
-// that does not parse is hidden entirely, since its parts cannot be told apart.
+// redactURL hides the userinfo, drops the fragment (it can carry a token, as
+// in "#authToken=...") and hides any query parameter whose name looks like a
+// credential. A URL that does not parse is hidden entirely, since its parts
+// cannot be told apart.
 func redactURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -268,14 +270,14 @@ func redactURL(raw string) string {
 	if u.User != nil {
 		u.User = url.User(redacted)
 	}
+	u.Fragment, u.RawFragment = "", ""
 	if u.RawQuery != "" {
 		q, err := url.ParseQuery(u.RawQuery)
 		if err != nil {
 			u.RawQuery = redacted
 		} else {
 			for k := range q {
-				switch strings.ToLower(k) {
-				case "authtoken", "auth_token", "token", "password", "jwt":
+				if isCredentialKey(k) {
 					q[k] = []string{redacted}
 				}
 			}
@@ -283,6 +285,22 @@ func redactURL(raw string) string {
 		}
 	}
 	return u.String()
+}
+
+// isCredentialKey reports whether a query parameter name looks like it holds
+// a credential: it contains "token", "secret", "password" or "key" (in any
+// case), or is "jwt".
+func isCredentialKey(k string) bool {
+	k = strings.ToLower(k)
+	if k == "jwt" {
+		return true
+	}
+	for _, s := range []string{"token", "secret", "password", "key"} {
+		if strings.Contains(k, s) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c Config) GCGrace() time.Duration { return time.Duration(c.GCGraceHours) * time.Hour }

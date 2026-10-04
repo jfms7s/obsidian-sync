@@ -2,14 +2,17 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"io"
 	"net/http"
 	"testing"
 
+	"github.com/jfms7s/obsidian-sync/server/internal/api"
 	"github.com/jfms7s/obsidian-sync/server/internal/apperr"
 	obsyncv1 "github.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1"
 	"github.com/jfms7s/obsidian-sync/server/internal/ids"
+	"github.com/jfms7s/obsidian-sync/server/internal/store"
 )
 
 func (e *testEnv) createVault(token string) string {
@@ -196,4 +199,21 @@ func TestRequestValidation(t *testing.T) {
 	if resp.StatusCode != 400 {
 		t.Errorf("chunked upload = %d, want 400", resp.StatusCode)
 	}
+}
+
+// keysRaceStore simulates the user losing membership between any membership
+// check and the key lookup: VaultKeys reports the vault as not found.
+type keysRaceStore struct{ *store.Store }
+
+func (keysRaceStore) VaultKeys(context.Context, string, string) ([]store.VaultKey, error) {
+	return nil, store.ErrNotFound
+}
+
+func TestVaultKeysMembershipRaceIsNotFound(t *testing.T) {
+	e := newTestEnvWrapped(t, func(st *store.Store) api.Store { return keysRaceStore{st} })
+	e.createUser("alice", "correct horse")
+	alice, _ := e.login("alice", "correct horse")
+	vault := e.createVault(alice)
+	status, apiErr := e.do("GET", "/v1/vaults/"+vault+"/keys", alice, nil, nil)
+	wantErr(t, status, apiErr, 404, apperr.NotFound)
 }

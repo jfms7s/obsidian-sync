@@ -31,16 +31,24 @@ type revocableVaults struct {
 	*store.Store
 	mu      sync.Mutex
 	revoked map[string]bool // vault id
+	calls   int             // VaultForMember calls
 }
 
 func (v *revocableVaults) VaultForMember(ctx context.Context, vaultID, userID string) (store.Vault, error) {
 	v.mu.Lock()
 	revoked := v.revoked[vaultID]
+	v.calls++
 	v.mu.Unlock()
 	if revoked {
 		return store.Vault{}, store.ErrNotFound
 	}
 	return v.Store.VaultForMember(ctx, vaultID, userID)
+}
+
+func (v *revocableVaults) callCount() int {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.calls
 }
 
 func (v *revocableVaults) revoke(vaultID string) {
@@ -64,8 +72,10 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	// Several tests re-subscribe back to back; the pacing rule has its own test.
-	return newEnvOpts(t, hub.Options{AuthTimeout: 200 * time.Millisecond, MinSubscribeInterval: time.Nanosecond})
+	// Several tests re-subscribe back to back or expect every Ping to recheck
+	// membership; the pacing rules have their own tests.
+	return newEnvOpts(t, hub.Options{AuthTimeout: 200 * time.Millisecond, MinSubscribeInterval: time.Nanosecond,
+		MembershipRecheckInterval: time.Nanosecond})
 }
 
 func newEnvOpts(t *testing.T, opts hub.Options) *env {
@@ -382,9 +392,10 @@ func TestSubscribeRevalidatesToken(t *testing.T) {
 	expectClosed(t, c)
 }
 
-// Membership is rechecked on every Ping: once the user loses access to a
-// vault, its subscription is dropped and no further notifies arrive, while
-// subscriptions to vaults still accessible keep working.
+// Membership is rechecked on Ping: once the user loses access to a vault, its
+// subscription is dropped, the client is told with a NOT_FOUND Error frame
+// (the socket stays open) and no further notifies arrive, while subscriptions
+// to vaults still accessible keep working.
 func TestPingDropsSubscriptionsToVaultsNoLongerAccessible(t *testing.T) {
 	e := newEnv(t)
 	other := storetest.SeedVault(t, e.st, e.dev.UserID)
@@ -398,7 +409,13 @@ func TestPingDropsSubscriptionsToVaultsNoLongerAccessible(t *testing.T) {
 		t.Fatalf("initial notifies for %v", got)
 	}
 	e.vaults.revoke(e.vault.ID)
-	expectPongNext(t, c, 1)
+	send(t, c, pingFrame(1))
+	if f := recv(t, c).GetError(); f.GetCode() != apperr.NotFound || f.GetMessage() != "vault not found" {
+		t.Fatalf("frame = %v, want NOT_FOUND for the dropped vault", f)
+	}
+	if f := recv(t, c); f.GetPong().GetNonce() != 1 {
+		t.Fatalf("frame = %v, want pong 1", f)
+	}
 	if err := e.bus.Publish(ctx, bus.Notify{VaultID: e.vault.ID, Seq: 5}); err != nil {
 		t.Fatal(err)
 	}
@@ -444,4 +461,28 @@ func TestSubscribeRateLimitDefault(t *testing.T) {
 		t.Fatalf("frame = %v, want RATE_LIMITED", f)
 	}
 	expectClosed(t, c)
+}
+
+// Pings are not rate limited, so the membership recheck they trigger runs at
+// most once per MembershipRecheckInterval per socket.
+func TestMembershipRecheckIsThrottled(t *testing.T) {
+	e := newEnvOpts(t, hub.Options{MinSubscribeInterval: time.Nanosecond, MembershipRecheckInterval: 300 * time.Millisecond})
+	c := e.authed()
+	send(t, c, subscribeFrame(e.vault.ID))
+	if n := recv(t, c).GetNotify(); n.GetSeq() != 0 {
+		t.Fatalf("initial notify = %v", n)
+	}
+	expectPongNext(t, c, 1) // first ping rechecks
+	base := e.vaults.callCount()
+	for i := uint64(2); i < 12; i++ {
+		expectPongNext(t, c, i)
+	}
+	if n := e.vaults.callCount(); n != base {
+		t.Fatalf("%d membership queries from pings within the interval, want 0", n-base)
+	}
+	time.Sleep(350 * time.Millisecond)
+	expectPongNext(t, c, 99)
+	if n := e.vaults.callCount(); n != base+1 {
+		t.Fatalf("%d membership queries after the interval, want 1", n-base)
+	}
 }

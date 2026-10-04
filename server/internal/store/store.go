@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -30,7 +31,8 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 	if !local && opts.AuthToken != "" {
 		u, err := url.Parse(opts.URL)
 		if err != nil {
-			return nil, fmt.Errorf("parse database url: %w", err)
+			// url.Parse's error quotes the whole URL, credentials included.
+			return nil, errors.New("parse database url: invalid URL")
 		}
 		q := u.Query()
 		q.Set("authToken", opts.AuthToken)
