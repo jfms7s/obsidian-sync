@@ -1,0 +1,285 @@
+package api_test
+
+import (
+	"bytes"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/jfms7s/obsidian-sync/server/internal/api"
+	"github.com/jfms7s/obsidian-sync/server/internal/apperr"
+	obsyncv1 "github.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1"
+)
+
+// serve sends a request straight to the handler from remoteAddr, so tests
+// can choose the client address and X-Forwarded-For.
+func (e *testEnv) serve(method, path, token, remoteAddr string, xff ...string) *httptest.ResponseRecorder {
+	e.t.Helper()
+	var body []byte
+	if method == "POST" {
+		body, _ = proto.Marshal(&obsyncv1.LoginRequest{Username: "nobody", Password: "x"})
+	}
+	r := httptest.NewRequest(method, path, bytes.NewReader(body))
+	r.RemoteAddr = remoteAddr
+	r.Header.Set("Content-Type", "application/x-protobuf")
+	if token != "" {
+		r.Header.Set("Authorization", "Bearer "+token)
+	}
+	for _, v := range xff {
+		r.Header.Add("X-Forwarded-For", v)
+	}
+	w := httptest.NewRecorder()
+	e.handler.ServeHTTP(w, r)
+	return w
+}
+
+// wantLimited checks a 429 RATE_LIMITED reply carrying Retry-After.
+func wantLimited(t *testing.T, w *httptest.ResponseRecorder, retryAfter string) {
+	t.Helper()
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429 (body %q)", w.Code, w.Body.Bytes())
+	}
+	var apiErr obsyncv1.Error
+	if err := proto.Unmarshal(w.Body.Bytes(), &apiErr); err != nil || apiErr.Code != apperr.RateLimited {
+		t.Fatalf("body = %v (%v), want RATE_LIMITED", &apiErr, err)
+	}
+	if got := w.Header().Get("Retry-After"); got != retryAfter {
+		t.Fatalf("Retry-After = %q, want %q", got, retryAfter)
+	}
+}
+
+func notLimited(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	if w.Code == http.StatusTooManyRequests {
+		t.Fatalf("unexpected 429: %q", w.Body.Bytes())
+	}
+}
+
+const client1 = "198.51.100.7:4000"
+
+// Every authenticated route, chunk transfer and commit included, draws on one
+// bucket per device; another device has its own.
+func TestDeviceRateLimit(t *testing.T) {
+	e := newTestEnvLimited(t, api.RateLimits{DeviceRPS: 0.4, DeviceBurst: 3}, nil)
+	e.createUser("alice", "correct horse")
+	laptop, _ := e.login("alice", "correct horse")
+	phone, _ := e.login("alice", "correct horse")
+	vault := "/v1/vaults/0123456789abcdef0123456789abcdef"
+	for _, path := range []string{"/v1/devices", vault + "/chunks/" + string(bytes.Repeat([]byte("a"), 64)), "/v1/keys"} {
+		notLimited(t, e.serve("GET", path, laptop, client1))
+	}
+	// 0.4 req/s: the next token is 2.5s away, rounded up to 3.
+	wantLimited(t, e.serve("POST", vault+"/commit", laptop, client1), "3")
+	wantLimited(t, e.serve("GET", "/v1/devices", laptop, "203.0.113.1:1"), "3")
+	notLimited(t, e.serve("GET", "/v1/devices", phone, client1))
+
+	e.clk.Advance(2500 * time.Millisecond)
+	if w := e.serve("GET", "/v1/devices", laptop, client1); w.Code != 200 {
+		t.Fatalf("after refill: %d", w.Code)
+	}
+	wantLimited(t, e.serve("GET", "/v1/devices", laptop, client1), "3")
+}
+
+func TestLoginIPRateLimit(t *testing.T) {
+	e := newTestEnvLimited(t, api.RateLimits{IPRPS: 1, IPBurst: 2}, nil)
+	for i := 0; i < 2; i++ {
+		if w := e.serve("POST", "/v1/auth/login", "", client1); w.Code != 401 {
+			t.Fatalf("login %d = %d", i, w.Code)
+		}
+	}
+	wantLimited(t, e.serve("POST", "/v1/auth/login", "", client1), "1")
+	notLimited(t, e.serve("POST", "/v1/auth/login", "", "198.51.100.8:4000"))
+	e.clk.Advance(time.Second)
+	notLimited(t, e.serve("POST", "/v1/auth/login", "", client1))
+}
+
+func TestHealthIsExempt(t *testing.T) {
+	e := newTestEnvLimited(t, api.RateLimits{IPRPS: 0.01, IPBurst: 1, DeviceRPS: 0.01, DeviceBurst: 1}, nil)
+	e.serve("POST", "/v1/auth/login", "", client1)
+	wantLimited(t, e.serve("POST", "/v1/auth/login", "", client1), "100")
+	for i := 0; i < 20; i++ {
+		for _, path := range []string{"/healthz", "/readyz"} {
+			if w := e.serve("GET", path, "", client1); w.Code != 200 {
+				t.Fatalf("%s = %d", path, w.Code)
+			}
+		}
+	}
+}
+
+// Requests with a missing, unknown or revoked token draw on a per-IP budget;
+// valid tokens do not touch it.
+func TestInvalidTokenThrottledPerIP(t *testing.T) {
+	e := newTestEnvLimited(t, api.RateLimits{IPRPS: 1, IPBurst: 3}, nil)
+	e.createUser("alice", "correct horse")
+	token, _ := e.login("alice", "correct horse")
+
+	// Valid tokens never spend the failed-auth budget.
+	for i := 0; i < 10; i++ {
+		if w := e.serve("GET", "/v1/devices", token, client1); w.Code != 200 {
+			t.Fatalf("valid request %d = %d", i, w.Code)
+		}
+	}
+	for _, tok := range []string{"guess-1", "", "guess-2"} {
+		if w := e.serve("GET", "/v1/devices", tok, client1); w.Code != 401 {
+			t.Fatalf("bad token %q = %d", tok, w.Code)
+		}
+	}
+	wantLimited(t, e.serve("GET", "/v1/devices", "guess-3", client1), "1")
+	wantLimited(t, e.serve("GET", "/v1/devices", "", client1), "1")
+	// Other addresses are unaffected.
+	if w := e.serve("GET", "/v1/devices", "guess-4", "198.51.100.9:1"); w.Code != 401 {
+		t.Fatalf("other IP = %d", w.Code)
+	}
+	if w := e.serve("GET", "/v1/devices", token, "198.51.100.9:1"); w.Code != 200 {
+		t.Fatalf("other IP valid = %d", w.Code)
+	}
+	// The login budget is separate from the failed-token budget.
+	notLimited(t, e.serve("POST", "/v1/auth/login", "", client1))
+	e.clk.Advance(time.Second)
+	if w := e.serve("GET", "/v1/devices", token, client1); w.Code != 200 {
+		t.Fatalf("after refill = %d", w.Code)
+	}
+}
+
+func TestWebSocketUpgradeCountsAgainstIP(t *testing.T) {
+	var calls atomic.Int32
+	hub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) })
+	e := newTestEnvLimited(t, api.RateLimits{IPRPS: 1, IPBurst: 2}, hub)
+	e.serve("GET", "/v1/ws", "", client1)
+	e.serve("POST", "/v1/auth/login", "", client1) // shares the unauthenticated budget
+	wantLimited(t, e.serve("GET", "/v1/ws", "", client1), "1")
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("hub reached %d times, want 1", n)
+	}
+}
+
+func TestTrustedProxyKeying(t *testing.T) {
+	e := newTestEnvLimited(t, api.RateLimits{IPRPS: 1, IPBurst: 1,
+		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}}, nil)
+	proxy := "10.0.0.2:5555"
+	notLimited(t, e.serve("POST", "/v1/auth/login", "", proxy, "198.51.100.1"))
+	wantLimited(t, e.serve("POST", "/v1/auth/login", "", proxy, "198.51.100.1"), "1")
+	// A spoofed left-most entry does not change the key.
+	wantLimited(t, e.serve("POST", "/v1/auth/login", "", proxy, "6.6.6.6, 198.51.100.1"), "1")
+	notLimited(t, e.serve("POST", "/v1/auth/login", "", proxy, "198.51.100.2"))
+
+	// From an untrusted peer, X-Forwarded-For is ignored.
+	notLimited(t, e.serve("POST", "/v1/auth/login", "", "203.0.113.9:1", "1.1.1.1"))
+	wantLimited(t, e.serve("POST", "/v1/auth/login", "", "203.0.113.9:1", "2.2.2.2"), "1")
+
+	// One IPv6 /56 is one client, even across its /64s.
+	notLimited(t, e.serve("POST", "/v1/auth/login", "", "[2001:db8:0:1::1]:1"))
+	wantLimited(t, e.serve("POST", "/v1/auth/login", "", "[2001:db8:0:2::2]:1"), "1")
+	notLimited(t, e.serve("POST", "/v1/auth/login", "", "[2001:db8:0:100::1]:1"))
+}
+
+// With no limits configured (the zero RateLimits) nothing is throttled.
+func TestRateLimitsDisabledByDefault(t *testing.T) {
+	e := newTestEnv(t)
+	for i := 0; i < 50; i++ {
+		notLimited(t, e.serve("GET", "/v1/devices", "bad", client1))
+	}
+	// (Fewer logins: the per-username login limiter still applies.)
+	for i := 0; i < 4; i++ {
+		notLimited(t, e.serve("POST", "/v1/auth/login", "", client1))
+	}
+}
+
+// Regression: an address whose bad-token budget is spent (a stranger behind
+// the same proxy or NAT sending junk tokens) must not block valid tokens from
+// it; only further bad tokens get 429.
+func TestBadTokenLimitNeverBlocksValidTokens(t *testing.T) {
+	e := newTestEnvLimited(t, api.RateLimits{IPRPS: 0.01, IPBurst: 2}, nil)
+	e.createUser("alice", "correct horse")
+	token, _ := e.login("alice", "correct horse")
+	for i := 0; i < 2; i++ {
+		e.serve("GET", "/v1/devices", "junk", client1)
+	}
+	wantLimited(t, e.serve("GET", "/v1/devices", "junk", client1), "100")
+	for i := 0; i < 5; i++ {
+		if w := e.serve("GET", "/v1/devices", token, client1); w.Code != 200 {
+			t.Fatalf("valid token from a blocked address = %d %q", w.Code, w.Body.Bytes())
+		}
+		wantLimited(t, e.serve("GET", "/v1/devices", "junk", client1), "100")
+	}
+}
+
+var noopHub = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+
+// v6 returns a client address in the n-th /56 of 2001:db8:a::/48 (n < 256),
+// or of 2001:db8:b::/48 when other is set.
+func v6(n int, other bool) string {
+	p := "2001:db8:a"
+	if other {
+		p = "2001:db8:b"
+	}
+	return fmt.Sprintf("[%s:%02x00::1]:1", p, n)
+}
+
+// Many /56s inside one /48 share an aggregate budget of 4x the per-address
+// rate and burst, on the unauthenticated and the bad-token limiter alike;
+// another /48 and IPv4 clients are unaffected.
+func TestIPv6AggregateLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, token string
+	}{
+		// The WebSocket upgrade, not login, so the per-username login
+		// limiter stays out of the way.
+		{"unauthenticated", "GET", "/v1/ws", ""},
+		{"bad token", "GET", "/v1/devices", "junk"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEnvLimited(t, api.RateLimits{IPRPS: 1, IPBurst: 2}, noopHub)
+			// Aggregate: burst 8, 4/s. 300 distinct /56s (the /48 holds 256,
+			// so wrap around) get 8 requests between them.
+			passed := 0
+			for i := 0; i < 300; i++ {
+				w := e.serve(tc.method, tc.path, tc.token, v6(i%256, false))
+				if w.Code == http.StatusTooManyRequests {
+					wantLimited(t, w, "1")
+					continue
+				}
+				passed++
+			}
+			if passed != 8 {
+				t.Fatalf("%d requests passed from one /48, want 8", passed)
+			}
+			// Another /48 has its own aggregate.
+			for i := 0; i < 8; i++ {
+				notLimited(t, e.serve(tc.method, tc.path, tc.token, v6(i, true)))
+			}
+			wantLimited(t, e.serve(tc.method, tc.path, tc.token, v6(200, true)), "1")
+			// A request the aggregate refused did not spend its /56's
+			// budget: half a second later (aggregate +2, /56 +0.5) the
+			// refused /56 still has its full burst of 2.
+			e.clk.Advance(500 * time.Millisecond)
+			refused := v6(200, true)
+			notLimited(t, e.serve(tc.method, tc.path, tc.token, refused))
+			notLimited(t, e.serve(tc.method, tc.path, tc.token, refused))
+			wantLimited(t, e.serve(tc.method, tc.path, tc.token, refused), "1")
+			// IPv4 clients have no aggregate.
+			for i := 0; i < 300; i++ {
+				notLimited(t, e.serve(tc.method, tc.path, tc.token, fmt.Sprintf("198.51.%d.%d:1", i/256, i%256)))
+			}
+		})
+	}
+}
+
+// Retry-After is the longer of the /56 and /48 waits.
+func TestIPv6AggregateRetryAfterIsTheLongerWait(t *testing.T) {
+	// Per-/56: burst 1 at 0.25/s (4 s per token); aggregate: burst 4 at 1/s.
+	e := newTestEnvLimited(t, api.RateLimits{IPRPS: 0.25, IPBurst: 1}, noopHub)
+	for i := 0; i < 4; i++ {
+		notLimited(t, e.serve("GET", "/v1/ws", "", v6(i, false)))
+	}
+	// Aggregate empty: a fresh /56 waits 1 s for it.
+	wantLimited(t, e.serve("GET", "/v1/ws", "", v6(9, false)), "1")
+	// /56 0 is empty too: its own wait (4 s) is the longer one.
+	wantLimited(t, e.serve("GET", "/v1/ws", "", v6(0, false)), "4")
+}
