@@ -26,7 +26,9 @@ func Run(t *testing.T, newStore func(t *testing.T) blob.Store) {
 
 	t.Run("put overwrites", func(t *testing.T) {
 		s := newStore(t)
-		_ = s.Put(ctx, "k", bytes.NewReader([]byte("one")))
+		if err := s.Put(ctx, "k", bytes.NewReader([]byte("one"))); err != nil {
+			t.Fatal(err)
+		}
 		if err := s.Put(ctx, "k", bytes.NewReader([]byte("two"))); err != nil {
 			t.Fatal(err)
 		}
@@ -44,7 +46,9 @@ func Run(t *testing.T, newStore func(t *testing.T) blob.Store) {
 
 	t.Run("delete is idempotent", func(t *testing.T) {
 		s := newStore(t)
-		_ = s.Put(ctx, "k", bytes.NewReader([]byte("x")))
+		if err := s.Put(ctx, "k", bytes.NewReader([]byte("x"))); err != nil {
+			t.Fatal(err)
+		}
 		if err := s.Delete(ctx, "k"); err != nil {
 			t.Fatal(err)
 		}
@@ -53,6 +57,12 @@ func Run(t *testing.T, newStore func(t *testing.T) blob.Store) {
 		}
 		if _, err := s.Get(ctx, "k"); !errors.Is(err, blob.ErrNotFound) {
 			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("delete of a key never written", func(t *testing.T) {
+		if err := newStore(t).Delete(ctx, "never"); err != nil {
+			t.Fatal(err)
 		}
 	})
 
@@ -69,9 +79,15 @@ func Run(t *testing.T, newStore func(t *testing.T) blob.Store) {
 
 	t.Run("invalid keys are rejected", func(t *testing.T) {
 		s := newStore(t)
-		for _, key := range []string{"", "../escape", "a//b", "UPPER", "a/", "/a"} {
+		for _, key := range []string{"", "../escape", "a//b", "UPPER", "a/", "/a", ".tmp-x", "a/../b"} {
 			if err := s.Put(ctx, key, bytes.NewReader(nil)); err == nil {
 				t.Errorf("Put(%q) succeeded", key)
+			}
+			if _, err := s.Get(ctx, key); err == nil || errors.Is(err, blob.ErrNotFound) {
+				t.Errorf("Get(%q) err = %v, want an invalid-key error", key, err)
+			}
+			if err := s.Delete(ctx, key); err == nil {
+				t.Errorf("Delete(%q) succeeded", key)
 			}
 		}
 	})

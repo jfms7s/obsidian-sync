@@ -57,7 +57,37 @@ func (f *FS) Put(_ context.Context, key string, r io.Reader) error {
 		os.Remove(tmp.Name())
 		return fmt.Errorf("publish blob: %w", err)
 	}
+	// The caller records the blob in the database as soon as Put returns, so
+	// the rename (and any directories MkdirAll created) must survive a crash.
+	if err := f.syncDirs(dir); err != nil {
+		return fmt.Errorf("sync blob dir: %w", err)
+	}
 	return nil
+}
+
+// syncDirs fsyncs dir and each parent up to and including the root.
+func (f *FS) syncDirs(dir string) error {
+	root := filepath.Clean(f.root)
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		if err := syncDir(d); err != nil {
+			return err
+		}
+		if d == root || d == filepath.Dir(d) {
+			return nil
+		}
+	}
+}
+
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	if err := d.Sync(); err != nil {
+		d.Close()
+		return err
+	}
+	return d.Close()
 }
 
 func (f *FS) Get(_ context.Context, key string) (io.ReadCloser, error) {
