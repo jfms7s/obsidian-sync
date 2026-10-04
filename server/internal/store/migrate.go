@@ -6,6 +6,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -20,15 +21,12 @@ func (s *Store) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`); err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
-	entries, err := fs.ReadDir(migrationFS, "migrations")
+	migrations, err := listMigrations()
 	if err != nil {
-		return fmt.Errorf("list migrations: %w", err)
+		return err
 	}
-	for _, e := range entries {
-		version, err := strconv.Atoi(strings.SplitN(e.Name(), "_", 2)[0])
-		if err != nil {
-			return fmt.Errorf("migration %s: name must start with a number", e.Name())
-		}
+	for _, m := range migrations {
+		version, name := m.version, m.name
 		var applied int
 		if err := s.db.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&applied); err != nil {
@@ -37,14 +35,22 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if applied > 0 {
 			continue
 		}
-		src, err := migrationFS.ReadFile("migrations/" + e.Name())
+		src, err := migrationFS.ReadFile("migrations/" + name)
 		if err != nil {
-			return fmt.Errorf("read migration %s: %w", e.Name(), err)
+			return fmt.Errorf("read migration %s: %w", name, err)
+		}
+		stmts := splitStatements(string(src))
+		for _, stmt := range stmts {
+			// A ';' anywhere but the end means two statements were merged,
+			// and go-libsql would silently run only the first.
+			if strings.Count(stmt, ";") > 1 || (strings.Contains(stmt, ";") && !strings.HasSuffix(stmt, ";")) {
+				return fmt.Errorf("migration %s: each statement must end its own line with ';': %.60q", name, stmt)
+			}
 		}
 		err = s.withTx(ctx, func(tx *sql.Tx) error {
-			for _, stmt := range splitStatements(string(src)) {
+			for _, stmt := range stmts {
 				if _, err := tx.ExecContext(ctx, stmt); err != nil {
-					return fmt.Errorf("migration %s: %w", e.Name(), err)
+					return fmt.Errorf("migration %s: %w", name, err)
 				}
 			}
 			_, err := tx.ExecContext(ctx,
@@ -58,10 +64,42 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return nil
 }
 
+type migration struct {
+	version int
+	name    string
+}
+
+// listMigrations returns the embedded migrations sorted by numeric version,
+// rejecting names without a leading number and duplicate versions.
+func listMigrations() ([]migration, error) {
+	entries, err := fs.ReadDir(migrationFS, "migrations")
+	if err != nil {
+		return nil, fmt.Errorf("list migrations: %w", err)
+	}
+	var out []migration
+	seen := map[int]string{}
+	for _, e := range entries {
+		version, err := strconv.Atoi(strings.SplitN(e.Name(), "_", 2)[0])
+		if err != nil {
+			return nil, fmt.Errorf("migration %s: name must start with a number", e.Name())
+		}
+		if prev, ok := seen[version]; ok {
+			return nil, fmt.Errorf("migrations %s and %s share version %d", prev, e.Name(), version)
+		}
+		seen[version] = e.Name()
+		out = append(out, migration{version: version, name: e.Name()})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].version < out[j].version })
+	return out, nil
+}
+
 // splitStatements splits a migration into single statements, because
 // go-libsql's Exec runs only the first statement of a multi-statement string
 // and silently ignores the rest. A statement ends at a line ending in ';'.
-// Blank lines and lines starting with "--" are dropped.
+// Blank lines and lines starting with "--" are dropped. Migrations must
+// therefore put at most one statement per line group, end it with ';' at the
+// end of a line, and avoid ';' inside literals, trailing comments and triggers;
+// Migrate rejects a statement that breaks this rule.
 func splitStatements(src string) []string {
 	var stmts []string
 	var cur strings.Builder

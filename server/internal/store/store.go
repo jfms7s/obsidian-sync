@@ -45,11 +45,27 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 		// A local libSQL file has a single writer. One pooled connection
 		// serialises all access instead of failing with SQLITE_BUSY, so code
 		// must never use s.db while it holds a transaction or open rows.
+		// Keep that one connection for the life of the pool so the pragmas
+		// below, which are per connection, stay in effect.
 		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+		db.SetConnMaxLifetime(0)
+		db.SetConnMaxIdleTime(0)
 		var mode string
 		if err := db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&mode); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("enable WAL: %w", err)
+		}
+		if !strings.EqualFold(mode, "wal") {
+			db.Close()
+			return nil, fmt.Errorf("enable WAL: journal mode is %q", mode)
+		}
+		// Another process (obsync admin, obsync migrate) may write the same
+		// file while the server runs; wait for its lock instead of failing.
+		var timeout int
+		if err := db.QueryRowContext(ctx, "PRAGMA busy_timeout=5000").Scan(&timeout); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("set busy_timeout: %w", err)
 		}
 	}
 	if err := db.PingContext(ctx); err != nil {

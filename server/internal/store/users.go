@@ -110,6 +110,9 @@ func (s *Store) CreateDevice(ctx context.Context, d Device, tokenHash []byte) er
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO devices (id, user_id, token_hash, name, platform, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		d.ID, d.UserID, tokenHash, d.Name, d.Platform, now, now)
+	if isUniqueViolation(err) {
+		return ErrExists
+	}
 	if err != nil {
 		return fmt.Errorf("create device: %w", err)
 	}
