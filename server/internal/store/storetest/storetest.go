@@ -92,3 +92,32 @@ func SeedChunk(t testing.TB, st *store.Store, vaultID string, id []byte, size in
 		t.Fatalf("seed chunk: %v", err)
 	}
 }
+
+// FileID returns a 32-byte id filled with b.
+func FileID(b byte) []byte { return bytes.Repeat([]byte{b}, 32) }
+
+// NewVersion builds a commit at epoch 1 from device "dev" with a fresh version id.
+func NewVersion(vaultID string, fileID, base []byte, chunks ...[]byte) store.Version {
+	return store.Version{
+		VaultID:       vaultID,
+		FileID:        fileID,
+		VersionID:     ids.Bytes(16),
+		BaseVersionID: base,
+		Epoch:         1,
+		EncMeta:       []byte("meta"),
+		ChunkIDs:      chunks,
+		Size:          int64(len(chunks)),
+		DeviceID:      "dev",
+	}
+}
+
+// MustCommit commits v and fails the test unless it is accepted.
+func MustCommit(t testing.TB, st *store.Store, v store.Version) store.Version {
+	t.Helper()
+	out, err := st.Commit(context.Background(), v)
+	if err != nil || !out.OK() {
+		t.Fatalf("commit: err=%v outcome=%+v", err, out)
+	}
+	v.Seq = out.Seq
+	return v
+}
