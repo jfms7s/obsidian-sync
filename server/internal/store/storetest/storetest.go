@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jfms7s/obsidian-sync/server/internal/ids"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 )
 
@@ -47,4 +48,18 @@ func New(t testing.TB) (*store.Store, *Clock) {
 		t.Fatalf("migrate: %v", err)
 	}
 	return st, clk
+}
+
+// SeedUser creates a user with a 1 GiB quota and an unusable password hash.
+func SeedUser(t testing.TB, st *store.Store, username string) store.User {
+	t.Helper()
+	u := store.User{ID: ids.New(), Username: username, PasswordHash: "unusable", QuotaBytes: 1 << 30}
+	if err := st.CreateUser(context.Background(), u); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	got, err := st.UserByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	return got
 }
