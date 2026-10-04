@@ -107,6 +107,7 @@ func TestKeyBundleRoundTrip(t *testing.T) {
 
 	changed := validBundle()
 	changed.PublicEncKey = bytes.Repeat([]byte{9}, 32)
+	changed.CurrentPassword = "correct horse"
 	status, apiErr = e.do("PUT", "/v1/keys", token, changed, nil)
 	wantErr(t, status, apiErr, 400, apperr.Invalid)
 

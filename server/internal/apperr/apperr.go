@@ -21,6 +21,7 @@ const (
 	Internal      = obsyncv1.ErrorCode_ERROR_CODE_INTERNAL
 	Invalid       = obsyncv1.ErrorCode_ERROR_CODE_INVALID
 	MissingChunk  = obsyncv1.ErrorCode_ERROR_CODE_MISSING_CHUNK
+	WrongPassword = obsyncv1.ErrorCode_ERROR_CODE_WRONG_PASSWORD
 )
 
 // Error is an error whose message is safe to show to the client.

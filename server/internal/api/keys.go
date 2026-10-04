@@ -41,9 +41,13 @@ func (h *handlers) getKeys(w http.ResponseWriter, r *http.Request, sess auth.Ses
 	writeProto(w, http.StatusOK, &bundle)
 }
 
+// putKeys stores the user's first key bundle, or replaces it (a passphrase
+// change). The first upload needs only the device token; a replacement also
+// needs the account password, so a stolen token cannot overwrite the wrapped
+// private keys or their KDF parameters and break recovery.
 func (h *handlers) putKeys(w http.ResponseWriter, r *http.Request, sess auth.Session) {
 	var req obsyncv1.KeyBundle
-	if err := readProto(w, r, &req, smallBodyLimit); err != nil {
+	if err := readProto(w, r, &req, keysBodyLimit); err != nil {
 		h.writeError(w, r, err)
 		return
 	}
@@ -51,7 +55,27 @@ func (h *handlers) putKeys(w http.ResponseWriter, r *http.Request, sess auth.Ses
 		h.writeError(w, r, err)
 		return
 	}
-	// Store only the validated fields, never whatever else came in.
+	// A password sent with a first upload is ignored. Two first uploads
+	// racing past this check are settled by the store: the later one must
+	// carry the very public keys the earlier one just stored, which no one
+	// else knows before they are uploaded.
+	_, err := h.store.KeyBundle(r.Context(), sess.UserID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		h.writeError(w, r, err)
+		return
+	default:
+		if err := h.auth.VerifyUserPassword(r.Context(), sess.UserID, req.CurrentPassword); err != nil {
+			if errors.Is(err, auth.ErrPasswordRequired) {
+				err = apperr.New(apperr.WrongPassword, "replacing the key bundle requires the account password in current_password")
+			}
+			h.writeError(w, r, err)
+			return
+		}
+	}
+	// Store only the validated fields, never whatever else came in (and
+	// never the password).
 	p := req.GetPassParams()
 	kb := &obsyncv1.KeyBundle{
 		PublicEncKey:  req.PublicEncKey,

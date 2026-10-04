@@ -21,6 +21,8 @@ var (
 	ErrRateLimited        = apperr.New(apperr.RateLimited, "too many failed logins; try again later")
 	ErrUnauthorized       = apperr.New(apperr.Unauthorized, "missing or unknown token")
 	ErrDeviceRevoked      = apperr.New(apperr.DeviceRevoked, "this device has been revoked")
+	ErrPasswordRequired   = apperr.New(apperr.WrongPassword, "the account password is required")
+	ErrWrongPassword      = apperr.New(apperr.WrongPassword, "wrong account password")
 )
 
 // touchInterval bounds how often a device's last-seen time is written.
@@ -28,6 +30,7 @@ const touchInterval = time.Minute
 
 type Store interface {
 	UserByUsername(ctx context.Context, username string) (store.User, error)
+	UserByID(ctx context.Context, id string) (store.User, error)
 	CreateDevice(ctx context.Context, d store.Device, tokenHash []byte) error
 	DeviceByTokenHash(ctx context.Context, tokenHash []byte) (store.Device, error)
 	TouchDevice(ctx context.Context, deviceID string) error
@@ -104,11 +107,21 @@ type LoginResult struct {
 	Device store.Device
 }
 
+// limiterKey is the login limiter's key for a username, so every path that
+// checks a user's password draws on the same budget.
+func limiterKey(username string) string {
+	return strings.ToLower(strings.TrimSpace(username))
+}
+
+func errPasswordTooLong() error {
+	return apperr.New(apperr.Invalid, "password must be at most %d bytes", maxPasswordBytes)
+}
+
 func (s *Service) Login(ctx context.Context, req LoginRequest) (LoginResult, error) {
 	if len(req.Password) > maxPasswordBytes {
-		return LoginResult{}, apperr.New(apperr.Invalid, "password must be at most %d bytes", maxPasswordBytes)
+		return LoginResult{}, errPasswordTooLong()
 	}
-	key := strings.ToLower(strings.TrimSpace(req.Username))
+	key := limiterKey(req.Username)
 	// Every attempt spends a token up front; only a successful login gives
 	// them back. Lookup errors and corrupt hashes therefore count too.
 	if !s.limiter.Take(key) {
@@ -155,6 +168,45 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (LoginResult, err
 		return LoginResult{}, fmt.Errorf("read new device: %w", err)
 	}
 	return LoginResult{Token: token, Device: stored}, nil
+}
+
+// VerifyUserPassword checks the account password of an authenticated user,
+// for actions a device token alone must not authorize. It shares Login's
+// per-username attempt budget, verification semaphore and password cap, so
+// guessing here costs the same as guessing at login. It returns nil,
+// ErrPasswordRequired (empty password, no attempt spent), ErrWrongPassword,
+// ErrRateLimited, ErrUnauthorized (the user no longer exists) or an
+// INVALID/internal error.
+func (s *Service) VerifyUserPassword(ctx context.Context, userID, password string) error {
+	if password == "" {
+		return ErrPasswordRequired
+	}
+	if len(password) > maxPasswordBytes {
+		return errPasswordTooLong()
+	}
+	user, err := s.st.UserByID(ctx, userID)
+	if errors.Is(err, store.ErrNotFound) {
+		return ErrUnauthorized
+	}
+	if err != nil {
+		return fmt.Errorf("look up user: %w", err)
+	}
+	key := limiterKey(user.Username)
+	if !s.limiter.Take(key) {
+		return ErrRateLimited
+	}
+	ok, err := s.checkPassword(ctx, password, user.PasswordHash)
+	if errors.Is(err, ErrRateLimited) {
+		return err
+	}
+	if err != nil {
+		return fmt.Errorf("verify password: %w", err)
+	}
+	if !ok {
+		return ErrWrongPassword
+	}
+	s.limiter.Reset(key)
+	return nil
 }
 
 func (s *Service) Authenticate(ctx context.Context, token string) (Session, error) {

@@ -32,7 +32,7 @@ func TestKeyBundleDropsUnknownFields(t *testing.T) {
 	e.createUser("alice", "correct horse")
 	token, _ := e.login("alice", "correct horse")
 
-	body := withUnknownField(t, validBundle(), 32<<10)
+	body := withUnknownField(t, validBundle(), 8<<10)
 	if status, data := e.doRaw("PUT", "/v1/keys", token, body); status != http.StatusNoContent {
 		t.Fatalf("put = %d %q", status, data)
 	}

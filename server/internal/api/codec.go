@@ -21,8 +21,12 @@ const protoContentType = "application/x-protobuf"
 const (
 	// loginBodyLimit bounds POST /v1/auth/login (unauthenticated).
 	loginBodyLimit int64 = 16 << 10
-	// smallBodyLimit bounds small authenticated requests: PUT /v1/keys,
-	// device management, vault creation.
+	// keysBodyLimit bounds PUT /v1/keys: two wrapped keys of at most
+	// maxWrappedKeyBytes, a password of at most 1 KiB and a few small
+	// fields come to under 10 KiB.
+	keysBodyLimit int64 = 16 << 10
+	// smallBodyLimit bounds other small authenticated requests: device
+	// management, vault creation.
 	smallBodyLimit int64 = 64 << 10
 	// chunkListBodyLimit bounds requests that list chunk IDs (32 bytes plus
 	// framing each), such as POST …/chunks/exists.
@@ -134,6 +138,9 @@ func statusFor(code obsyncv1.ErrorCode) int {
 		return http.StatusBadRequest
 	case apperr.Unauthorized, apperr.DeviceRevoked:
 		return http.StatusUnauthorized
+	case apperr.WrongPassword:
+		// Not 401: the token is fine, only the password was refused.
+		return http.StatusForbidden
 	case apperr.NotFound:
 		return http.StatusNotFound
 	case apperr.Conflict, apperr.StaleEpoch:

@@ -19,6 +19,9 @@ enum ErrorCode {
   ERROR_CODE_INTERNAL = 9;
   ERROR_CODE_INVALID = 10;
   ERROR_CODE_MISSING_CHUNK = 11;
+  // The account password sent to authorize the request was missing or wrong.
+  // Unlike UNAUTHORIZED, the device token is still valid.
+  ERROR_CODE_WRONG_PASSWORD = 12;
 }
 
 message Error {
@@ -70,6 +73,10 @@ message KeyBundle {
   Argon2Params pass_params = 4;
   bytes pass_wrapped = 5;     // private keys sealed under the passphrase KEK
   bytes recovery_wrapped = 6; // private keys sealed under the recovery KEK
+  // PUT /v1/keys only, never stored or returned: the account (login)
+  // password, required to replace an existing bundle. The first upload
+  // needs only the device token.
+  string current_password = 7;
 }
 
 // ---------- Vaults ----------
