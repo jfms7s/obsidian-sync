@@ -1,5 +1,6 @@
-// Package jobs runs periodic maintenance: retention pruning, then chunk
-// garbage collection. A database lease makes one replica run it at a time.
+// Package jobs runs periodic maintenance: retention pruning, chunk garbage
+// collection, then removal of stale blob temp files. A database lease makes
+// one replica run it at a time.
 package jobs
 
 import (
@@ -20,7 +21,17 @@ const (
 	maxGCBatches    = 100
 	defaultInterval = time.Hour
 	releaseTimeout  = 5 * time.Second
+	// staleTempAge is how old a blob temp file must be before it is swept;
+	// younger ones may belong to a Put still running in some process.
+	staleTempAge = time.Hour
 )
+
+// TempSweeper is implemented by blob stores that can leave temp files behind
+// after a crash (blob.FS). The runner sweeps them once per pass when the
+// store supports it.
+type TempSweeper interface {
+	SweepTemp(ctx context.Context, olderThan time.Duration) (int, error)
+}
 
 type Store interface {
 	AcquireLease(ctx context.Context, name, holder string, ttl time.Duration) (bool, error)
@@ -107,7 +118,26 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	}
 	r.log.Info("maintenance done",
 		"versions_pruned", stats.VersionsDeleted, "files_purged", stats.FilesPurged, "chunks_deleted", collected)
+	r.sweepTemp(ctx)
 	return nil
+}
+
+// sweepTemp removes stale blob temp files if the blob store supports it. It
+// runs under the lease, whose TTL (two intervals) leaves ample room for one
+// walk of the blob tree. Failures are only wasted space, so they are logged
+// rather than failing the pass.
+func (r *Runner) sweepTemp(ctx context.Context) {
+	sw, ok := r.blobs.(TempSweeper)
+	if !ok {
+		return
+	}
+	removed, err := sw.SweepTemp(ctx, staleTempAge)
+	if removed > 0 {
+		r.log.Info("swept stale blob temp files", "removed", removed)
+	}
+	if err != nil && ctx.Err() == nil {
+		r.log.Warn("sweep blob temp files", "err", err)
+	}
 }
 
 func (r *Runner) collectChunks(ctx context.Context, cutoffMs int64) (int, error) {

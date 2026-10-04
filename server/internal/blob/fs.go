@@ -16,30 +16,35 @@ import (
 // no published blob can match it.
 const tempPrefix = ".tmp-"
 
-// staleTempAge is how old a temp file must be before NewFS deletes it; younger
-// ones may belong to a Put still running in another process.
-const staleTempAge = time.Hour
-
 // FS stores blobs as files under a root directory.
 type FS struct{ root string }
 
+// NewFS creates root if needed. It does not scan the tree; stale temp files
+// are removed by SweepTemp, which the maintenance runner calls.
 func NewFS(root string) (*FS, error) {
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return nil, fmt.Errorf("create blob dir: %w", err)
 	}
-	if err := sweepTemps(root, time.Now().Add(-staleTempAge)); err != nil {
-		return nil, fmt.Errorf("sweep blob temp files: %w", err)
-	}
 	return &FS{root: root}, nil
 }
 
-// sweepTemps removes temp files left by Puts interrupted by a crash, which GC
-// never sees because they have no database row. Only failure to read the root
-// itself is an error; unreadable subtrees and failed removals are skipped.
-func sweepTemps(root string, olderThan time.Time) error {
-	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+// SweepTemp removes temp files last modified more than olderThan ago. They
+// are left by Puts interrupted by a crash, which chunk GC never sees because
+// they have no database row. olderThan must exceed how long a Put can go
+// without writing, or a Put still running (possibly in another process) loses
+// its file. Walking the tree is O(blobs), so this belongs in periodic
+// maintenance rather than on every start.
+//
+// It stops with ctx's error when ctx ends. Otherwise only failure to read the
+// root itself is an error; unreadable subtrees and failed removals are skipped.
+func (f *FS) SweepTemp(ctx context.Context, olderThan time.Duration) (removed int, err error) {
+	cutoff := time.Now().Add(-olderThan)
+	err = filepath.WalkDir(f.root, func(p string, d fs.DirEntry, err error) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		if err != nil {
-			if p == root {
+			if p == f.root {
 				return err
 			}
 			if d != nil && d.IsDir() {
@@ -50,11 +55,17 @@ func sweepTemps(root string, olderThan time.Time) error {
 		if !d.Type().IsRegular() || !strings.HasPrefix(d.Name(), tempPrefix) {
 			return nil
 		}
-		if info, err := d.Info(); err == nil && info.ModTime().Before(olderThan) {
-			_ = os.Remove(p)
+		if info, err := d.Info(); err == nil && info.ModTime().Before(cutoff) {
+			if os.Remove(p) == nil {
+				removed++
+			}
 		}
 		return nil
 	})
+	if err != nil {
+		return removed, fmt.Errorf("sweep blob temp files: %w", err)
+	}
+	return removed, nil
 }
 
 func (f *FS) path(key string) (string, error) {

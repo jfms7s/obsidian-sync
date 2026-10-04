@@ -271,3 +271,32 @@ func TestServeReturnsListenerError(t *testing.T) {
 		t.Fatal("Serve did not return")
 	}
 }
+
+// Build must not walk the blob tree; the maintenance runner it wires up
+// sweeps stale temp files instead.
+func TestStaleBlobTempFilesSweptByJobsNotBuild(t *testing.T) {
+	dir := t.TempDir()
+	blobDir := filepath.Join(dir, "blobs")
+	if err := os.MkdirAll(blobDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(blobDir, ".tmp-123")
+	if err := os.WriteFile(stale, []byte("junk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	a := buildApp(t, dir)
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatalf("Build swept the blob dir: %v", err)
+	}
+	if err := a.Jobs.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale temp file survived maintenance (err=%v)", err)
+	}
+}
