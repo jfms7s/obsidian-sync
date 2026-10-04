@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -122,5 +124,78 @@ func TestKeyBundle(t *testing.T) {
 	err = st.PutKeyBundle(ctx, u.ID, store.KeyBundle{PublicEncKey: bytes.Repeat([]byte{3}, 32), PublicSignKey: sign, Bundle: []byte("v3")})
 	if !errors.Is(err, store.ErrKeyMismatch) {
 		t.Fatalf("changed public key err = %v, want ErrKeyMismatch", err)
+	}
+}
+
+func TestPutKeyBundleRejectsBadPublicKeys(t *testing.T) {
+	st, _ := storetest.New(t)
+	u := storetest.SeedUser(t, st, "alice")
+	good := bytes.Repeat([]byte{1}, 32)
+	for name, kb := range map[string]store.KeyBundle{
+		"empty enc":  {PublicEncKey: nil, PublicSignKey: good, Bundle: []byte("b")},
+		"short enc":  {PublicEncKey: good[:31], PublicSignKey: good, Bundle: []byte("b")},
+		"long sign":  {PublicEncKey: good, PublicSignKey: append(bytes.Clone(good), 0), Bundle: []byte("b")},
+		"empty sign": {PublicEncKey: good, PublicSignKey: []byte{}, Bundle: []byte("b")},
+	} {
+		if err := st.PutKeyBundle(ctx, u.ID, kb); !errors.Is(err, store.ErrInvalid) {
+			t.Errorf("%s: err = %v, want ErrInvalid", name, err)
+		}
+	}
+	if _, err := st.KeyBundle(ctx, u.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a rejected bundle was stored: err = %v", err)
+	}
+}
+
+// Two servers (or two stores on one file) racing to store a user's first
+// bundle: the same keys both succeed, different keys yield ErrKeyMismatch.
+func TestPutKeyBundleConcurrentFirstUpload(t *testing.T) {
+	for i := 0; i < 5; i++ {
+		path := "file:" + filepath.Join(t.TempDir(), "meta.db")
+		a, err := store.Open(ctx, store.Options{URL: path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = a.Close() })
+		if err := a.Migrate(ctx); err != nil {
+			t.Fatal(err)
+		}
+		b, err := store.Open(ctx, store.Options{URL: path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = b.Close() })
+		u := storetest.SeedUser(t, a, "alice")
+
+		enc, sign := bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32)
+		other := bytes.Repeat([]byte{3}, 32)
+		bundles := []store.KeyBundle{
+			{PublicEncKey: enc, PublicSignKey: sign, Bundle: []byte("a")},
+			{PublicEncKey: enc, PublicSignKey: sign, Bundle: []byte("b")},
+			{PublicEncKey: other, PublicSignKey: sign, Bundle: []byte("c")},
+		}
+		stores := []*store.Store{a, b, a}
+		errs := make([]error, len(bundles))
+		var wg sync.WaitGroup
+		for j := range bundles {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs[j] = stores[j].PutKeyBundle(ctx, u.ID, bundles[j])
+			}()
+		}
+		wg.Wait()
+		got, err := a.KeyBundle(ctx, u.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for j, err := range errs {
+			sameAsStored := bytes.Equal(bundles[j].PublicEncKey, got.PublicEncKey)
+			switch {
+			case sameAsStored && err != nil:
+				t.Fatalf("round %d: put %d with the stored keys: %v", i, j, err)
+			case !sameAsStored && !errors.Is(err, store.ErrKeyMismatch):
+				t.Fatalf("round %d: put %d with other keys: err = %v, want ErrKeyMismatch", i, j, err)
+			}
+		}
 	}
 }

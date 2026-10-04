@@ -183,28 +183,51 @@ func (s *Store) KeyBundle(ctx context.Context, userID string) (KeyBundle, error)
 	return kb, nil
 }
 
+// publicKeySize is the length of both public keys in a key bundle (X25519
+// and Ed25519).
+const publicKeySize = 32
+
 // PutKeyBundle stores the first bundle, or replaces the wrapped private keys
 // of an existing one (a passphrase change). Public keys never change: other
-// members pin them, so a different public key is rejected.
+// members pin them, so a different public key is rejected with
+// ErrKeyMismatch, and a public key of the wrong length with ErrInvalid.
+// Concurrent first uploads behave as if they ran one after the other.
 func (s *Store) PutKeyBundle(ctx context.Context, userID string, kb KeyBundle) error {
+	if len(kb.PublicEncKey) != publicKeySize || len(kb.PublicSignKey) != publicKeySize {
+		return fmt.Errorf("%w: public keys must be %d bytes", ErrInvalid, publicKeySize)
+	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		var enc, sign []byte
-		err := tx.QueryRowContext(ctx,
-			`SELECT public_enc_key, public_sign_key FROM key_bundles WHERE user_id = ?`, userID).Scan(&enc, &sign)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			_, err = tx.ExecContext(ctx,
-				`INSERT INTO key_bundles (user_id, public_enc_key, public_sign_key, bundle, updated_at) VALUES (?, ?, ?, ?, ?)`,
-				userID, kb.PublicEncKey, kb.PublicSignKey, kb.Bundle, s.nowMs())
-		case err != nil:
-			return fmt.Errorf("read key bundle: %w", err)
-		case !bytes.Equal(enc, kb.PublicEncKey) || !bytes.Equal(sign, kb.PublicSignKey):
-			return ErrKeyMismatch
-		default:
-			_, err = tx.ExecContext(ctx,
-				`UPDATE key_bundles SET bundle = ?, updated_at = ? WHERE user_id = ?`, kb.Bundle, s.nowMs(), userID)
+		// Write first so the transaction holds the write lock before it
+		// reads (see commitTx). A bundle stored meanwhile by another
+		// connection then shows up as a conflict, not a failed insert.
+		now := s.nowMs()
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO key_bundles (user_id, public_enc_key, public_sign_key, bundle, updated_at) VALUES (?, ?, ?, ?, ?)
+			 ON CONFLICT(user_id) DO NOTHING`,
+			userID, kb.PublicEncKey, kb.PublicSignKey, kb.Bundle, now)
+		if err != nil && !isUniqueViolation(err) {
+			return fmt.Errorf("write key bundle: %w", err)
 		}
-		if err != nil {
+		if err == nil {
+			n, err := res.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("write key bundle: %w", err)
+			}
+			if n == 1 {
+				return nil // the first bundle
+			}
+		}
+		// A bundle exists, perhaps stored concurrently: re-read and compare.
+		var enc, sign []byte
+		if err := tx.QueryRowContext(ctx,
+			`SELECT public_enc_key, public_sign_key FROM key_bundles WHERE user_id = ?`, userID).Scan(&enc, &sign); err != nil {
+			return fmt.Errorf("read key bundle: %w", err)
+		}
+		if !bytes.Equal(enc, kb.PublicEncKey) || !bytes.Equal(sign, kb.PublicSignKey) {
+			return ErrKeyMismatch
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE key_bundles SET bundle = ?, updated_at = ? WHERE user_id = ?`, kb.Bundle, now, userID); err != nil {
 			return fmt.Errorf("write key bundle: %w", err)
 		}
 		return nil

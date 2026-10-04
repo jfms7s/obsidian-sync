@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,5 +141,55 @@ func TestValidateRetentionZeroes(t *testing.T) {
 	_, err = config.Load("", env(map[string]string{"OBSYNC_TRASH_DAYS": "0"}))
 	if err == nil || !strings.Contains(err.Error(), "trash_days") {
 		t.Fatalf("err = %v, want trash_days rejected", err)
+	}
+}
+
+func TestLoadRejectsMultipleYAMLDocuments(t *testing.T) {
+	_, err := config.Load(writeFile(t, "listen: \":9000\"\n---\nlisten: \":9100\"\n"), env(nil))
+	if err == nil || !strings.Contains(err.Error(), "config file must contain a single YAML document") {
+		t.Fatalf("err = %v, want single-document error", err)
+	}
+	// A lone document with an explicit start marker is still fine.
+	if _, err := config.Load(writeFile(t, "---\nlisten: \":9000\"\n"), env(nil)); err != nil {
+		t.Fatalf("single document with ---: %v", err)
+	}
+}
+
+func TestLogValueRedactsCredentials(t *testing.T) {
+	cases := map[string]string{
+		"userinfo password": "libsql://admin:hunter2-secret@db.example.com/obsync",
+		"authToken query":   "libsql://db.example.com/obsync?authToken=hunter2-secret&tls=1",
+		"unparseable":       "libsql://db example.com/%zz?authToken=hunter2-secret",
+	}
+	for name, dbURL := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := config.Defaults()
+			cfg.DatabaseURL = dbURL
+			cfg.DatabaseAuthToken = "tok-hunter2-secret"
+			for _, h := range []func(*bytes.Buffer) slog.Handler{
+				func(b *bytes.Buffer) slog.Handler { return slog.NewTextHandler(b, nil) },
+				func(b *bytes.Buffer) slog.Handler { return slog.NewJSONHandler(b, nil) },
+			} {
+				var buf bytes.Buffer
+				slog.New(h(&buf)).Info("config", "cfg", cfg)
+				out := buf.String()
+				if strings.Contains(out, "hunter2") {
+					t.Fatalf("log leaks a credential: %s", out)
+				}
+				for _, want := range []string{"listen", ":8080", "REDACTED"} {
+					if !strings.Contains(out, want) {
+						t.Errorf("log %q does not contain %q", out, want)
+					}
+				}
+			}
+		})
+	}
+	// An unset token is not reported as redacted, and a plain URL is kept.
+	cfg := config.Defaults()
+	cfg.DatabaseURL = "file:/data/meta.db"
+	var buf bytes.Buffer
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("config", "cfg", cfg)
+	if strings.Contains(buf.String(), "REDACTED") || !strings.Contains(buf.String(), "file:/data/meta.db") {
+		t.Fatalf("log = %s", buf.String())
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -13,6 +14,10 @@ import (
 
 //go:embed migrations/*.sql
 var migrationFS embed.FS
+
+// errMigrationApplied rolls back a migration that another process recorded
+// first.
+var errMigrationApplied = errors.New("migration already applied")
 
 // Migrate applies every migration in migrations/ that has not run yet, each in
 // its own transaction, in file-name order.
@@ -48,15 +53,27 @@ func (s *Store) Migrate(ctx context.Context) error {
 			}
 		}
 		err = s.withTx(ctx, func(tx *sql.Tx) error {
+			// Record the version first: the write takes the write lock (see
+			// commitTx), so a second process migrating concurrently waits
+			// here and then finds the version taken, instead of failing on
+			// the migration's own statements.
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, version, s.nowMs()); err != nil {
+				if isUniqueViolation(err) {
+					return errMigrationApplied
+				}
+				return fmt.Errorf("record migration %s: %w", name, err)
+			}
 			for _, stmt := range stmts {
 				if _, err := tx.ExecContext(ctx, stmt); err != nil {
 					return fmt.Errorf("migration %s: %w", name, err)
 				}
 			}
-			_, err := tx.ExecContext(ctx,
-				`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, version, s.nowMs())
-			return err
+			return nil
 		})
+		if errors.Is(err, errMigrationApplied) {
+			continue // another process applied it meanwhile
+		}
 		if err != nil {
 			return err
 		}

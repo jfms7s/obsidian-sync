@@ -25,9 +25,11 @@ func (s *Store) InsertChunk(ctx context.Context, c Chunk) (bool, error) {
 	var inserted bool
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
 		// Write first so the transaction holds the write lock before it
-		// reads usage (see commitTx).
+		// reads usage (see commitTx). Only a duplicate chunk is skipped;
+		// any other constraint failure is an error.
 		res, err := tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO chunks (vault_id, chunk_id, blob_key, size, touched_at) VALUES (?, ?, ?, ?, ?)`,
+			`INSERT INTO chunks (vault_id, chunk_id, blob_key, size, touched_at) VALUES (?, ?, ?, ?, ?)
+			 ON CONFLICT(vault_id, chunk_id) DO NOTHING`,
 			c.VaultID, c.ChunkID, c.BlobKey, c.Size, s.nowMs())
 		if err != nil {
 			return fmt.Errorf("insert chunk: %w", err)

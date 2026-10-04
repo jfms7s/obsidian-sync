@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -79,6 +81,12 @@ func Load(path string, getenv func(string) string) (Config, error) {
 		dec.KnownFields(true)
 		if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
 			return Config{}, fmt.Errorf("parse config file %s: %w", path, err)
+		}
+		// A second document would be silently ignored; reject it so an
+		// operator never edits settings that have no effect.
+		var extra yaml.Node
+		if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+			return Config{}, fmt.Errorf("parse config file %s: config file must contain a single YAML document", path)
 		}
 	}
 	if err := applyEnv(&cfg, getenv); err != nil {
@@ -217,6 +225,64 @@ func (c Config) Validate() error {
 		add("log_level %q is not one of debug, info, warn, error", c.LogLevel)
 	}
 	return errors.Join(errs...)
+}
+
+const redacted = "REDACTED"
+
+// LogValue lets a Config be logged without leaking credentials: the auth
+// token is replaced, and so are a password in the database URL's userinfo
+// and any authToken query parameter.
+func (c Config) LogValue() slog.Value {
+	token := ""
+	if c.DatabaseAuthToken != "" {
+		token = redacted
+	}
+	return slog.GroupValue(
+		slog.String("listen", c.Listen),
+		slog.String("data_dir", c.DataDir),
+		slog.String("database_url", redactURL(c.DatabaseURL)),
+		slog.String("database_auth_token", token),
+		slog.String("blob_backend", c.BlobBackend),
+		slog.String("blob_fs_dir", c.BlobFSDir),
+		slog.Bool("cluster", c.Cluster),
+		slog.Int64("default_quota_bytes", c.DefaultQuotaBytes),
+		slog.Int64("max_file_size_bytes", c.MaxFileSizeBytes),
+		slog.Group("retention",
+			slog.Int("history_days", c.Retention.HistoryDays),
+			slog.Int("history_max_versions", c.Retention.HistoryMaxVersions),
+			slog.Int("trash_days", c.Retention.TrashDays),
+		),
+		slog.Int("gc_grace_hours", c.GCGraceHours),
+		slog.Int("jobs_interval_minutes", c.JobsIntervalMinutes),
+		slog.String("log_level", c.LogLevel),
+	)
+}
+
+// redactURL hides the userinfo and any token-like query parameter. A URL
+// that does not parse is hidden entirely, since its parts cannot be told apart.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return redacted
+	}
+	if u.User != nil {
+		u.User = url.User(redacted)
+	}
+	if u.RawQuery != "" {
+		q, err := url.ParseQuery(u.RawQuery)
+		if err != nil {
+			u.RawQuery = redacted
+		} else {
+			for k := range q {
+				switch strings.ToLower(k) {
+				case "authtoken", "auth_token", "token", "password", "jwt":
+					q[k] = []string{redacted}
+				}
+			}
+			u.RawQuery = q.Encode()
+		}
+	}
+	return u.String()
 }
 
 func (c Config) GCGrace() time.Duration { return time.Duration(c.GCGraceHours) * time.Hour }

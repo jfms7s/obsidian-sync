@@ -37,8 +37,15 @@ func scanVault(row rowScanner) (Vault, error) {
 }
 
 // CreateVault stores a vault at epoch 1, makes its owner the only member and
-// stores the owner's sealed keys.
+// stores the owner's sealed keys. A repeated epoch in keys is ErrInvalid.
 func (s *Store) CreateVault(ctx context.Context, v Vault, keys []VaultKey) error {
+	seen := make(map[int]bool, len(keys))
+	for _, k := range keys {
+		if seen[k.Epoch] {
+			return fmt.Errorf("%w: vault key epoch %d appears twice", ErrInvalid, k.Epoch)
+		}
+		seen[k.Epoch] = true
+	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO vaults (id, owner_id, enc_name, seq, current_epoch, bytes_used, created_at) VALUES (?, ?, ?, 0, 1, 0, ?)`,
@@ -89,22 +96,39 @@ func (s *Store) VaultForMember(ctx context.Context, vaultID, userID string) (Vau
 		 WHERE v.id = ? AND m.user_id = ?`, vaultID, userID))
 }
 
+// VaultKeys returns the user's sealed keys for the vault, ordered by epoch.
+// ErrNotFound means the vault does not exist or the user is not a member.
 func (s *Store) VaultKeys(ctx context.Context, vaultID, userID string) ([]VaultKey, error) {
+	// The LEFT JOIN yields one all-NULL key row for a member without keys,
+	// and no row at all for a non-member.
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT epoch, sealed_key FROM vault_keys WHERE vault_id = ? AND user_id = ? ORDER BY epoch`, vaultID, userID)
+		`SELECT k.epoch, k.sealed_key FROM vault_members m
+		 LEFT JOIN vault_keys k ON k.vault_id = m.vault_id AND k.user_id = m.user_id
+		 WHERE m.vault_id = ? AND m.user_id = ? ORDER BY k.epoch`, vaultID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("vault keys: %w", err)
 	}
 	defer rows.Close()
-	var out []VaultKey
+	member := false
+	out := []VaultKey{}
 	for rows.Next() {
-		var k VaultKey
-		if err := rows.Scan(&k.Epoch, &k.SealedKey); err != nil {
+		member = true
+		var epoch sql.NullInt64
+		var sealed []byte
+		if err := rows.Scan(&epoch, &sealed); err != nil {
 			return nil, fmt.Errorf("scan vault key: %w", err)
 		}
-		out = append(out, k)
+		if epoch.Valid {
+			out = append(out, VaultKey{Epoch: int(epoch.Int64), SealedKey: sealed})
+		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("vault keys: %w", err)
+	}
+	if !member {
+		return nil, ErrNotFound
+	}
+	return out, nil
 }
 
 // UsageBytes is the stored chunk bytes (history included) of every vault the

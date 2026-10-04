@@ -49,3 +49,37 @@ func TestVaultLifecycle(t *testing.T) {
 		t.Fatalf("usage = %d, err %v", used, err)
 	}
 }
+
+func TestCreateVaultRejectsDuplicateEpoch(t *testing.T) {
+	st, _ := storetest.New(t)
+	alice := storetest.SeedUser(t, st, "alice")
+	v := store.Vault{ID: ids.New(), OwnerID: alice.ID, EncName: []byte("n")}
+	keys := []store.VaultKey{{Epoch: 0, SealedKey: []byte("k0")}, {Epoch: 1, SealedKey: []byte("a")}, {Epoch: 1, SealedKey: []byte("b")}}
+	if err := st.CreateVault(ctx, v, keys); !errors.Is(err, store.ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+	if _, err := st.VaultForMember(ctx, v.ID, alice.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("rejected vault was stored: err = %v", err)
+	}
+}
+
+func TestVaultKeysForNonMember(t *testing.T) {
+	st, _ := storetest.New(t)
+	alice := storetest.SeedUser(t, st, "alice")
+	bob := storetest.SeedUser(t, st, "bob")
+	v := storetest.SeedVault(t, st, alice.ID)
+	if _, err := st.VaultKeys(ctx, v.ID, bob.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("non-member err = %v, want ErrNotFound", err)
+	}
+	if _, err := st.VaultKeys(ctx, ids.New(), alice.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown vault err = %v, want ErrNotFound", err)
+	}
+	// A member without any sealed keys gets an empty list, not ErrNotFound.
+	empty := store.Vault{ID: ids.New(), OwnerID: alice.ID, EncName: []byte("n")}
+	if err := st.CreateVault(ctx, empty, nil); err != nil {
+		t.Fatal(err)
+	}
+	if keys, err := st.VaultKeys(ctx, empty.ID, alice.ID); err != nil || len(keys) != 0 {
+		t.Fatalf("keys = %+v, err = %v, want none", keys, err)
+	}
+}
