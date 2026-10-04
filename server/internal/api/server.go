@@ -133,10 +133,12 @@ type authedHandler func(w http.ResponseWriter, r *http.Request, sess auth.Sessio
 //
 // A request with a missing, unknown or revoked token spends from a
 // per-address budget instead, and once that is used up gets 429 rather than
-// 401. The token is always looked up first (one indexed query), so valid
-// tokens never touch that budget and are never blocked by it: behind a shared
-// proxy or NAT, a stranger sending junk tokens must not stop everyone's sync.
-// Tokens are 256 random bits, so answering a guess reveals nothing useful.
+// 401. A well-formed token is always looked up first (one indexed query), so
+// valid tokens never touch that budget and are never blocked by it: behind a
+// shared proxy or NAT, a stranger sending junk tokens must not stop everyone's
+// sync. A token that cannot have been issued (see auth.WellFormedToken) is
+// refused without a lookup, but answered and counted the same way. Tokens are
+// 256 random bits, so answering a guess reveals nothing useful.
 func (h *handlers) authed(next authedHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scheme, token, _ := strings.Cut(strings.TrimSpace(r.Header.Get("Authorization")), " ")
@@ -167,7 +169,7 @@ func (h *handlers) authFailed(w http.ResponseWriter, r *http.Request, err error)
 	if h.limits.authFail != nil {
 		switch apperr.CodeOf(err) {
 		case apperr.Unauthorized, apperr.DeviceRevoked:
-			if ok, retry := h.limits.authFail.Take(h.clientKey(r)); !ok {
+			if ok, retry := h.takeIP(h.limits.authFail, r); !ok {
 				writeRateLimited(w, retry)
 				return
 			}

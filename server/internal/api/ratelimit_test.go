@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -207,4 +208,78 @@ func TestBadTokenLimitNeverBlocksValidTokens(t *testing.T) {
 		}
 		wantLimited(t, e.serve("GET", "/v1/devices", "junk", client1), "100")
 	}
+}
+
+var noopHub = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+
+// v6 returns a client address in the n-th /56 of 2001:db8:a::/48 (n < 256),
+// or of 2001:db8:b::/48 when other is set.
+func v6(n int, other bool) string {
+	p := "2001:db8:a"
+	if other {
+		p = "2001:db8:b"
+	}
+	return fmt.Sprintf("[%s:%02x00::1]:1", p, n)
+}
+
+// Many /56s inside one /48 share an aggregate budget of 4x the per-address
+// rate and burst, on the unauthenticated and the bad-token limiter alike;
+// another /48 and IPv4 clients are unaffected.
+func TestIPv6AggregateLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, token string
+	}{
+		// The WebSocket upgrade, not login, so the per-username login
+		// limiter stays out of the way.
+		{"unauthenticated", "GET", "/v1/ws", ""},
+		{"bad token", "GET", "/v1/devices", "junk"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEnvLimited(t, api.RateLimits{IPRPS: 1, IPBurst: 2}, noopHub)
+			// Aggregate: burst 8, 4/s. 300 distinct /56s (the /48 holds 256,
+			// so wrap around) get 8 requests between them.
+			passed := 0
+			for i := 0; i < 300; i++ {
+				w := e.serve(tc.method, tc.path, tc.token, v6(i%256, false))
+				if w.Code == http.StatusTooManyRequests {
+					wantLimited(t, w, "1")
+					continue
+				}
+				passed++
+			}
+			if passed != 8 {
+				t.Fatalf("%d requests passed from one /48, want 8", passed)
+			}
+			// Another /48 has its own aggregate.
+			for i := 0; i < 8; i++ {
+				notLimited(t, e.serve(tc.method, tc.path, tc.token, v6(i, true)))
+			}
+			wantLimited(t, e.serve(tc.method, tc.path, tc.token, v6(200, true)), "1")
+			// A request the aggregate refused did not spend its /56's
+			// budget: half a second later (aggregate +2, /56 +0.5) the
+			// refused /56 still has its full burst of 2.
+			e.clk.Advance(500 * time.Millisecond)
+			refused := v6(200, true)
+			notLimited(t, e.serve(tc.method, tc.path, tc.token, refused))
+			notLimited(t, e.serve(tc.method, tc.path, tc.token, refused))
+			wantLimited(t, e.serve(tc.method, tc.path, tc.token, refused), "1")
+			// IPv4 clients have no aggregate.
+			for i := 0; i < 300; i++ {
+				notLimited(t, e.serve(tc.method, tc.path, tc.token, fmt.Sprintf("198.51.%d.%d:1", i/256, i%256)))
+			}
+		})
+	}
+}
+
+// Retry-After is the longer of the /56 and /48 waits.
+func TestIPv6AggregateRetryAfterIsTheLongerWait(t *testing.T) {
+	// Per-/56: burst 1 at 0.25/s (4 s per token); aggregate: burst 4 at 1/s.
+	e := newTestEnvLimited(t, api.RateLimits{IPRPS: 0.25, IPBurst: 1}, noopHub)
+	for i := 0; i < 4; i++ {
+		notLimited(t, e.serve("GET", "/v1/ws", "", v6(i, false)))
+	}
+	// Aggregate empty: a fresh /56 waits 1 s for it.
+	wantLimited(t, e.serve("GET", "/v1/ws", "", v6(9, false)), "1")
+	// /56 0 is empty too: its own wait (4 s) is the longer one.
+	wantLimited(t, e.serve("GET", "/v1/ws", "", v6(0, false)), "4")
 }

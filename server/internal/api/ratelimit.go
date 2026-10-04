@@ -23,6 +23,8 @@ type RateLimits struct {
 	// IPRPS and IPBurst bound, per client address, unauthenticated requests
 	// (login and the WebSocket upgrade) and, in a separate bucket, requests
 	// with a missing or invalid bearer token. A zero rate disables both.
+	// An IPv6 client is keyed by its /56 and its /48 is also limited, at
+	// ipv6AggregateFactor times the rate and burst.
 	IPRPS   float64
 	IPBurst int
 	// TrustedProxies are the reverse proxies whose X-Forwarded-For is used
@@ -33,15 +35,48 @@ type RateLimits struct {
 	Now     func() time.Time
 }
 
+// ipv6AggregateFactor scales the per-address rate and burst for the
+// per-/48 aggregate bucket. A /48 holds 256 /56s, each a separate client
+// key; without the aggregate one actor holding a /48 would get 256 times an
+// address's budget (and could fill the limiter's key table that much faster).
+// A few real clients sharing a /48 (one site, say) still have room.
+const ipv6AggregateFactor = 4
+
 // limiters holds the request limiters; a nil limiter is disabled.
 type limiters struct {
 	device *ratelimit.Limiter // key: device ID
-	ip     *ratelimit.Limiter // key: client address; login and WebSocket upgrade
+	ip     *ipLimiter         // client address; login and WebSocket upgrade
 	// authFail is kept apart from ip so that logins and WebSocket reconnects
 	// do not use up an address's allowance for bad bearer tokens.
-	authFail *ratelimit.Limiter // key: client address; bad bearer tokens
+	authFail *ipLimiter // client address; bad bearer tokens
 	clients  *clientip.Resolver
 	xffOnce  sync.Once
+}
+
+// ipLimiter limits client addresses: one bucket per address key (an IPv4
+// address or IPv6 /56) and, for IPv6, one per aggregate key (the /48).
+type ipLimiter struct {
+	addr, agg *ratelimit.Limiter
+}
+
+// take spends a token from the address's bucket and, if it has an aggregate
+// key, from the aggregate's; a request passes only if both have one. A token
+// taken from the address is refunded when the aggregate refuses, so traffic
+// elsewhere in its /48 does not drain an address's own budget. On refusal it
+// returns the longer of the two waits.
+func (l *ipLimiter) take(key, aggregate string) (bool, time.Duration) {
+	ok, wait := l.addr.Take(key)
+	if aggregate == "" {
+		return ok, wait
+	}
+	if !ok {
+		return false, max(wait, l.agg.Wait(aggregate))
+	}
+	if ok, aggWait := l.agg.Take(aggregate); !ok {
+		l.addr.Refund(key)
+		return false, aggWait
+	}
+	return true, 0
 }
 
 func newLimiters(rl RateLimits) *limiters {
@@ -53,19 +88,35 @@ func newLimiters(rl RateLimits) *limiters {
 			Burst: burst, Interval: ratelimit.IntervalForRate(rps), MaxKeys: rl.MaxKeys, Now: rl.Now,
 		})
 	}
+	mkIP := func() *ipLimiter {
+		if rl.IPRPS <= 0 {
+			return nil
+		}
+		return &ipLimiter{
+			addr: mk(rl.IPRPS, rl.IPBurst),
+			agg:  mk(rl.IPRPS*ipv6AggregateFactor, rl.IPBurst*ipv6AggregateFactor),
+		}
+	}
 	return &limiters{
 		device:   mk(rl.DeviceRPS, rl.DeviceBurst),
-		ip:       mk(rl.IPRPS, rl.IPBurst),
-		authFail: mk(rl.IPRPS, rl.IPBurst),
+		ip:       mkIP(),
+		authFail: mkIP(),
 		clients:  clientip.New(rl.TrustedProxies),
 	}
 }
 
-// clientKey returns r's client address key, warning once if a proxy seems to
-// be in front of the server without being listed in trusted_proxies (every
-// client would then share the proxy's limits).
-func (h *handlers) clientKey(r *http.Request) string {
-	key, untrustedXFF := h.limits.clients.Key(r)
+// takeIP spends one of r's client address's requests from l (see
+// ipLimiter.take).
+func (h *handlers) takeIP(l *ipLimiter, r *http.Request) (bool, time.Duration) {
+	key, aggregate := h.clientKeys(r)
+	return l.take(key, aggregate)
+}
+
+// clientKeys returns r's client address key and aggregate key, warning once
+// if a proxy seems to be in front of the server without being listed in
+// trusted_proxies (every client would then share the proxy's limits).
+func (h *handlers) clientKeys(r *http.Request) (key, aggregate string) {
+	key, aggregate, untrustedXFF := h.limits.clients.Keys(r)
 	if untrustedXFF {
 		h.limits.xffOnce.Do(func() {
 			h.log.Warn("ignoring X-Forwarded-For from a peer not in trusted_proxies; "+
@@ -74,7 +125,7 @@ func (h *handlers) clientKey(r *http.Request) string {
 				"peer", r.RemoteAddr)
 		})
 	}
-	return key
+	return key, aggregate
 }
 
 // ipLimited spends one of the client address's unauthenticated requests
@@ -84,7 +135,7 @@ func (h *handlers) ipLimited(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ok, retry := h.limits.ip.Take(h.clientKey(r)); !ok {
+		if ok, retry := h.takeIP(h.limits.ip, r); !ok {
 			writeRateLimited(w, retry)
 			return
 		}

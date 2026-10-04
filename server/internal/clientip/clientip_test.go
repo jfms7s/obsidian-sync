@@ -60,3 +60,22 @@ func TestUnparsableRemoteAddr(t *testing.T) {
 		t.Fatalf("key = %q", key)
 	}
 }
+
+// An IPv6 client also has an aggregate key, its /48; IPv4 and unparsable
+// addresses have none.
+func TestAggregateKey(t *testing.T) {
+	res := clientip.New(nil)
+	for _, tc := range []struct{ remote, key, agg string }{
+		{"[2001:db8:1:2:aaaa::1]:443", "2001:db8:1::/56", "2001:db8:1::/48"},
+		{"[2001:db8:1:ff00::1]:443", "2001:db8:1:ff00::/56", "2001:db8:1::/48"},
+		{"[2001:db8:2::1]:443", "2001:db8:2::/56", "2001:db8:2::/48"},
+		{"203.0.113.5:1", "203.0.113.5", ""},
+		{"[::ffff:203.0.113.5]:1", "203.0.113.5", ""},
+		{"pipe", "pipe", ""},
+	} {
+		key, agg, _ := res.Keys(req(tc.remote))
+		if key != tc.key || agg != tc.agg {
+			t.Fatalf("Keys(%s) = %q, %q; want %q, %q", tc.remote, key, agg, tc.key, tc.agg)
+		}
+	}
+}

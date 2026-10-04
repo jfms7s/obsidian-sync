@@ -1,9 +1,12 @@
 package api_test
 
 import (
+	"bytes"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -150,4 +153,35 @@ func TestKeyBundlesArePerUser(t *testing.T) {
 	if status, apiErr := e.do("PUT", "/v1/keys", bob, validBundle(), nil); status != http.StatusNoContent {
 		t.Fatalf("bob's first upload = %d %v", status, apiErr)
 	}
+}
+
+// serveProto sends m to the handler directly, so the reply's headers can be
+// checked.
+func (e *testEnv) serveProto(method, path, token string, m proto.Message) *httptest.ResponseRecorder {
+	e.t.Helper()
+	body, err := proto.Marshal(m)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	r := httptest.NewRequest(method, path, bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-protobuf")
+	if token != "" {
+		r.Header.Set("Authorization", "Bearer "+token)
+	}
+	w := httptest.NewRecorder()
+	e.handler.ServeHTTP(w, r)
+	return w
+}
+
+// A username locked out by failed guesses gets Retry-After with the wait for
+// its next attempt (one per minute), at login and at PUT /v1/keys.
+func TestLoginLockoutSetsRetryAfter(t *testing.T) {
+	e, token := keysEnv(t)
+	for i := 0; i < 5; i++ {
+		_, _ = e.do("POST", "/v1/auth/login", "", &obsyncv1.LoginRequest{Username: "alice", Password: "guess"}, nil)
+	}
+	wantLimited(t, e.serveProto("POST", "/v1/auth/login", "", &obsyncv1.LoginRequest{Username: "alice", Password: "correct horse"}), "60")
+	e.clk.Advance(29500 * time.Millisecond)
+	wantLimited(t, e.serveProto("PUT", "/v1/keys", token, replacement("correct horse")), "31")
+	e.wantStoredBundle(token, validBundle())
 }

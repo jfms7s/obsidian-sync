@@ -6,12 +6,15 @@ import (
 	"mime"
 	"net/http"
 	"slices"
+	"strconv"
 	"time"
 
 	"google.golang.org/protobuf/proto"
 
 	"github.com/jfms7s/obsidian-sync/server/internal/apperr"
+	"github.com/jfms7s/obsidian-sync/server/internal/auth"
 	obsyncv1 "github.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1"
+	"github.com/jfms7s/obsidian-sync/server/internal/ratelimit"
 )
 
 const protoContentType = "application/x-protobuf"
@@ -167,6 +170,11 @@ func (h *handlers) writeError(w http.ResponseWriter, r *http.Request, err error)
 	status := statusFor(ae.Code)
 	if ae == errUnsupportedMediaType {
 		status = http.StatusUnsupportedMediaType
+	}
+	// A username locked out by failed password checks: say when to retry.
+	var rl *auth.RateLimitedError
+	if errors.As(err, &rl) {
+		w.Header().Set("Retry-After", strconv.Itoa(ratelimit.RetryAfterSeconds(rl.RetryAfter)))
 	}
 	writeProto(w, status, &obsyncv1.Error{Code: ae.Code, Message: ae.Msg})
 }

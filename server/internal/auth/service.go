@@ -124,8 +124,8 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (LoginResult, err
 	key := limiterKey(req.Username)
 	// Every attempt spends a token up front; only a successful login gives
 	// them back. Lookup errors and corrupt hashes therefore count too.
-	if !s.limiter.Take(key) {
-		return LoginResult{}, ErrRateLimited
+	if ok, wait := s.limiter.TakeWait(key); !ok {
+		return LoginResult{}, &RateLimitedError{RetryAfter: wait}
 	}
 	user, err := s.st.UserByUsername(ctx, strings.TrimSpace(req.Username))
 	if errors.Is(err, store.ErrNotFound) {
@@ -175,7 +175,8 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (LoginResult, err
 // per-username attempt budget, verification semaphore and password cap, so
 // guessing here costs the same as guessing at login. It returns nil,
 // ErrPasswordRequired (empty password, no attempt spent), ErrWrongPassword,
-// ErrRateLimited, ErrUnauthorized (the user no longer exists) or an
+// ErrRateLimited (a *RateLimitedError when the username's budget is spent),
+// ErrUnauthorized (the user no longer exists) or an
 // INVALID/internal error.
 func (s *Service) VerifyUserPassword(ctx context.Context, userID, password string) error {
 	if password == "" {
@@ -192,8 +193,8 @@ func (s *Service) VerifyUserPassword(ctx context.Context, userID, password strin
 		return fmt.Errorf("look up user: %w", err)
 	}
 	key := limiterKey(user.Username)
-	if !s.limiter.Take(key) {
-		return ErrRateLimited
+	if ok, wait := s.limiter.TakeWait(key); !ok {
+		return &RateLimitedError{RetryAfter: wait}
 	}
 	ok, err := s.checkPassword(ctx, password, user.PasswordHash)
 	if errors.Is(err, ErrRateLimited) {
@@ -210,7 +211,9 @@ func (s *Service) VerifyUserPassword(ctx context.Context, userID, password strin
 }
 
 func (s *Service) Authenticate(ctx context.Context, token string) (Session, error) {
-	if token == "" {
+	// A token NewToken cannot have produced is unknown without asking the
+	// store, so junk tokens cost no database round trip.
+	if !WellFormedToken(token) {
 		return Session{}, ErrUnauthorized
 	}
 	dev, err := s.st.DeviceByTokenHash(ctx, HashToken(token))

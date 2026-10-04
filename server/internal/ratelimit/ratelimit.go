@@ -114,6 +114,37 @@ func (l *Limiter) Take(key string) (bool, time.Duration) {
 	return true, 0
 }
 
+// Wait reports how long until key has a token, zero if it has one now,
+// without spending one or tracking a new key.
+func (l *Limiter) Wait(key string) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.buckets[key]
+	if !ok {
+		return 0
+	}
+	if tokens := l.refilled(e.Value.(*bucket), l.now()); tokens < 1 {
+		return l.wait(tokens)
+	}
+	return 0
+}
+
+// Refund gives back one token taken from key, never above Burst, for a
+// caller that took it but then refused the request for another reason. An
+// untracked key is left alone.
+func (l *Limiter) Refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.buckets[key]
+	if !ok {
+		return
+	}
+	b := e.Value.(*bucket)
+	now := l.now()
+	b.tokens = math.Min(l.burst, l.refilled(b, now)+1)
+	b.last = now
+}
+
 // Reset forgets key, restoring its full burst.
 func (l *Limiter) Reset(key string) {
 	l.mu.Lock()

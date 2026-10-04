@@ -51,3 +51,17 @@ func (ll *LoginLimiter) Take(key string) bool {
 
 // Reset forgets key, restoring its full burst.
 func (ll *LoginLimiter) Reset(key string) { ll.l.Reset(key) }
+
+// TakeWait is Take that, when no attempt is available, also returns how long
+// until one will be.
+func (ll *LoginLimiter) TakeWait(key string) (bool, time.Duration) {
+	return ll.l.Take(key)
+}
+
+// RateLimitedError is ErrRateLimited for a username whose attempt budget is
+// spent, with the wait until its next attempt. errors.Is(err,
+// ErrRateLimited) holds for it.
+type RateLimitedError struct{ RetryAfter time.Duration }
+
+func (e *RateLimitedError) Error() string { return ErrRateLimited.Error() }
+func (e *RateLimitedError) Unwrap() error { return ErrRateLimited }

@@ -28,14 +28,25 @@ func New(trusted []netip.Prefix) *Resolver {
 // r carried X-Forwarded-For that was ignored because the peer is not trusted,
 // a hint that trusted_proxies may be misconfigured.
 func (res *Resolver) Key(r *http.Request) (key string, untrustedXFF bool) {
+	key, _, untrustedXFF = res.Keys(r)
+	return key, untrustedXFF
+}
+
+// Keys is Key that also returns an aggregate key: for an IPv6 client its /48,
+// which holds 256 /56s, so that one actor holding many /56s can be limited
+// as a whole; for any other address "", meaning none.
+func (res *Resolver) Keys(r *http.Request) (key, aggregate string, untrustedXFF bool) {
 	addr, ok := res.Addr(r)
 	if !ok {
-		return r.RemoteAddr, false
+		return r.RemoteAddr, "", false
 	}
 	if !res.isTrusted(peer(r)) && len(r.Header.Values("X-Forwarded-For")) > 0 {
 		untrustedXFF = true
 	}
-	return keyFor(addr), untrustedXFF
+	if addr.Is6() {
+		aggregate = netip.PrefixFrom(addr, ipv6AggregateBits).Masked().String()
+	}
+	return keyFor(addr), aggregate, untrustedXFF
 }
 
 // Addr returns r's client address. If the peer is a trusted proxy, it is the
@@ -104,8 +115,13 @@ func parseHop(s string) (netip.Addr, bool) {
 
 func normalize(a netip.Addr) netip.Addr { return a.Unmap().WithZone("") }
 
-// ipv6KeyBits is the IPv6 prefix length that counts as one client.
-const ipv6KeyBits = 56
+// ipv6KeyBits is the IPv6 prefix length that counts as one client;
+// ipv6AggregateBits is the coarser prefix whose clients are also limited
+// together.
+const (
+	ipv6KeyBits       = 56
+	ipv6AggregateBits = 48
+)
 
 func keyFor(a netip.Addr) string {
 	if a.Is6() {

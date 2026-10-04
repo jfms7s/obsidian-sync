@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jfms7s/obsidian-sync/server/internal/apperr"
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
@@ -111,4 +112,31 @@ func TestVerifyUserPasswordMalformedHashIsInternal(t *testing.T) {
 	if err == nil || errors.Is(err, auth.ErrWrongPassword) || apperr.CodeOf(err) != apperr.Internal {
 		t.Fatalf("err = %v", err)
 	}
+}
+
+// A locked-out username's refusal says when the next attempt is allowed, on
+// both paths that spend from the login budget.
+func TestRateLimitedCarriesRetryAfter(t *testing.T) {
+	svc, st, clk := newService(t)
+	id := aliceID(t, st)
+	for i := 0; i < 5; i++ {
+		_, _ = svc.Login(ctx, auth.LoginRequest{Username: "alice", Password: "guess"})
+	}
+	wantWait := func(err error, want time.Duration) {
+		t.Helper()
+		if !errors.Is(err, auth.ErrRateLimited) {
+			t.Fatalf("err = %v, want rate limited", err)
+		}
+		var rl *auth.RateLimitedError
+		if !errors.As(err, &rl) || rl.RetryAfter != want {
+			t.Fatalf("err = %#v, want RetryAfter %v", err, want)
+		}
+		if apperr.CodeOf(err) != apperr.RateLimited {
+			t.Fatalf("code = %v", apperr.CodeOf(err))
+		}
+	}
+	_, err := svc.Login(ctx, auth.LoginRequest{Username: "alice", Password: "correct horse"})
+	wantWait(err, time.Minute)
+	clk.Advance(20 * time.Second)
+	wantWait(svc.VerifyUserPassword(ctx, id, "correct horse"), 40*time.Second)
 }

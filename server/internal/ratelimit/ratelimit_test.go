@@ -152,3 +152,59 @@ func TestReset(t *testing.T) {
 		t.Fatal("reset did not restore burst")
 	}
 }
+
+func TestWaitDoesNotSpend(t *testing.T) {
+	clk := storetest.NewClock()
+	l := newLimiter(clk, 1, 4*time.Second, 0)
+	if w := l.Wait("a"); w != 0 {
+		t.Fatalf("unknown key waits %v", w)
+	}
+	if l.Contains("a") {
+		t.Fatal("Wait created a bucket")
+	}
+	l.Take("a")
+	clk.Advance(time.Second)
+	for i := 0; i < 3; i++ {
+		if w := l.Wait("a"); w != 3*time.Second {
+			t.Fatalf("Wait = %v, want 3s", w)
+		}
+	}
+	clk.Advance(3 * time.Second)
+	if w := l.Wait("a"); w != 0 {
+		t.Fatalf("refilled bucket waits %v", w)
+	}
+	if ok, _ := l.Take("a"); !ok {
+		t.Fatal("Wait spent a token")
+	}
+}
+
+func TestRefund(t *testing.T) {
+	clk := storetest.NewClock()
+	l := newLimiter(clk, 2, time.Minute, 0)
+	l.Take("a")
+	l.Take("a")
+	l.Refund("a")
+	if ok, _ := l.Take("a"); !ok {
+		t.Fatal("refunded token not available")
+	}
+	if ok, _ := l.Take("a"); ok {
+		t.Fatal("refund gave back more than one token")
+	}
+	// A refund never lifts a bucket above its burst.
+	l.Refund("b")
+	l.Refund("b")
+	if l.Contains("b") {
+		t.Fatal("refund created a bucket")
+	}
+	l.Take("c")
+	l.Refund("c")
+	l.Refund("c")
+	for i := 0; i < 2; i++ {
+		if ok, _ := l.Take("c"); !ok {
+			t.Fatalf("take %d refused", i)
+		}
+	}
+	if ok, _ := l.Take("c"); ok {
+		t.Fatal("refunds exceeded the burst")
+	}
+}
