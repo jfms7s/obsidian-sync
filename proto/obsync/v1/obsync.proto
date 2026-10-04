@@ -1,0 +1,224 @@
+syntax = "proto3";
+
+package obsync.v1;
+
+option go_package = "github.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1;obsyncv1";
+
+// ---------- Errors ----------
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_CONFLICT = 1;
+  ERROR_CODE_QUOTA_EXCEEDED = 2;
+  ERROR_CODE_UNAUTHORIZED = 3;
+  ERROR_CODE_DEVICE_REVOKED = 4;
+  ERROR_CODE_STALE_EPOCH = 5;
+  ERROR_CODE_RATE_LIMITED = 6;
+  ERROR_CODE_TOO_LARGE = 7;
+  ERROR_CODE_NOT_FOUND = 8;
+  ERROR_CODE_INTERNAL = 9;
+  ERROR_CODE_INVALID = 10;
+  ERROR_CODE_MISSING_CHUNK = 11;
+}
+
+message Error {
+  ErrorCode code = 1;
+  string message = 2;
+}
+
+// ---------- Accounts and devices ----------
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+  string device_name = 3;
+  string platform = 4;
+}
+
+message LoginResponse {
+  string token = 1;
+  string device_id = 2;
+  string user_id = 3;
+}
+
+message Device {
+  string device_id = 1;
+  string name = 2;
+  string platform = 3;
+  int64 created_at_ms = 4;
+  int64 last_seen_at_ms = 5;
+  bool current = 6;
+  bool revoked = 7;
+}
+
+message ListDevicesResponse {
+  repeated Device devices = 1;
+}
+
+// ---------- User key material (opaque to the server) ----------
+
+message Argon2Params {
+  uint32 memory_kib = 1;
+  uint32 iterations = 2;
+  uint32 parallelism = 3;
+}
+
+message KeyBundle {
+  bytes public_enc_key = 1;   // X25519, 32 bytes
+  bytes public_sign_key = 2;  // Ed25519, 32 bytes
+  bytes pass_salt = 3;
+  Argon2Params pass_params = 4;
+  bytes pass_wrapped = 5;     // private keys sealed under the passphrase KEK
+  bytes recovery_wrapped = 6; // private keys sealed under the recovery KEK
+}
+
+// ---------- Vaults ----------
+
+// epoch 0 is the vault's naming key; epochs >= 1 are content epoch keys.
+message VaultKey {
+  uint32 epoch = 1;
+  bytes sealed_key = 2;
+}
+
+message Vault {
+  string vault_id = 1;
+  bytes enc_name = 2;
+  uint32 current_epoch = 3;
+  uint64 seq = 4;
+  int64 created_at_ms = 5;
+  string owner_id = 6;
+}
+
+message CreateVaultRequest {
+  string vault_id = 1;
+  bytes enc_name = 2;
+  repeated VaultKey keys = 3;
+}
+
+message ListVaultsResponse {
+  repeated Vault vaults = 1;
+}
+
+message VaultKeysResponse {
+  repeated VaultKey keys = 1;
+}
+
+// ---------- Sync ----------
+
+message Commit {
+  bytes file_id = 1;
+  bytes version_id = 2;
+  bytes base_version_id = 3; // empty = the client believes the file is new
+  uint32 epoch = 4;
+  bytes enc_meta = 5;
+  repeated bytes chunk_ids = 6;
+  uint64 size = 7;
+  bool deleted = 8;
+}
+
+message CommitRequest {
+  repeated Commit commits = 1;
+}
+
+message CommitResult {
+  bytes file_id = 1;
+  bool ok = 2;
+  uint64 seq = 3;
+  Error error = 4;
+  bytes head_version_id = 5; // the current head when error is CONFLICT
+}
+
+message CommitResponse {
+  repeated CommitResult results = 1;
+  uint64 vault_seq = 2;
+}
+
+message Version {
+  bytes file_id = 1;
+  bytes version_id = 2;
+  bytes base_version_id = 3;
+  uint32 epoch = 4;
+  bytes enc_meta = 5;
+  repeated bytes chunk_ids = 6;
+  uint64 size = 7;
+  bool deleted = 8;
+  string device_id = 9;
+  int64 created_at_ms = 10;
+  uint64 seq = 11;
+}
+
+message ChangesResponse {
+  repeated Version versions = 1;
+  uint64 vault_seq = 2;
+  bool more = 3;
+}
+
+message Head {
+  bytes file_id = 1;
+  bytes version_id = 2;
+  uint64 seq = 3;
+  bool deleted = 4;
+}
+
+message HeadsResponse {
+  repeated Head heads = 1;
+  bool more = 2;
+}
+
+// History of one file, or the vault's trash (tombstone heads), newest first.
+message VersionsResponse {
+  repeated Version versions = 1;
+}
+
+message ChunkExistsRequest {
+  repeated bytes chunk_ids = 1;
+}
+
+message ChunkExistsResponse {
+  repeated bool exists = 1;
+}
+
+// ---------- WebSocket frames ----------
+// Each frame type is a oneof case; v2 live sessions add new cases.
+
+message Auth {
+  string token = 1;
+}
+
+message Subscribe {
+  repeated string vault_ids = 1;
+}
+
+message Ping {
+  uint64 nonce = 1;
+}
+
+message ClientFrame {
+  oneof frame {
+    Auth auth = 1;
+    Subscribe subscribe = 2;
+    Ping ping = 3;
+  }
+}
+
+message AuthOk {
+  string device_id = 1;
+}
+
+message Notify {
+  string vault_id = 1;
+  uint64 seq = 2;
+}
+
+message Pong {
+  uint64 nonce = 1;
+}
+
+message ServerFrame {
+  oneof frame {
+    AuthOk auth_ok = 1;
+    Notify notify = 2;
+    Pong pong = 3;
+    Error error = 4;
+  }
+}
