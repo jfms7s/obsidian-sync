@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -68,7 +69,9 @@ func userCreate(ctx context.Context, args []string, d Deps) error {
 	fs := flag.NewFlagSet("user create", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	username := fs.String("username", "", "")
-	quota := fs.Int64("quota-bytes", d.DefaultQuotaBytes, "")
+	// A string, not fs.Int64: that accepts 0x and leading-zero octal, so
+	// "010" would silently mean 8 bytes.
+	quotaArg := fs.String("quota-bytes", "", "")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
@@ -76,14 +79,20 @@ func userCreate(ctx context.Context, args []string, d Deps) error {
 	if err != nil {
 		return err
 	}
-	if *quota <= 0 {
+	quota := d.DefaultQuotaBytes
+	if *quotaArg != "" {
+		if quota, err = strconv.ParseInt(*quotaArg, 10, 64); err != nil {
+			return errors.New("--quota-bytes must be a decimal number of bytes")
+		}
+	}
+	if quota <= 0 {
 		return errors.New("--quota-bytes must be positive")
 	}
 	hash, err := readAndHash(d)
 	if err != nil {
 		return err
 	}
-	err = d.Store.CreateUser(ctx, store.User{ID: ids.New(), Username: name, PasswordHash: hash, QuotaBytes: *quota})
+	err = d.Store.CreateUser(ctx, store.User{ID: ids.New(), Username: name, PasswordHash: hash, QuotaBytes: quota})
 	if errors.Is(err, store.ErrExists) {
 		return fmt.Errorf("user %q already exists", name)
 	}

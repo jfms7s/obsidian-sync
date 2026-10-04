@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -28,12 +29,23 @@ const (
 	commitBodyLimit int64 = 8 << 20
 )
 
+// Body read deadlines bound how long a client may take to send a request
+// body, so a slow or stalled sender cannot hold a connection and a handler
+// goroutine indefinitely. Variables so tests can shorten them.
+var (
+	// protoBodyTimeout bounds every protobuf request body (readProto).
+	protoBodyTimeout = 30 * time.Second
+	// chunkBodyTimeout bounds a chunk upload (up to 4 MiB) on a slow link.
+	chunkBodyTimeout = 5 * time.Minute
+)
+
 // unmarshalOpts drops unknown fields so a client cannot smuggle extra bytes
 // past field-level size checks into anything the server re-marshals.
 var unmarshalOpts = proto.UnmarshalOptions{DiscardUnknown: true}
 
 // readProto decodes a request body of at most limit bytes into m.
 func readProto(w http.ResponseWriter, r *http.Request, m proto.Message, limit int64) error {
+	lift := setBodyDeadline(w, protoBodyTimeout)
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
 		var tooBig *http.MaxBytesError
@@ -42,10 +54,27 @@ func readProto(w http.ResponseWriter, r *http.Request, m proto.Message, limit in
 		}
 		return apperr.New(apperr.Invalid, "could not read the request body")
 	}
+	lift()
 	if err := unmarshalOpts.Unmarshal(body, m); err != nil {
 		return apperr.New(apperr.Invalid, "request body is not a valid %s", m.ProtoReflect().Descriptor().Name())
 	}
 	return nil
+}
+
+// setBodyDeadline limits how long reading the request body may take. Call
+// the returned lift once the whole body has been read: net/http keeps reading
+// the connection in the background while the handler runs, and a deadline
+// expiring there would cancel the request's context. After a failed read,
+// leave the deadline in place: net/http then cannot wait for the rest of a
+// stalled body after the handler returns, and closes the connection instead.
+// Writers that cannot set deadlines (http.ErrNotSupported, e.g. some test
+// recorders) are left unbounded.
+func setBodyDeadline(w http.ResponseWriter, d time.Duration) (lift func()) {
+	rc := http.NewResponseController(w)
+	if err := rc.SetReadDeadline(time.Now().Add(d)); err != nil {
+		return func() {}
+	}
+	return func() { _ = rc.SetReadDeadline(time.Time{}) }
 }
 
 // writeProto sends m with status. Responses carry user data, so they must not

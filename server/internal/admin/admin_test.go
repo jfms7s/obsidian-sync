@@ -128,3 +128,22 @@ func TestOverlongPasswordRejected(t *testing.T) {
 		t.Fatal("password changed despite the error")
 	}
 }
+
+// --quota-bytes is decimal only: flag.Int64 would read "010" as octal 8.
+func TestQuotaBytesIsDecimal(t *testing.T) {
+	st, _ := storetest.New(t)
+	blobs, _ := blob.NewFS(t.TempDir())
+	d, _ := deps(t, st, blobs, "correct horse\n")
+	if err := admin.Run(ctx, []string{"user", "create", "--username", "dave", "--quota-bytes", "010"}, d); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := st.UserByUsername(ctx, "dave"); u.QuotaBytes != 10 {
+		t.Fatalf("quota = %d, want 10", u.QuotaBytes)
+	}
+	for _, q := range []string{"0x10", "1e9", "-5", "0", "abc"} {
+		d, _ := deps(t, st, blobs, "correct horse\n")
+		if err := admin.Run(ctx, []string{"user", "create", "--username", "erin", "--quota-bytes", q}, d); err == nil {
+			t.Errorf("--quota-bytes %s accepted", q)
+		}
+	}
+}

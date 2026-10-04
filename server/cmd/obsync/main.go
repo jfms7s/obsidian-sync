@@ -21,16 +21,17 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
 	"github.com/jfms7s/obsidian-sync/server/internal/blob"
 	"github.com/jfms7s/obsidian-sync/server/internal/config"
-	"github.com/jfms7s/obsidian-sync/server/internal/store"
 )
 
-const usage = `usage: obsync <command> [--config PATH] [args]
+const usage = `usage: obsync [--config PATH] <command> [args]
 
 commands:
   serve     run the sync server
   migrate   apply database migrations and exit
   admin     manage users: obsync admin user create|list|delete|set-password
 
+Global flags such as --config go before the command (they are also accepted
+right after it, before the command's own arguments).
 --config defaults to $OBSYNC_CONFIG; OBSYNC_* environment variables override the file.`
 
 func main() {
@@ -41,14 +42,28 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		return errors.New(usage)
-	}
-	cmd := args[0]
-	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
+	fs := flag.NewFlagSet("obsync", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	configPath := fs.String("config", os.Getenv("OBSYNC_CONFIG"), "")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
+		return errors.New(usage)
+	}
+	if fs.NArg() == 0 {
+		return errors.New(usage)
+	}
+	cmd := fs.Arg(0)
+	// Global flags may also follow the command, before its own arguments.
+	if err := fs.Parse(fs.Args()[1:]); err != nil {
+		return errors.New(usage)
+	}
+	rest := fs.Args()
+	switch cmd {
+	case "serve", "migrate":
+		if len(rest) > 0 {
+			return fmt.Errorf("%s: unexpected argument %q\n%s", cmd, rest[0], usage)
+		}
+	case "admin":
+	default:
 		return errors.New(usage)
 	}
 	cfg, err := config.Load(*configPath, os.Getenv)
@@ -62,10 +77,9 @@ func run(ctx context.Context, args []string) error {
 		return serve(ctx, cfg, log)
 	case "migrate":
 		return migrate(ctx, cfg)
-	case "admin":
-		return adminCmd(ctx, cfg, fs.Args())
+	default:
+		return adminCmd(ctx, cfg, rest)
 	}
-	return errors.New(usage)
 }
 
 func newLogger(level string) *slog.Logger {
@@ -77,6 +91,9 @@ func newLogger(level string) *slog.Logger {
 func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Once the first signal starts a graceful shutdown, restore default
+	// handling so a second Ctrl-C kills the process immediately.
+	go func() { <-ctx.Done(); stop() }()
 	a, err := app.Build(ctx, cfg, log, app.Options{})
 	if err != nil {
 		return err
@@ -92,27 +109,21 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 }
 
 func migrate(ctx context.Context, cfg config.Config) error {
-	st, err := store.Open(ctx, store.Options{URL: cfg.DatabaseURL, AuthToken: cfg.DatabaseAuthToken})
+	st, err := app.OpenStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-	if err := st.Migrate(ctx); err != nil {
-		return err
-	}
 	fmt.Println("migrations applied")
 	return nil
 }
 
 func adminCmd(ctx context.Context, cfg config.Config, args []string) error {
-	st, err := store.Open(ctx, store.Options{URL: cfg.DatabaseURL, AuthToken: cfg.DatabaseAuthToken})
+	st, err := app.OpenStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-	if err := st.Migrate(ctx); err != nil {
-		return err
-	}
 	blobs, err := blob.NewFS(cfg.BlobFSDir)
 	if err != nil {
 		return err

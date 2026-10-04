@@ -8,6 +8,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jfms7s/obsidian-sync/server/internal/api"
@@ -21,7 +24,16 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/syncsvc"
 )
 
-const shutdownTimeout = 30 * time.Second
+// shutdownTimeout fits inside the 10s grace period `docker stop` gives
+// before it sends SIGKILL.
+const shutdownTimeout = 10 * time.Second
+
+// HTTP server timeouts. Request bodies get their own read deadlines in
+// package api; WebSocket connections are hijacked and manage their own.
+const (
+	readHeaderTimeout = 10 * time.Second
+	idleTimeout       = 120 * time.Second
+)
 
 type Options struct {
 	PasswordParams auth.Params // zero = auth.DefaultParams
@@ -33,6 +45,8 @@ type App struct {
 	Handler http.Handler
 	Hub     *hub.Hub
 	Jobs    *jobs.Runner
+
+	log *slog.Logger
 }
 
 // Build opens and migrates the database and assembles the single-node server.
@@ -40,13 +54,9 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts Option
 	if opts.PasswordParams == (auth.Params{}) {
 		opts.PasswordParams = auth.DefaultParams
 	}
-	st, err := store.Open(ctx, store.Options{URL: cfg.DatabaseURL, AuthToken: cfg.DatabaseAuthToken})
+	st, err := OpenStore(ctx, cfg)
 	if err != nil {
 		return nil, err
-	}
-	if err := st.Migrate(ctx); err != nil {
-		st.Close()
-		return nil, fmt.Errorf("migrate database: %w", err)
 	}
 	blobs, err := blob.NewFS(cfg.BlobFSDir)
 	if err != nil {
@@ -74,20 +84,64 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts Option
 		Retention: cfg.Retention,
 		GCGrace:   cfg.GCGrace(),
 	}, time.Now, log)
-	return &App{Store: st, Blobs: blobs, Handler: handler, Hub: h, Jobs: runner}, nil
+	return &App{Store: st, Blobs: blobs, Handler: handler, Hub: h, Jobs: runner, log: log}, nil
+}
+
+// EnsureDatabaseDir creates the directory of a local (file:) database, mode
+// 0700, so a fresh data dir works without manual setup. Remote URLs are left
+// alone.
+func EnsureDatabaseDir(databaseURL string) error {
+	path, ok := strings.CutPrefix(databaseURL, "file:")
+	if !ok {
+		return nil
+	}
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
+	if rest, ok := strings.CutPrefix(path, "//"); ok {
+		path = rest // file:///abs/path → /abs/path
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create data dir %s: %w", dir, err)
+	}
+	return nil
+}
+
+// OpenStore creates a local database's directory if needed, then opens and
+// migrates the database. Every command that touches the database uses it.
+func OpenStore(ctx context.Context, cfg config.Config) (*store.Store, error) {
+	if err := EnsureDatabaseDir(cfg.DatabaseURL); err != nil {
+		return nil, err
+	}
+	st, err := store.Open(ctx, store.Options{URL: cfg.DatabaseURL, AuthToken: cfg.DatabaseAuthToken})
+	if err != nil {
+		return nil, err
+	}
+	if err := st.Migrate(ctx); err != nil {
+		st.Close()
+		return nil, fmt.Errorf("migrate database: %w", err)
+	}
+	return st, nil
 }
 
 func (a *App) Close() error { return a.Store.Close() }
 
 // Serve runs HTTP on ln and the maintenance jobs until ctx ends, then shuts
-// down gracefully.
+// down gracefully. If the listener fails first, Serve still shuts down the
+// same way before returning that error.
 func (a *App) Serve(ctx context.Context, ln net.Listener) error {
 	baseCtx, cancelBase := context.WithCancel(context.Background())
 	defer cancelBase()
 	srv := &http.Server{
 		Handler:           a.Handler,
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idleTimeout,
 		BaseContext:       func(net.Listener) context.Context { return baseCtx },
+		ErrorLog:          slog.NewLogLogger(a.log.Handler(), slog.LevelWarn),
 	}
 	// Shutdown does not wait for hijacked WebSocket connections; cancelling
 	// their request context makes the hub close them.
@@ -102,9 +156,12 @@ func (a *App) Serve(ctx context.Context, ln net.Listener) error {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
+	var serveErr error
 	select {
 	case err := <-errCh:
-		return err
+		if !errors.Is(err, http.ErrServerClosed) {
+			serveErr = fmt.Errorf("serve: %w", err)
+		}
 	case <-ctx.Done():
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -120,7 +177,7 @@ func (a *App) Serve(ctx context.Context, ln net.Listener) error {
 		err = errors.Join(err, errors.New("websockets still open"))
 	}
 	if err != nil {
-		return fmt.Errorf("shutdown: %w", err)
+		err = fmt.Errorf("shutdown: %w", err)
 	}
-	return nil
+	return errors.Join(serveErr, err)
 }

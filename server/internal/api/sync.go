@@ -66,11 +66,15 @@ func (h *handlers) putChunk(w http.ResponseWriter, r *http.Request, sess auth.Se
 		h.writeError(w, r, apperr.New(apperr.Invalid, "Content-Length is required"))
 		return
 	}
+	lift := setBodyDeadline(w, chunkBodyTimeout)
 	body := http.MaxBytesReader(w, r.Body, syncsvc.MaxChunkCipherBytes+1)
 	if err := h.sync.PutChunk(r.Context(), sess.UserID, r.PathValue("vault"), id, body, r.ContentLength); err != nil {
+		// Keep the deadline: an unread or stalled body must not hold the
+		// connection open after the error response.
 		h.writeError(w, r, err)
 		return
 	}
+	lift()
 	w.WriteHeader(http.StatusNoContent)
 }
 

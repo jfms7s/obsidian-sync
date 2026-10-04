@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -182,4 +184,85 @@ func wsRecv(t *testing.T, c *websocket.Conn) *obsyncv1.ServerFrame {
 		t.Fatal(err)
 	}
 	return &f
+}
+
+func buildApp(t *testing.T, dataDir string) *app.App {
+	t.Helper()
+	cfg, err := config.Load("", func(k string) string {
+		if k == "OBSYNC_DATA_DIR" {
+			return dataDir
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := app.Build(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), app.Options{PasswordParams: auth.FastParams})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.Close() })
+	return a
+}
+
+func TestBuildCreatesMissingDataDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "fresh", "data")
+	buildApp(t, dir)
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("data dir mode = %o, want 700", perm)
+	}
+}
+
+func TestEnsureDatabaseDir(t *testing.T) {
+	base := t.TempDir()
+	for _, tc := range []struct{ url, dir string }{
+		{"file:" + filepath.Join(base, "a", "meta.db"), filepath.Join(base, "a")},
+		{"file://" + filepath.Join(base, "b", "meta.db"), filepath.Join(base, "b")},
+		{"file:" + filepath.Join(base, "c", "meta.db") + "?mode=rwc", filepath.Join(base, "c")},
+	} {
+		if err := app.EnsureDatabaseDir(tc.url); err != nil {
+			t.Fatalf("%s: %v", tc.url, err)
+		}
+		if _, err := os.Stat(tc.dir); err != nil {
+			t.Fatalf("%s: %v", tc.url, err)
+		}
+	}
+	// Remote databases have no local directory.
+	if err := app.EnsureDatabaseDir("libsql://db.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	// A file where the directory should be is reported with its path.
+	blocker := filepath.Join(base, "blocker")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := app.EnsureDatabaseDir("file:" + filepath.Join(blocker, "sub", "meta.db"))
+	if err == nil || !strings.Contains(err.Error(), "create data dir "+filepath.Join(blocker, "sub")) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// If the listener fails, Serve still stops the jobs and returns the error
+// instead of hanging or leaking goroutines that use the store.
+func TestServeReturnsListenerError(t *testing.T) {
+	a := buildApp(t, t.TempDir())
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close()
+	done := make(chan error, 1)
+	go func() { done <- a.Serve(context.Background(), ln) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Serve returned nil for a closed listener")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return")
+	}
 }
