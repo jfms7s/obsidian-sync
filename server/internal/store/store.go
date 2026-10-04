@@ -5,9 +5,7 @@ package store
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
@@ -26,24 +24,13 @@ type Options struct {
 }
 
 func Open(ctx context.Context, opts Options) (*Store, error) {
-	dsn := opts.URL
 	local := strings.HasPrefix(opts.URL, "file:")
-	if !local && opts.AuthToken != "" {
-		u, err := url.Parse(opts.URL)
-		if err != nil {
-			// url.Parse's error quotes the whole URL, credentials included.
-			return nil, errors.New("parse database url: invalid URL")
-		}
-		q := u.Query()
-		q.Set("authToken", opts.AuthToken)
-		u.RawQuery = q.Encode()
-		dsn = u.String()
-	}
-	db, err := sql.Open("libsql", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
-	}
+	var db *sql.DB
 	if local {
+		var err error
+		if db, err = sql.Open("libsql", opts.URL); err != nil {
+			return nil, fmt.Errorf("open database: %w", err)
+		}
 		// A local libSQL file has a single writer. One pooled connection
 		// serialises all access instead of failing with SQLITE_BUSY, so code
 		// must never use s.db while it holds a transaction or open rows.
@@ -53,6 +40,15 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 		db.SetMaxIdleConns(1)
 		db.SetConnMaxLifetime(0)
 		db.SetConnMaxIdleTime(0)
+		// Set busy_timeout before anything else touches the file: another
+		// process (obsync admin, obsync migrate) may write it while the
+		// server runs, and a store closed a moment ago in this process may
+		// still hold it (see Close). Wait for either instead of failing.
+		var timeout int
+		if err := db.QueryRowContext(ctx, "PRAGMA busy_timeout=5000").Scan(&timeout); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("set busy_timeout: %w", err)
+		}
 		var mode string
 		if err := db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&mode); err != nil {
 			db.Close()
@@ -62,14 +58,14 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 			db.Close()
 			return nil, fmt.Errorf("enable WAL: journal mode is %q", mode)
 		}
-		// Another process (obsync admin, obsync migrate) may write the same
-		// file while the server runs; wait for its lock instead of failing.
-		var timeout int
-		if err := db.QueryRowContext(ctx, "PRAGMA busy_timeout=5000").Scan(&timeout); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("set busy_timeout: %w", err)
+	} else {
+		var err error
+		if db, err = openRemote(opts.URL, opts.AuthToken); err != nil {
+			return nil, err
 		}
 	}
+	// For a remote database this does not reach the server: go-libsql
+	// connects lazily, so a wrong URL or token surfaces on the first query.
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("ping database: %w", err)
@@ -81,6 +77,12 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 	return &Store{db: db, now: now}, nil
 }
 
+// Close closes the pool and the native database. go-libsql releases the
+// native handle asynchronously: for a few milliseconds after Close returns,
+// its file descriptors stay open and SQLite's close-time WAL checkpoint holds
+// the file's lock. Reopening the same file in that window used to fail with
+// "database is locked" on the first PRAGMA; Open now sets busy_timeout first,
+// so a reopen waits for the old handle instead.
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }

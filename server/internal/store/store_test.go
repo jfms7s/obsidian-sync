@@ -3,8 +3,14 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -66,5 +72,86 @@ func TestOpenParseErrorDoesNotLeakURL(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "hunter2") || err.Error() != "parse database url: invalid URL" {
 		t.Fatalf("err = %q", err)
+	}
+}
+
+// The remote auth token must not appear in any error the store returns, even
+// when the server echoes it back in an error body.
+func TestRemoteErrorsDoNotLeakAuthToken(t *testing.T) {
+	const token = "tok-Sup3rSecret+/=value"
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+		// A misbehaving proxy reflecting the request: header and query.
+		fmt.Fprintf(w, "garbage auth=%q query=%q", r.Header.Get("Authorization"), r.URL.RawQuery)
+	}))
+	defer srv.Close()
+	check := func(what string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s succeeded against a failing server", what)
+		}
+		msg := err.Error()
+		if strings.Contains(msg, token) || strings.Contains(msg, url.QueryEscape(token)) {
+			t.Fatalf("%s error leaks the token: %q", what, msg)
+		}
+		if !strings.Contains(msg, "REDACTED") {
+			t.Fatalf("%s error = %q; want the echoed token redacted", what, msg)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// Opening does not reach the server; the first statement does.
+	st, err := store.Open(ctx, store.Options{URL: srv.URL, AuthToken: token})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+	if err := st.Ping(ctx); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("open and ping sent %d requests", n)
+	}
+	check("migrate", st.Migrate(ctx))
+	_, err = st.UserByUsername(ctx, "alice")
+	check("query row", err)
+	_, err = st.ListUsers(ctx)
+	check("query", err)
+	check("transaction", st.CreateUser(ctx, store.User{ID: ids.New(), Username: "alice", PasswordHash: "x", QuotaBytes: 1}))
+	if hits.Load() == 0 {
+		t.Fatal("no request reached the server")
+	}
+
+	// A token passed in the URL itself is redacted too.
+	st2, err := store.Open(ctx, store.Options{URL: srv.URL + "?authToken=" + url.QueryEscape(token)})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st2.Close()
+	check("migrate (token in URL)", st2.Migrate(ctx))
+}
+
+// An unreachable server fails on the first statement, without the token.
+func TestRemoteUnreachableDoesNotLeakAuthToken(t *testing.T) {
+	const token = "tok-unreachable-secret"
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close() // nothing listens there now
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	st, err := store.Open(ctx, store.Options{URL: "http://" + addr, AuthToken: token})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+	err = st.Migrate(ctx)
+	if err == nil || strings.Contains(err.Error(), token) {
+		t.Fatalf("migrate err = %v", err)
 	}
 }
