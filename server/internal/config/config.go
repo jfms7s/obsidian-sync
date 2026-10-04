@@ -21,10 +21,20 @@ const (
 	maxHours = 8760  // 1 year
 )
 
+// Retention bounds history and trash. A version that is not its file's head
+// is deleted as soon as either history limit is exceeded. Heads are never
+// pruned, and a deleted file's last content version stays restorable until
+// its trash period ends.
 type Retention struct {
-	HistoryDays        int `yaml:"history_days"`
-	HistoryMaxVersions int `yaml:"history_max_versions"` // 0 = no count limit
-	TrashDays          int `yaml:"trash_days"`
+	// HistoryDays keeps a replaced version this many days after the edit or
+	// deletion that replaced it. 0 = no age limit.
+	HistoryDays int `yaml:"history_days"`
+	// HistoryMaxVersions keeps at most this many versions per file,
+	// including the head but not a deletion tombstone. 0 = no count limit.
+	// With both limits 0, history is never pruned.
+	HistoryMaxVersions int `yaml:"history_max_versions"`
+	// TrashDays is how long a deleted file stays restorable. At least 1.
+	TrashDays int `yaml:"trash_days"`
 }
 
 type Config struct {
@@ -183,8 +193,11 @@ func (c Config) Validate() error {
 	if c.MaxFileSizeBytes <= 0 {
 		add("max_file_size_bytes must be positive")
 	}
-	if c.Retention.HistoryDays < 0 || c.Retention.HistoryMaxVersions < 0 || c.Retention.TrashDays < 0 {
-		add("retention values must not be negative")
+	if c.Retention.HistoryDays < 0 || c.Retention.HistoryMaxVersions < 0 {
+		add("retention history values must not be negative")
+	}
+	if c.Retention.TrashDays < 1 {
+		add("retention trash_days must be at least 1")
 	}
 	// Upper bounds keep the day/hour/minute counts far below the point where
 	// converting them to a time.Duration overflows (about 106,751 days). An

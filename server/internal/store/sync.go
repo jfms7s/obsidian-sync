@@ -262,12 +262,16 @@ func (s *Store) History(ctx context.Context, vaultID string, fileID []byte) ([]V
 		vaultID, fileID)
 }
 
-// Trash returns the tombstone heads of deleted files, newest first.
+// Trash returns the tombstone heads of deleted files that can still be
+// restored, newest first. A file whose trash period ended keeps its
+// tombstone head but has no content version left, so it is not listed.
 func (s *Store) Trash(ctx context.Context, vaultID string) ([]Version, error) {
 	return s.queryVersions(ctx, vaultID,
 		`SELECT ver.* FROM versions ver
 		 JOIN files f ON f.vault_id = ver.vault_id AND f.file_id = ver.file_id AND f.head_version_id = ver.version_id
-		 WHERE ver.vault_id = ? AND ver.deleted = 1`, "v.seq DESC",
+		 WHERE ver.vault_id = ? AND ver.deleted = 1
+		   AND EXISTS (SELECT 1 FROM versions p
+		               WHERE p.vault_id = ver.vault_id AND p.file_id = ver.file_id AND p.deleted = 0)`, "v.seq DESC",
 		vaultID)
 }
 

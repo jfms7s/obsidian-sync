@@ -37,6 +37,13 @@ func (s *Store) InsertChunk(ctx context.Context, c Chunk) (bool, error) {
 			return fmt.Errorf("insert chunk: %w", err)
 		}
 		if n == 0 {
+			// Already recorded: restart its garbage-collection grace period
+			// so it survives until the client commits, as TouchChunks does.
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE chunks SET touched_at = ? WHERE vault_id = ? AND chunk_id = ?`,
+				s.nowMs(), c.VaultID, c.ChunkID); err != nil {
+				return fmt.Errorf("touch chunk: %w", err)
+			}
 			return nil
 		}
 		var ownerID string

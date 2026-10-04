@@ -126,3 +126,23 @@ func TestInsertChunkUnknownVault(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
+
+// Re-uploading a chunk that already exists restarts its garbage-collection
+// grace period, just like an existence check does.
+func TestInsertExistingChunkRefreshesTouchedAt(t *testing.T) {
+	st, clk := storetest.New(t)
+	u := storetest.SeedUser(t, st, "alice")
+	v := storetest.SeedVault(t, st, u.ID)
+	c := store.Chunk{VaultID: v.ID, ChunkID: storetest.ChunkID(1), BlobKey: "k1", Size: 100}
+	if _, err := st.InsertChunk(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(time.Hour)
+	c.BlobKey = "k2"
+	if inserted, err := st.InsertChunk(ctx, c); err != nil || inserted {
+		t.Fatalf("inserted=%v err=%v", inserted, err)
+	}
+	if dead, _ := st.DeadChunks(ctx, clk.Now().UnixMilli(), 10); len(dead) != 0 {
+		t.Fatalf("re-uploaded chunk reported dead: %+v", dead)
+	}
+}

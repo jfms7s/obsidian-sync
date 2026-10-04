@@ -127,3 +127,17 @@ func TestValidateRejectsOverflowingDurations(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateRetentionZeroes(t *testing.T) {
+	cfg, err := config.Load("", env(map[string]string{"OBSYNC_HISTORY_DAYS": "0", "OBSYNC_HISTORY_MAX_VERSIONS": "0"}))
+	if err != nil {
+		t.Fatalf("history_days 0 (no age limit) must be accepted: %v", err)
+	}
+	if cfg.Retention.HistoryDays != 0 {
+		t.Fatalf("Retention = %+v", cfg.Retention)
+	}
+	_, err = config.Load("", env(map[string]string{"OBSYNC_TRASH_DAYS": "0"}))
+	if err == nil || !strings.Contains(err.Error(), "trash_days") {
+		t.Fatalf("err = %v, want trash_days rejected", err)
+	}
+}
