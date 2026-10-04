@@ -21,14 +21,15 @@ func (m *Memory) Publish(_ context.Context, n Notify) error {
 	for s := range m.subs[n.VaultID] {
 		// Publish is the only sender and holds mu, so after the drain below the
 		// buffered slot is free and the send cannot block.
+		out := n
 		select {
 		case old := <-s.ch:
-			if old.Seq > n.Seq {
-				n = Notify{VaultID: n.VaultID, Seq: old.Seq}
+			if old.Seq > out.Seq {
+				out.Seq = old.Seq
 			}
 		default:
 		}
-		s.ch <- n
+		s.ch <- out
 	}
 	return nil
 }
