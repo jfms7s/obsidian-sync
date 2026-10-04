@@ -39,7 +39,7 @@ type Store interface {
 	UsageBytes(ctx context.Context, ownerID string) (int64, error)
 	TouchChunks(ctx context.Context, vaultID string, chunkIDs [][]byte) ([]bool, error)
 	InsertChunk(ctx context.Context, c store.Chunk) (bool, error)
-	ChunkBlobKey(ctx context.Context, vaultID string, chunkID []byte) (string, error)
+	ChunkBlob(ctx context.Context, vaultID string, chunkID []byte) (key string, size int64, err error)
 	Commit(ctx context.Context, v store.Version) (store.CommitOutcome, error)
 	Changes(ctx context.Context, vaultID string, since int64, limit int) ([]store.Version, error)
 	Heads(ctx context.Context, vaultID string, after []byte, limit int) ([]store.Head, error)
@@ -167,25 +167,32 @@ func (s *Service) PutChunk(ctx context.Context, userID, vaultID string, chunkID 
 	return nil
 }
 
-func (s *Service) OpenChunk(ctx context.Context, userID, vaultID string, chunkID []byte) (io.ReadCloser, error) {
+// OpenChunk opens a chunk's bytes and returns its stored size, so callers
+// can tell a short read from a complete one.
+func (s *Service) OpenChunk(ctx context.Context, userID, vaultID string, chunkID []byte) (io.ReadCloser, int64, error) {
 	if len(chunkID) != chunkIDLen {
-		return nil, apperr.New(apperr.Invalid, "chunk id must be %d bytes", chunkIDLen)
+		return nil, 0, apperr.New(apperr.Invalid, "chunk id must be %d bytes", chunkIDLen)
 	}
 	if _, err := s.vault(ctx, userID, vaultID); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	key, err := s.st.ChunkBlobKey(ctx, vaultID, chunkID)
+	key, size, err := s.st.ChunkBlob(ctx, vaultID, chunkID)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, apperr.New(apperr.NotFound, "chunk not found")
+		return nil, 0, apperr.New(apperr.NotFound, "chunk not found")
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	rc, err := s.blobs.Get(ctx, key)
 	if errors.Is(err, blob.ErrNotFound) {
-		return nil, apperr.New(apperr.NotFound, "chunk not found")
+		// The row says the chunk exists, so its bytes have been lost.
+		s.log.Error("chunk blob missing", "vault", vaultID, "blob_key", key)
+		return nil, 0, apperr.New(apperr.NotFound, "chunk not found")
 	}
-	return rc, err
+	if err != nil {
+		return nil, 0, err
+	}
+	return rc, size, nil
 }
 
 type CommitResult struct {

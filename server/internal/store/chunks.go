@@ -94,15 +94,15 @@ func (s *Store) TouchChunks(ctx context.Context, vaultID string, chunkIDs [][]by
 	return exists, err
 }
 
-func (s *Store) ChunkBlobKey(ctx context.Context, vaultID string, chunkID []byte) (string, error) {
-	var key string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT blob_key FROM chunks WHERE vault_id = ? AND chunk_id = ?`, vaultID, chunkID).Scan(&key)
+// ChunkBlob returns the blob key and stored size of a chunk.
+func (s *Store) ChunkBlob(ctx context.Context, vaultID string, chunkID []byte) (key string, size int64, err error) {
+	err = s.db.QueryRowContext(ctx,
+		`SELECT blob_key, size FROM chunks WHERE vault_id = ? AND chunk_id = ?`, vaultID, chunkID).Scan(&key, &size)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", ErrNotFound
+		return "", 0, ErrNotFound
 	}
 	if err != nil {
-		return "", fmt.Errorf("chunk blob key: %w", err)
+		return "", 0, fmt.Errorf("chunk blob: %w", err)
 	}
-	return key, nil
+	return key, size, nil
 }

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,17 +78,47 @@ func TestPutAndOpenChunk(t *testing.T) {
 	if err != nil || !exists[0] || exists[1] {
 		t.Fatalf("exists = %v, err %v", exists, err)
 	}
-	rc, err := f.svc.OpenChunk(ctx, f.user.ID, f.vault.ID, storetest.ChunkID(1))
+	rc, size, err := f.svc.OpenChunk(ctx, f.user.ID, f.vault.ID, storetest.ChunkID(1))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if size != int64(len("hello")) {
+		t.Fatalf("size = %d, want %d", size, len("hello"))
 	}
 	data, _ := io.ReadAll(rc)
 	rc.Close()
 	if string(data) != "hello" {
 		t.Fatalf("data = %q", data)
 	}
-	if _, err := f.svc.OpenChunk(ctx, f.user.ID, f.vault.ID, storetest.ChunkID(2)); apperr.CodeOf(err) != apperr.NotFound {
+	if _, _, err := f.svc.OpenChunk(ctx, f.user.ID, f.vault.ID, storetest.ChunkID(2)); apperr.CodeOf(err) != apperr.NotFound {
 		t.Fatalf("missing chunk err = %v", err)
+	}
+}
+
+// A chunk row whose blob is gone is data loss: report NotFound to the client
+// but log it at Error with the vault and blob key so an operator notices.
+func TestOpenChunkMissingBlobLogsError(t *testing.T) {
+	st, _ := storetest.New(t)
+	blobs, err := blob.NewFS(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := storetest.SeedUser(t, st, "alice")
+	vault := storetest.SeedVault(t, st, user.ID)
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	svc := syncsvc.New(st, blobs, bus.NewMemory(), syncsvc.Limits{MaxFileSizeBytes: 64 << 20}, log)
+	if _, err := st.InsertChunk(ctx, store.Chunk{VaultID: vault.ID, ChunkID: storetest.ChunkID(1), BlobKey: "gone/blob", Size: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.OpenChunk(ctx, user.ID, vault.ID, storetest.ChunkID(1)); apperr.CodeOf(err) != apperr.NotFound {
+		t.Fatalf("err = %v, want NotFound", err)
+	}
+	out := logs.String()
+	for _, want := range []string{"level=ERROR", "vault=" + vault.ID, "blob_key=gone/blob"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log %q does not contain %q", out, want)
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/jfms7s/obsidian-sync/server/internal/apperr"
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
@@ -13,13 +14,19 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/syncsvc"
 )
 
-// pathID decodes a 64-hex-character path segment into 32 bytes.
-func pathID(r *http.Request, name string) ([]byte, error) {
-	b, err := hex.DecodeString(r.PathValue(name))
-	if err != nil || len(b) != 32 {
-		return nil, apperr.New(apperr.Invalid, "%s must be 64 hex characters", name)
+// hexID decodes 64 lowercase hex characters into 32 bytes. Uppercase is
+// rejected so each ID has exactly one spelling.
+func hexID(s, name string) ([]byte, error) {
+	b, err := hex.DecodeString(s)
+	if err != nil || len(b) != 32 || s != strings.ToLower(s) {
+		return nil, apperr.New(apperr.Invalid, "%s must be 64 lowercase hex characters", name)
 	}
 	return b, nil
+}
+
+// pathID decodes a 64-lowercase-hex-character path segment into 32 bytes.
+func pathID(r *http.Request, name string) ([]byte, error) {
+	return hexID(r.PathValue(name), name)
 }
 
 // queryInt reads an optional non-negative integer query parameter (0 if absent).
@@ -73,17 +80,49 @@ func (h *handlers) getChunk(w http.ResponseWriter, r *http.Request, sess auth.Se
 		h.writeError(w, r, err)
 		return
 	}
-	rc, err := h.sync.OpenChunk(r.Context(), sess.UserID, r.PathValue("vault"), id)
+	rc, size, err := h.sync.OpenChunk(r.Context(), sess.UserID, r.PathValue("vault"), id)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
 	}
 	defer rc.Close()
-	w.Header().Set("Content-Type", "application/octet-stream")
+	hdr := w.Header()
+	hdr.Set("Content-Type", "application/octet-stream")
+	hdr.Set("Content-Length", strconv.FormatInt(size, 10))
+	hdr.Set("Cache-Control", "no-store")
+	hdr.Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	if _, err := io.Copy(w, rc); err != nil {
+	src := &readErrReader{r: rc}
+	n, err := io.Copy(w, src)
+	switch {
+	case src.err != nil:
+		h.log.Error("chunk blob read failed", "vault", r.PathValue("vault"), "err", src.err)
+	case err != nil:
 		h.log.Debug("chunk download interrupted", "err", err)
+	case n != size:
+		h.log.Error("chunk blob size mismatch", "vault", r.PathValue("vault"), "read", n, "want", size)
+	default:
+		return
 	}
+	// The status line is already out, so the only honest signal left is to
+	// abort the connection: the client sees a transport error instead of a
+	// short body that looks complete. The recoverer re-panics this.
+	panic(http.ErrAbortHandler)
+}
+
+// readErrReader remembers a read error so getChunk can tell a failing blob
+// from a client that went away.
+type readErrReader struct {
+	r   io.Reader
+	err error
+}
+
+func (e *readErrReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if err != nil && err != io.EOF {
+		e.err = err
+	}
+	return n, err
 }
 
 func (h *handlers) commit(w http.ResponseWriter, r *http.Request, sess auth.Session) {
@@ -138,9 +177,9 @@ func (h *handlers) changes(w http.ResponseWriter, r *http.Request, sess auth.Ses
 func (h *handlers) heads(w http.ResponseWriter, r *http.Request, sess auth.Session) {
 	var after []byte
 	if s := r.URL.Query().Get("after"); s != "" {
-		b, err := hex.DecodeString(s)
-		if err != nil || len(b) != 32 {
-			h.writeError(w, r, apperr.New(apperr.Invalid, "after must be 64 hex characters"))
+		b, err := hexID(s, "after")
+		if err != nil {
+			h.writeError(w, r, err)
 			return
 		}
 		after = b

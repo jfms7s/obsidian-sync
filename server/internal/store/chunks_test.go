@@ -23,8 +23,8 @@ func TestInsertAndTouchChunks(t *testing.T) {
 	if err != nil || inserted {
 		t.Fatalf("second insert inserted=%v err=%v, want false", inserted, err)
 	}
-	if key, _ := st.ChunkBlobKey(ctx, v.ID, storetest.ChunkID(1)); key != "k1" {
-		t.Fatalf("blob key = %q, want the first upload's", key)
+	if key, size, _ := st.ChunkBlob(ctx, v.ID, storetest.ChunkID(1)); key != "k1" || size != 100 {
+		t.Fatalf("blob key = %q size %d, want the first upload's", key, size)
 	}
 	if used, _ := st.UsageBytes(ctx, u.ID); used != 100 {
 		t.Fatalf("usage = %d, want 100 (counted once)", used)
@@ -34,7 +34,7 @@ func TestInsertAndTouchChunks(t *testing.T) {
 	if err != nil || !exists[0] || exists[1] {
 		t.Fatalf("exists = %v, err %v", exists, err)
 	}
-	if _, err := st.ChunkBlobKey(ctx, v.ID, storetest.ChunkID(2)); !errors.Is(err, store.ErrNotFound) {
+	if _, _, err := st.ChunkBlob(ctx, v.ID, storetest.ChunkID(2)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -100,7 +100,7 @@ func TestInsertChunkEnforcesOwnerQuota(t *testing.T) {
 	if !errors.Is(err, store.ErrQuotaExceeded) {
 		t.Fatalf("over-quota insert err = %v, want ErrQuotaExceeded", err)
 	}
-	if _, err := st.ChunkBlobKey(ctx, v2.ID, storetest.ChunkID(2)); !errors.Is(err, store.ErrNotFound) {
+	if _, _, err := st.ChunkBlob(ctx, v2.ID, storetest.ChunkID(2)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("over-quota chunk was recorded: %v", err)
 	}
 	if used, _ := st.UsageBytes(ctx, small.ID); used != 5 {

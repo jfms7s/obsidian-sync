@@ -25,9 +25,10 @@ import (
 var ctx = context.Background()
 
 type testEnv struct {
-	t   *testing.T
-	url string
-	st  *store.Store
+	t        *testing.T
+	url      string
+	st       *store.Store
+	blobRoot string
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -38,7 +39,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blobs, err := blob.NewFS(t.TempDir())
+	blobRoot := t.TempDir()
+	blobs, err := blob.NewFS(blobRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +48,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	h := api.NewHandler(api.Deps{Auth: authSvc, Sync: syncSvc, Store: st, Ready: st.Ping, Log: log})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &testEnv{t: t, url: srv.URL, st: st}
+	return &testEnv{t: t, url: srv.URL, st: st, blobRoot: blobRoot}
 }
 
 func (e *testEnv) createUser(username, password string) store.User {
