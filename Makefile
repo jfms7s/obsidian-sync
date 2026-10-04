@@ -1,7 +1,8 @@
 SHELL := /bin/bash
 BIN := $(CURDIR)/bin
 export PATH := $(BIN):$(PATH)
-export GOTOOLCHAIN := local
+# go.mod pins the toolchain; an older local Go downloads it once.
+export GOTOOLCHAIN := auto
 export CGO_ENABLED := 1
 
 .PHONY: tools proto proto-lint test vet
