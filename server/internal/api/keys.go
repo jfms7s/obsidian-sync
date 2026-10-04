@@ -13,7 +13,15 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 )
 
-const maxWrappedKeyBytes = 4096
+const (
+	maxWrappedKeyBytes = 4096
+
+	// Argon2 parameter ceilings. Clients run whatever is stored here, so an
+	// absurd value would lock the user out of every device.
+	maxArgon2MemoryKib   = 4 << 20 // 4 GiB
+	maxArgon2Iterations  = 64
+	maxArgon2Parallelism = 16
+)
 
 func (h *handlers) getKeys(w http.ResponseWriter, r *http.Request, sess auth.Session) {
 	kb, err := h.store.KeyBundle(r.Context(), sess.UserID)
@@ -26,7 +34,7 @@ func (h *handlers) getKeys(w http.ResponseWriter, r *http.Request, sess auth.Ses
 		return
 	}
 	var bundle obsyncv1.KeyBundle
-	if err := proto.Unmarshal(kb.Bundle, &bundle); err != nil {
+	if err := unmarshalOpts.Unmarshal(kb.Bundle, &bundle); err != nil {
 		h.writeError(w, r, fmt.Errorf("decode stored key bundle: %w", err))
 		return
 	}
@@ -34,16 +42,28 @@ func (h *handlers) getKeys(w http.ResponseWriter, r *http.Request, sess auth.Ses
 }
 
 func (h *handlers) putKeys(w http.ResponseWriter, r *http.Request, sess auth.Session) {
-	var kb obsyncv1.KeyBundle
-	if err := readProto(w, r, &kb); err != nil {
+	var req obsyncv1.KeyBundle
+	if err := readProto(w, r, &req, smallBodyLimit); err != nil {
 		h.writeError(w, r, err)
 		return
 	}
-	if err := validateKeyBundle(&kb); err != nil {
+	if err := validateKeyBundle(&req); err != nil {
 		h.writeError(w, r, err)
 		return
 	}
-	data, err := proto.Marshal(&kb)
+	// Store only the validated fields, never whatever else came in.
+	p := req.GetPassParams()
+	kb := &obsyncv1.KeyBundle{
+		PublicEncKey:  req.PublicEncKey,
+		PublicSignKey: req.PublicSignKey,
+		PassSalt:      req.PassSalt,
+		PassParams: &obsyncv1.Argon2Params{
+			MemoryKib: p.MemoryKib, Iterations: p.Iterations, Parallelism: p.Parallelism,
+		},
+		PassWrapped:     req.PassWrapped,
+		RecoveryWrapped: req.RecoveryWrapped,
+	}
+	data, err := proto.Marshal(kb)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -73,6 +93,9 @@ func validateKeyBundle(kb *obsyncv1.KeyBundle) error {
 		return apperr.New(apperr.Invalid, "pass_salt must be 16 to 64 bytes")
 	case p == nil || p.MemoryKib < 8192 || p.Iterations < 1 || p.Parallelism < 1:
 		return apperr.New(apperr.Invalid, "pass_params are missing or weaker than 8 MiB / 1 iteration")
+	case p.MemoryKib > maxArgon2MemoryKib || p.Iterations > maxArgon2Iterations || p.Parallelism > maxArgon2Parallelism:
+		return apperr.New(apperr.Invalid, "pass_params exceed %d KiB / %d iterations / %d lanes",
+			maxArgon2MemoryKib, maxArgon2Iterations, maxArgon2Parallelism)
 	case len(kb.PassWrapped) == 0 || len(kb.PassWrapped) > maxWrappedKeyBytes:
 		return apperr.New(apperr.Invalid, "pass_wrapped must be 1 to %d bytes", maxWrappedKeyBytes)
 	case len(kb.RecoveryWrapped) == 0 || len(kb.RecoveryWrapped) > maxWrappedKeyBytes:

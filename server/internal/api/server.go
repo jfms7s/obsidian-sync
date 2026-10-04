@@ -3,14 +3,17 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 
 	"github.com/jfms7s/obsidian-sync/server/internal/apperr"
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
+	obsyncv1 "github.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/syncsvc"
 )
@@ -45,6 +48,12 @@ type handlers struct {
 
 func NewHandler(d Deps) http.Handler {
 	h := &handlers{auth: d.Auth, sync: d.Sync, store: d.Store, ready: d.Ready, log: d.Log}
+	if h.ready == nil {
+		h.ready = func(context.Context) error { return nil }
+	}
+	if h.log == nil {
+		h.log = slog.Default()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", h.healthz)
 	mux.HandleFunc("GET /readyz", h.readyz)
@@ -57,15 +66,62 @@ func NewHandler(d Deps) http.Handler {
 	if d.Hub != nil {
 		mux.Handle("GET /v1/ws", d.Hub)
 	}
-	return h.recoverer(mux)
+	return h.recoverer(h.protoFallback(mux))
+}
+
+// protoFallback answers requests that match no route (404) or match a path
+// with another method (405) with a protobuf Error instead of the mux's plain
+// text, keeping the mux's Allow header.
+func (h *handlers) protoFallback(mux *http.ServeMux) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallback, pattern := mux.Handler(r)
+		if pattern != "" {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		// Run the mux's own fallback to learn its status and headers
+		// (such as Allow), discarding its plain-text body.
+		probe := &statusProbe{header: w.Header()}
+		fallback.ServeHTTP(probe, r)
+		switch probe.status {
+		case http.StatusMethodNotAllowed:
+			writeProto(w, http.StatusMethodNotAllowed, &obsyncv1.Error{
+				Code: apperr.Invalid, Message: "method " + r.Method + " is not allowed here",
+			})
+		case http.StatusNotFound, 0:
+			h.writeError(w, r, apperr.New(apperr.NotFound, "no such endpoint"))
+		default:
+			// Not expected from ServeMux; pass the status through.
+			w.WriteHeader(probe.status)
+		}
+	})
+}
+
+type statusProbe struct {
+	header http.Header
+	status int
+}
+
+func (p *statusProbe) Header() http.Header { return p.header }
+func (p *statusProbe) Write(b []byte) (int, error) {
+	if p.status == 0 {
+		p.status = http.StatusOK
+	}
+	return len(b), nil
+}
+func (p *statusProbe) WriteHeader(status int) {
+	if p.status == 0 {
+		p.status = status
+	}
 }
 
 type authedHandler func(w http.ResponseWriter, r *http.Request, sess auth.Session)
 
 func (h *handlers) authed(next authedHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok {
+		scheme, token, _ := strings.Cut(strings.TrimSpace(r.Header.Get("Authorization")), " ")
+		token = strings.TrimSpace(token)
+		if !strings.EqualFold(scheme, "Bearer") || token == "" {
 			h.writeError(w, r, auth.ErrUnauthorized)
 			return
 		}
@@ -78,19 +134,70 @@ func (h *handlers) authed(next authedHandler) http.HandlerFunc {
 	}
 }
 
+// recoverer turns a handler panic into an INTERNAL error, unless the handler
+// already started its response, in which case the connection is aborted so
+// the client sees a truncated reply instead of two responses glued together.
 func (h *handlers) recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tw := &trackingWriter{ResponseWriter: w, log: h.log}
 		defer func() {
 			if rec := recover(); rec != nil {
 				if rec == http.ErrAbortHandler {
 					panic(rec)
 				}
 				h.log.Error("handler panic", "method", r.Method, "path", r.URL.Path, "panic", fmt.Sprint(rec))
-				h.writeError(w, r, apperr.New(apperr.Internal, "internal error"))
+				if tw.wrote || tw.hijacked {
+					// Too late for an error response; abort the connection
+					// so the client cannot take the partial reply as whole.
+					panic(http.ErrAbortHandler)
+				}
+				h.writeError(tw, r, apperr.New(apperr.Internal, "internal error"))
 			}
 		}()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(tw, r)
 	})
+}
+
+// trackingWriter records whether the response has started. It also carries
+// the logger so writeProto can report encoding failures.
+type trackingWriter struct {
+	http.ResponseWriter
+	log      *slog.Logger
+	wrote    bool
+	hijacked bool
+}
+
+func (t *trackingWriter) WriteHeader(status int) {
+	t.wrote = true
+	t.ResponseWriter.WriteHeader(status)
+}
+
+func (t *trackingWriter) Write(b []byte) (int, error) {
+	t.wrote = true
+	return t.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (t *trackingWriter) Unwrap() http.ResponseWriter { return t.ResponseWriter }
+
+func (t *trackingWriter) Flush() {
+	t.wrote = true
+	if f, ok := t.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack is needed by the WebSocket hub.
+func (t *trackingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := t.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("response writer does not support hijacking")
+	}
+	conn, rw, err := hj.Hijack()
+	if err == nil {
+		t.hijacked = true
+	}
+	return conn, rw, err
 }
 
 func (h *handlers) healthz(w http.ResponseWriter, _ *http.Request) {

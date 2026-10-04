@@ -12,7 +12,7 @@ import (
 
 func (h *handlers) login(w http.ResponseWriter, r *http.Request) {
 	var req obsyncv1.LoginRequest
-	if err := readProto(w, r, &req); err != nil {
+	if err := readProto(w, r, &req, loginBodyLimit); err != nil {
 		h.writeError(w, r, err)
 		return
 	}
