@@ -16,6 +16,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	maxDays  = 36500 // 100 years
+	maxHours = 8760  // 1 year
+)
+
 type Retention struct {
 	HistoryDays        int `yaml:"history_days"`
 	HistoryMaxVersions int `yaml:"history_max_versions"` // 0 = no count limit
@@ -181,11 +186,17 @@ func (c Config) Validate() error {
 	if c.Retention.HistoryDays < 0 || c.Retention.HistoryMaxVersions < 0 || c.Retention.TrashDays < 0 {
 		add("retention values must not be negative")
 	}
-	if c.GCGraceHours < 1 {
-		add("gc_grace_hours must be at least 1")
+	// Upper bounds keep the day/hour/minute counts far below the point where
+	// converting them to a time.Duration overflows (about 106,751 days). An
+	// overflowed retention cutoff lands in the future and prunes everything.
+	if c.Retention.HistoryDays > maxDays || c.Retention.TrashDays > maxDays {
+		add(fmt.Sprintf("retention days must be at most %d", maxDays))
 	}
-	if c.JobsIntervalMinutes < 1 {
-		add("jobs_interval_minutes must be at least 1")
+	if c.GCGraceHours < 1 || c.GCGraceHours > maxHours {
+		add(fmt.Sprintf("gc_grace_hours must be between 1 and %d", maxHours))
+	}
+	if c.JobsIntervalMinutes < 1 || c.JobsIntervalMinutes > maxHours*60 {
+		add(fmt.Sprintf("jobs_interval_minutes must be between 1 and %d", maxHours*60))
 	}
 	switch c.LogLevel {
 	case "debug", "info", "warn", "error":

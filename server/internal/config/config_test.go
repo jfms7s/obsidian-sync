@@ -111,3 +111,19 @@ func TestValidateRejectsNonPositiveLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateRejectsOverflowingDurations(t *testing.T) {
+	_, err := config.Load("", env(map[string]string{
+		"OBSYNC_HISTORY_DAYS":          "999999",
+		"OBSYNC_GC_GRACE_HOURS":        "99999999",
+		"OBSYNC_JOBS_INTERVAL_MINUTES": "99999999",
+	}))
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, want := range []string{"retention days", "gc_grace_hours", "jobs_interval_minutes"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
