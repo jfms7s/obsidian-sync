@@ -37,6 +37,7 @@ type testEnv struct {
 	failBlobReads *atomic.Bool
 	// handler is the API handler, for tests that serve it themselves.
 	handler http.Handler
+	clk     *storetest.Clock
 }
 
 // faultyBlobs wraps a blob store so tests can make reads fail mid-stream.
@@ -82,7 +83,23 @@ func newTestEnv(t *testing.T) *testEnv {
 // wrap(store), so a test can inject store behaviour; a nil wrap uses the store.
 func newTestEnvWrapped(t *testing.T, wrap func(*store.Store) api.Store) *testEnv {
 	t.Helper()
+	return newTestEnvFull(t, wrap, api.RateLimits{}, nil)
+}
+
+// newTestEnvLimited is newTestEnv with request rate limiting configured; the
+// limiters run on the test clock unless rl.Now is set. hub, if not nil, is
+// served at /v1/ws.
+func newTestEnvLimited(t *testing.T, rl api.RateLimits, hub http.Handler) *testEnv {
+	t.Helper()
+	return newTestEnvFull(t, nil, rl, hub)
+}
+
+func newTestEnvFull(t *testing.T, wrap func(*store.Store) api.Store, rl api.RateLimits, hub http.Handler) *testEnv {
+	t.Helper()
 	st, clk := storetest.New(t)
+	if rl.Now == nil {
+		rl.Now = clk.Now
+	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	authSvc, err := auth.NewService(st, auth.Options{Params: auth.FastParams, Now: clk.Now})
 	if err != nil {
@@ -99,10 +116,10 @@ func newTestEnvWrapped(t *testing.T, wrap func(*store.Store) api.Store) *testEnv
 	if wrap != nil {
 		apiStore = wrap(st)
 	}
-	h := api.NewHandler(api.Deps{Auth: authSvc, Sync: syncSvc, Store: apiStore, Ready: st.Ping, Log: log})
+	h := api.NewHandler(api.Deps{Auth: authSvc, Sync: syncSvc, Store: apiStore, Hub: hub, Ready: st.Ping, Log: log, RateLimits: rl})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &testEnv{t: t, url: srv.URL, st: st, blobRoot: blobRoot, failBlobReads: failBlobReads, handler: h}
+	return &testEnv{t: t, url: srv.URL, st: st, blobRoot: blobRoot, failBlobReads: failBlobReads, handler: h, clk: clk}
 }
 
 func (e *testEnv) createUser(username, password string) store.User {

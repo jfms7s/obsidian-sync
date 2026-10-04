@@ -78,6 +78,13 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts Option
 		Hub:   h,
 		Ready: func(ctx context.Context) error { return errors.Join(st.Ping(ctx), blobs.Ping(ctx)) },
 		Log:   log,
+		RateLimits: api.RateLimits{
+			DeviceRPS:      cfg.RateLimit.DeviceRPS,
+			DeviceBurst:    cfg.RateLimit.DeviceBurst,
+			IPRPS:          cfg.RateLimit.IPRPS,
+			IPBurst:        cfg.RateLimit.IPBurst,
+			TrustedProxies: cfg.TrustedProxyPrefixes(),
+		},
 	})
 	runner := jobs.New(st, blobs, jobs.Config{
 		Interval:  cfg.JobsInterval(),

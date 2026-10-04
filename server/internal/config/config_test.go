@@ -199,3 +199,95 @@ func TestLogValueRedactsCredentials(t *testing.T) {
 		t.Fatalf("log = %s", buf.String())
 	}
 }
+
+func TestRateLimitDefaults(t *testing.T) {
+	cfg, err := config.Load("", env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := config.RateLimit{DeviceRPS: 100, DeviceBurst: 1000, IPRPS: 1, IPBurst: 10}
+	if cfg.RateLimit != want {
+		t.Errorf("RateLimit = %+v, want %+v", cfg.RateLimit, want)
+	}
+	if len(cfg.TrustedProxies) != 0 || len(cfg.TrustedProxyPrefixes()) != 0 {
+		t.Errorf("TrustedProxies = %v, want none", cfg.TrustedProxies)
+	}
+}
+
+func TestRateLimitYAMLAndEnv(t *testing.T) {
+	path := writeFile(t, "rate_limit:\n  device_rps: 5\n  device_burst: 50\n  ip_rps: 0.5\ntrusted_proxies: [\"172.16.0.0/12\"]\n")
+	cfg, err := config.Load(path, env(map[string]string{
+		"OBSYNC_RATE_LIMIT_IP_BURST":   "3",
+		"OBSYNC_RATE_LIMIT_DEVICE_RPS": "7.5",
+		"OBSYNC_TRUSTED_PROXIES":       " 10.0.0.0/8, fd00::/8 ,192.168.1.1 ",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := config.RateLimit{DeviceRPS: 7.5, DeviceBurst: 50, IPRPS: 0.5, IPBurst: 3}
+	if cfg.RateLimit != want {
+		t.Errorf("RateLimit = %+v, want %+v", cfg.RateLimit, want)
+	}
+	got := cfg.TrustedProxyPrefixes()
+	wantP := []string{"10.0.0.0/8", "fd00::/8", "192.168.1.1/32"}
+	if len(got) != len(wantP) {
+		t.Fatalf("prefixes = %v", got)
+	}
+	for i := range got {
+		if got[i].String() != wantP[i] {
+			t.Errorf("prefix %d = %v, want %s", i, got[i], wantP[i])
+		}
+	}
+}
+
+func TestRateLimitZeroDisables(t *testing.T) {
+	cfg, err := config.Load("", env(map[string]string{"OBSYNC_RATE_LIMIT_DEVICE_RPS": "0", "OBSYNC_RATE_LIMIT_IP_RPS": "0"}))
+	if err != nil {
+		t.Fatalf("0 must disable, not fail: %v", err)
+	}
+	if cfg.RateLimit.DeviceRPS != 0 || cfg.RateLimit.IPRPS != 0 {
+		t.Fatalf("RateLimit = %+v", cfg.RateLimit)
+	}
+}
+
+func TestRateLimitValidation(t *testing.T) {
+	for name, tc := range map[string]struct {
+		env  map[string]string
+		want string
+	}{
+		"bad float":         {map[string]string{"OBSYNC_RATE_LIMIT_DEVICE_RPS": "fast"}, "OBSYNC_RATE_LIMIT_DEVICE_RPS"},
+		"bad int":           {map[string]string{"OBSYNC_RATE_LIMIT_IP_BURST": "1.5"}, "OBSYNC_RATE_LIMIT_IP_BURST"},
+		"negative rps":      {map[string]string{"OBSYNC_RATE_LIMIT_IP_RPS": "-1"}, "rate_limit.ip_rps"},
+		"NaN rps":           {map[string]string{"OBSYNC_RATE_LIMIT_DEVICE_RPS": "NaN"}, "rate_limit.device_rps"},
+		"huge rps":          {map[string]string{"OBSYNC_RATE_LIMIT_DEVICE_RPS": "1e9"}, "rate_limit.device_rps"},
+		"tiny rps":          {map[string]string{"OBSYNC_RATE_LIMIT_IP_RPS": "1e-9"}, "rate_limit.ip_rps"},
+		"negative burst":    {map[string]string{"OBSYNC_RATE_LIMIT_DEVICE_BURST": "-5"}, "rate_limit.device_burst"},
+		"zero burst":        {map[string]string{"OBSYNC_RATE_LIMIT_IP_BURST": "0"}, "rate_limit.ip_burst"},
+		"huge burst":        {map[string]string{"OBSYNC_RATE_LIMIT_IP_BURST": "99999999"}, "rate_limit.ip_burst"},
+		"bad CIDR":          {map[string]string{"OBSYNC_TRUSTED_PROXIES": "10.0.0.0/8,10.0.0.0/33"}, "trusted_proxies"},
+		"hostname in proxy": {map[string]string{"OBSYNC_TRUSTED_PROXIES": "caddy"}, "trusted_proxies"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := config.Load("", env(tc.env))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want mention of %q", err, tc.want)
+			}
+		})
+	}
+	// A zero burst is fine when that limiter is disabled.
+	if _, err := config.Load("", env(map[string]string{"OBSYNC_RATE_LIMIT_IP_RPS": "0", "OBSYNC_RATE_LIMIT_IP_BURST": "0"})); err != nil {
+		t.Fatalf("disabled limiter with burst 0: %v", err)
+	}
+}
+
+func TestLogValueIncludesRateLimit(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.TrustedProxies = []string{"10.0.0.0/8"}
+	var buf bytes.Buffer
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("config", "cfg", cfg)
+	for _, want := range []string{"rate_limit.device_rps=100", "rate_limit.ip_burst=10", "10.0.0.0/8"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("log %q lacks %q", buf.String(), want)
+		}
+	}
+}

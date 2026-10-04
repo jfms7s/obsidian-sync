@@ -36,18 +36,22 @@ type Deps struct {
 	Hub   http.Handler
 	Ready func(ctx context.Context) error
 	Log   *slog.Logger
+	// RateLimits bounds request rates; the zero value disables limiting.
+	// Health checks are never limited.
+	RateLimits RateLimits
 }
 
 type handlers struct {
-	auth  *auth.Service
-	sync  *syncsvc.Service
-	store Store
-	ready func(ctx context.Context) error
-	log   *slog.Logger
+	auth   *auth.Service
+	sync   *syncsvc.Service
+	store  Store
+	ready  func(ctx context.Context) error
+	log    *slog.Logger
+	limits *limiters
 }
 
 func NewHandler(d Deps) http.Handler {
-	h := &handlers{auth: d.Auth, sync: d.Sync, store: d.Store, ready: d.Ready, log: d.Log}
+	h := &handlers{auth: d.Auth, sync: d.Sync, store: d.Store, ready: d.Ready, log: d.Log, limits: newLimiters(d.RateLimits)}
 	if h.ready == nil {
 		h.ready = func(context.Context) error { return nil }
 	}
@@ -57,7 +61,7 @@ func NewHandler(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", h.healthz)
 	mux.HandleFunc("GET /readyz", h.readyz)
-	mux.HandleFunc("POST /v1/auth/login", h.login)
+	mux.Handle("POST /v1/auth/login", h.ipLimited(http.HandlerFunc(h.login)))
 	mux.HandleFunc("POST /v1/auth/logout", h.authed(h.logout))
 	mux.HandleFunc("GET /v1/devices", h.authed(h.listDevices))
 	mux.HandleFunc("DELETE /v1/devices/{device}", h.authed(h.revokeDevice))
@@ -65,7 +69,9 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("PUT /v1/keys", h.authed(h.putKeys))
 	h.registerVaultRoutes(mux)
 	if d.Hub != nil {
-		mux.Handle("GET /v1/ws", d.Hub)
+		// The socket authenticates in its first frame, so the upgrade is
+		// limited per address; frames after that are paced by the hub.
+		mux.Handle("GET /v1/ws", h.ipLimited(d.Hub))
 	}
 	return h.recoverer(h.protoFallback(mux))
 }
@@ -118,18 +124,52 @@ func (p *statusProbe) WriteHeader(status int) {
 
 type authedHandler func(w http.ResponseWriter, r *http.Request, sess auth.Session)
 
+// authed authenticates the bearer token, then spends one of the device's
+// requests before next runs.
+//
+// Requests with a missing, unknown or revoked token spend from a per-address
+// budget, which is checked before the token is looked up: once an address
+// has used it up, all its bearer requests wait, valid ones included, so token
+// guessing gets no answers. Valid tokens never spend from it, so a well-behaved
+// client is only ever held back by a bad token from its own address. The check
+// and the spend are not one atomic step, so many concurrent guesses can each
+// pass the check before the first is counted; that slack is bounded by the
+// lookup's latency, and tokens are 256 random bits in any case.
 func (h *handlers) authed(next authedHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		var ipKey string
+		if h.limits.authFail != nil {
+			ipKey = h.clientKey(r)
+			if retry := h.limits.authFail.Delay(ipKey); retry > 0 {
+				writeRateLimited(w, retry)
+				return
+			}
+		}
+		fail := func(err error) {
+			if h.limits.authFail != nil {
+				switch apperr.CodeOf(err) {
+				case apperr.Unauthorized, apperr.DeviceRevoked:
+					h.limits.authFail.Take(ipKey)
+				}
+			}
+			h.writeError(w, r, err)
+		}
 		scheme, token, _ := strings.Cut(strings.TrimSpace(r.Header.Get("Authorization")), " ")
 		token = strings.TrimSpace(token)
 		if !strings.EqualFold(scheme, "Bearer") || token == "" {
-			h.writeError(w, r, auth.ErrUnauthorized)
+			fail(auth.ErrUnauthorized)
 			return
 		}
 		sess, err := h.auth.Authenticate(r.Context(), token)
 		if err != nil {
-			h.writeError(w, r, err)
+			fail(err)
 			return
+		}
+		if h.limits.device != nil {
+			if ok, retry := h.limits.device.Take(sess.DeviceID); !ok {
+				writeRateLimited(w, retry)
+				return
+			}
 		}
 		next(w, r, sess)
 	}

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -299,4 +300,43 @@ func TestStaleBlobTempFilesSweptByJobsNotBuild(t *testing.T) {
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatalf("stale temp file survived maintenance (err=%v)", err)
 	}
+}
+
+// Build applies the configured per-IP limit to login, leaving health alone.
+func TestBuildWiresRateLimits(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.Load("", func(k string) string {
+		switch k {
+		case "OBSYNC_DATA_DIR":
+			return dir
+		case "OBSYNC_RATE_LIMIT_IP_RPS":
+			return "0.5"
+		case "OBSYNC_RATE_LIMIT_IP_BURST":
+			return "1"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := app.Build(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), app.Options{PasswordParams: auth.FastParams})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	srv := httptest.NewServer(a.Handler)
+	defer srv.Close()
+	c := &client{t: t, base: srv.URL}
+	c.call("POST", "/v1/auth/login", &obsyncv1.LoginRequest{Username: "x", Password: "y"}, nil, 401)
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/auth/login", nil)
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 429 || resp.Header.Get("Retry-After") != "2" {
+		t.Fatalf("second login = %d Retry-After %q, want 429 and 2", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+	c.raw("GET", "/healthz", nil, 200)
 }

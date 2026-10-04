@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,7 +22,26 @@ import (
 const (
 	maxDays  = 36500 // 100 years
 	maxHours = 8760  // 1 year
+
+	// Rate limit bounds: anything outside them is a typo, not a policy.
+	minRPS   = 0.001 // one request per ~17 minutes
+	maxRPS   = 100000
+	maxBurst = 1000000
 )
+
+// RateLimit bounds request rates with token buckets. A zero rate disables
+// that limiter.
+type RateLimit struct {
+	// DeviceRPS and DeviceBurst limit each authenticated device across all
+	// its HTTP requests (chunk transfers and commits included).
+	DeviceRPS   float64 `yaml:"device_rps"`
+	DeviceBurst int     `yaml:"device_burst"`
+	// IPRPS and IPBurst limit each client address on unauthenticated
+	// requests (login, WebSocket upgrades) and, separately, on requests whose
+	// bearer token is missing or invalid.
+	IPRPS   float64 `yaml:"ip_rps"`
+	IPBurst int     `yaml:"ip_burst"`
+}
 
 // Retention bounds history and trash. A version that is not its file's head
 // is deleted as soon as either history limit is exceeded. Heads are never
@@ -53,6 +73,11 @@ type Config struct {
 	GCGraceHours        int       `yaml:"gc_grace_hours"`
 	JobsIntervalMinutes int       `yaml:"jobs_interval_minutes"`
 	LogLevel            string    `yaml:"log_level"`
+	RateLimit           RateLimit `yaml:"rate_limit"`
+	// TrustedProxies lists the reverse proxies (CIDRs, or single addresses)
+	// whose X-Forwarded-For header is believed. Empty: the TCP peer is
+	// always the client, so behind a proxy every client shares one address.
+	TrustedProxies []string `yaml:"trusted_proxies"`
 }
 
 func Defaults() Config {
@@ -66,6 +91,16 @@ func Defaults() Config {
 		GCGraceHours:        24,
 		JobsIntervalMinutes: 60,
 		LogLevel:            "info",
+		// A device's own requests: an initial sync of a few thousand small
+		// files is about one chunk upload per file plus batched exists and
+		// commit calls, sent a few at a time. The burst absorbs a vault of
+		// ~1000 files outright, and 100/s is about what a client with a few
+		// requests in flight reaches over a WAN anyway, so a large first
+		// sync is at most paced, while a runaway client is still capped.
+		// Unauthenticated traffic per address: logins and WebSocket
+		// (re)connects are rare, so 1/s with a burst of 10 covers a
+		// household of devices reconnecting together.
+		RateLimit: RateLimit{DeviceRPS: 100, DeviceBurst: 1000, IPRPS: 1, IPBurst: 10},
 	}
 }
 
@@ -126,6 +161,27 @@ func applyEnv(c *Config, getenv func(string) string) error {
 			*dst = n
 		}
 	}
+	float := func(name string, dst *float64) {
+		if v := getenv(name); v != "" {
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s: %q is not a number", name, v))
+				return
+			}
+			*dst = f
+		}
+	}
+	list := func(name string, dst *[]string) {
+		if v := getenv(name); v != "" {
+			var out []string
+			for _, item := range strings.Split(v, ",") {
+				if item = strings.TrimSpace(item); item != "" {
+					out = append(out, item)
+				}
+			}
+			*dst = out
+		}
+	}
 	boolean := func(name string, dst *bool) {
 		if v := getenv(name); v != "" {
 			b, err := strconv.ParseBool(v)
@@ -152,6 +208,11 @@ func applyEnv(c *Config, getenv func(string) string) error {
 	integer("OBSYNC_GC_GRACE_HOURS", &c.GCGraceHours)
 	integer("OBSYNC_JOBS_INTERVAL_MINUTES", &c.JobsIntervalMinutes)
 	str("OBSYNC_LOG_LEVEL", &c.LogLevel)
+	float("OBSYNC_RATE_LIMIT_DEVICE_RPS", &c.RateLimit.DeviceRPS)
+	integer("OBSYNC_RATE_LIMIT_DEVICE_BURST", &c.RateLimit.DeviceBurst)
+	float("OBSYNC_RATE_LIMIT_IP_RPS", &c.RateLimit.IPRPS)
+	integer("OBSYNC_RATE_LIMIT_IP_BURST", &c.RateLimit.IPBurst)
+	list("OBSYNC_TRUSTED_PROXIES", &c.TrustedProxies)
 	return errors.Join(errs...)
 }
 
@@ -224,7 +285,51 @@ func (c Config) Validate() error {
 	default:
 		add("log_level %q is not one of debug, info, warn, error", c.LogLevel)
 	}
+	validateLimit := func(name string, rps float64, burst int) {
+		// !(rps >= 0) also catches NaN.
+		if !(rps == 0 || (rps >= minRPS && rps <= maxRPS)) {
+			add("rate_limit.%s_rps must be 0 (disabled) or between %g and %g", name, minRPS, float64(maxRPS))
+		}
+		if rps != 0 && (burst < 1 || burst > maxBurst) {
+			add("rate_limit.%s_burst must be between 1 and %d", name, maxBurst)
+		} else if burst < 0 {
+			add("rate_limit.%s_burst must not be negative", name)
+		}
+	}
+	validateLimit("device", c.RateLimit.DeviceRPS, c.RateLimit.DeviceBurst)
+	validateLimit("ip", c.RateLimit.IPRPS, c.RateLimit.IPBurst)
+	for _, p := range c.TrustedProxies {
+		if _, err := parseProxy(p); err != nil {
+			add("trusted_proxies: %q is not a CIDR or IP address", p)
+		}
+	}
 	return errors.Join(errs...)
+}
+
+// parseProxy parses a trusted proxy entry: a CIDR, or one address taken as a
+// single-host prefix. The result is masked.
+func parseProxy(s string) (netip.Prefix, error) {
+	if p, err := netip.ParsePrefix(s); err == nil {
+		return p.Masked(), nil
+	}
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	a = a.Unmap()
+	return netip.PrefixFrom(a, a.BitLen()), nil
+}
+
+// TrustedProxyPrefixes returns TrustedProxies parsed. Entries that do not
+// parse are skipped; Validate rejects them.
+func (c Config) TrustedProxyPrefixes() []netip.Prefix {
+	var out []netip.Prefix
+	for _, s := range c.TrustedProxies {
+		if p, err := parseProxy(s); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 const redacted = "REDACTED"
@@ -255,6 +360,13 @@ func (c Config) LogValue() slog.Value {
 		slog.Int("gc_grace_hours", c.GCGraceHours),
 		slog.Int("jobs_interval_minutes", c.JobsIntervalMinutes),
 		slog.String("log_level", c.LogLevel),
+		slog.Group("rate_limit",
+			slog.Float64("device_rps", c.RateLimit.DeviceRPS),
+			slog.Int("device_burst", c.RateLimit.DeviceBurst),
+			slog.Float64("ip_rps", c.RateLimit.IPRPS),
+			slog.Int("ip_burst", c.RateLimit.IPBurst),
+		),
+		slog.String("trusted_proxies", strings.Join(c.TrustedProxies, ",")),
 	)
 }
 
