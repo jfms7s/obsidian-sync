@@ -56,27 +56,42 @@ func (s *Store) Commit(ctx context.Context, v Version) (CommitOutcome, error) {
 }
 
 func commitTx(ctx context.Context, tx *sql.Tx, v Version, now int64) (CommitOutcome, error) {
-	var prevFile []byte
-	var prevSeq int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT file_id, seq FROM versions WHERE vault_id = ? AND version_id = ?`, v.VaultID, v.VersionID).
-		Scan(&prevFile, &prevSeq)
+	if v.Deleted && len(v.ChunkIDs) > 0 {
+		return CommitOutcome{Reason: CommitInvalid, Detail: "a deletion carries no chunks"}, nil
+	}
+
+	// Take the write lock before reading anything. A deferred transaction
+	// that reads first holds a snapshot; if another connection commits in
+	// the meantime, upgrading to a writer fails at once with "database is
+	// locked" and busy_timeout cannot help. A no-op write waits for the lock
+	// instead and starts the transaction on the latest data.
+	res, err := tx.ExecContext(ctx, `UPDATE vaults SET seq = seq WHERE id = ?`, v.VaultID)
+	if err != nil {
+		return CommitOutcome{}, fmt.Errorf("lock vault: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return CommitOutcome{}, fmt.Errorf("lock vault: %w", err)
+	}
+	if n == 0 {
+		return CommitOutcome{}, ErrNotFound
+	}
+
+	prev, err := versionTx(ctx, tx, v.VaultID, v.VersionID)
 	switch {
-	case err == nil && bytes.Equal(prevFile, v.FileID):
+	case err == nil && sameContent(prev, v):
 		// A retry of a commit that already succeeded but whose response was lost.
-		return CommitOutcome{Reason: CommitOK, Seq: prevSeq}, nil
-	case err == nil:
+		return CommitOutcome{Reason: CommitOK, Seq: prev.Seq}, nil
+	case err == nil && !bytes.Equal(prev.FileID, v.FileID):
 		return CommitOutcome{Reason: CommitInvalid, Detail: "version_id is already used by another file"}, nil
+	case err == nil:
+		return CommitOutcome{Reason: CommitInvalid, Detail: "version_id reused with different content"}, nil
 	case !errors.Is(err, sql.ErrNoRows):
 		return CommitOutcome{}, fmt.Errorf("look up version: %w", err)
 	}
 
 	var epoch int
-	err = tx.QueryRowContext(ctx, `SELECT current_epoch FROM vaults WHERE id = ?`, v.VaultID).Scan(&epoch)
-	if errors.Is(err, sql.ErrNoRows) {
-		return CommitOutcome{}, ErrNotFound
-	}
-	if err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT current_epoch FROM vaults WHERE id = ?`, v.VaultID).Scan(&epoch); err != nil {
 		return CommitOutcome{}, fmt.Errorf("read vault: %w", err)
 	}
 	if v.Epoch != epoch {
@@ -97,14 +112,19 @@ func commitTx(ctx context.Context, tx *sql.Tx, v Version, now int64) (CommitOutc
 		return CommitOutcome{Reason: CommitInvalid, Detail: "cannot delete a file the server does not have"}, nil
 	}
 	for _, id := range v.ChunkIDs {
-		var one int
-		err := tx.QueryRowContext(ctx,
-			`SELECT 1 FROM chunks WHERE vault_id = ? AND chunk_id = ?`, v.VaultID, id).Scan(&one)
-		if errors.Is(err, sql.ErrNoRows) {
-			return CommitOutcome{Reason: CommitMissingChunk}, nil
-		}
+		// Touching a referenced chunk both proves it exists and restarts its
+		// garbage-collection grace period.
+		res, err := tx.ExecContext(ctx,
+			`UPDATE chunks SET touched_at = ? WHERE vault_id = ? AND chunk_id = ?`, now, v.VaultID, id)
 		if err != nil {
-			return CommitOutcome{}, fmt.Errorf("check chunk: %w", err)
+			return CommitOutcome{}, fmt.Errorf("touch chunk: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return CommitOutcome{}, fmt.Errorf("touch chunk: %w", err)
+		}
+		if n == 0 {
+			return CommitOutcome{Reason: CommitMissingChunk}, nil
 		}
 	}
 
@@ -134,6 +154,52 @@ func commitTx(ctx context.Context, tx *sql.Tx, v Version, now int64) (CommitOutc
 		return CommitOutcome{}, fmt.Errorf("set head: %w", err)
 	}
 	return CommitOutcome{Reason: CommitOK, Seq: seq}, nil
+}
+
+// versionTx reads one version and its ordered chunk list inside tx.
+func versionTx(ctx context.Context, tx *sql.Tx, vaultID string, versionID []byte) (Version, error) {
+	v := Version{VaultID: vaultID, VersionID: versionID}
+	var deleted int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT file_id, base_version_id, epoch, size, deleted, seq FROM versions WHERE vault_id = ? AND version_id = ?`,
+		vaultID, versionID).Scan(&v.FileID, &v.BaseVersionID, &v.Epoch, &v.Size, &deleted, &v.Seq)
+	if err != nil {
+		return Version{}, err
+	}
+	v.Deleted = deleted != 0
+	rows, err := tx.QueryContext(ctx,
+		`SELECT chunk_id FROM version_chunks WHERE vault_id = ? AND version_id = ? ORDER BY idx`, vaultID, versionID)
+	if err != nil {
+		return Version{}, fmt.Errorf("read chunk refs: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id []byte
+		if err := rows.Scan(&id); err != nil {
+			return Version{}, fmt.Errorf("scan chunk ref: %w", err)
+		}
+		v.ChunkIDs = append(v.ChunkIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return Version{}, fmt.Errorf("read chunk refs: %w", err)
+	}
+	return v, nil
+}
+
+// sameContent reports whether a commit carries the same version as a stored
+// one. enc_meta is ignored: a client that re-encrypts uses a fresh nonce.
+func sameContent(stored, v Version) bool {
+	if !bytes.Equal(stored.FileID, v.FileID) || !bytes.Equal(stored.BaseVersionID, v.BaseVersionID) ||
+		stored.Epoch != v.Epoch || stored.Size != v.Size || stored.Deleted != v.Deleted ||
+		len(stored.ChunkIDs) != len(v.ChunkIDs) {
+		return false
+	}
+	for i := range stored.ChunkIDs {
+		if !bytes.Equal(stored.ChunkIDs[i], v.ChunkIDs[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // versionQuery joins a version subquery (which must select every versions
@@ -176,8 +242,14 @@ func (s *Store) queryVersions(ctx context.Context, vaultID, inner, order string,
 	return out, rows.Err()
 }
 
+// errBadLimit guards paging: SQLite reads a negative LIMIT as "no limit".
+var errBadLimit = errors.New("store: page limit must be positive")
+
 // Changes returns up to limit versions with seq > since, oldest first.
 func (s *Store) Changes(ctx context.Context, vaultID string, since int64, limit int) ([]Version, error) {
+	if limit <= 0 {
+		return nil, errBadLimit
+	}
 	return s.queryVersions(ctx, vaultID,
 		`SELECT * FROM versions WHERE vault_id = ? AND seq > ? ORDER BY seq LIMIT ?`, "v.seq",
 		vaultID, since, limit)
@@ -194,7 +266,7 @@ func (s *Store) History(ctx context.Context, vaultID string, fileID []byte) ([]V
 func (s *Store) Trash(ctx context.Context, vaultID string) ([]Version, error) {
 	return s.queryVersions(ctx, vaultID,
 		`SELECT ver.* FROM versions ver
-		 JOIN files f ON f.vault_id = ver.vault_id AND f.head_version_id = ver.version_id
+		 JOIN files f ON f.vault_id = ver.vault_id AND f.file_id = ver.file_id AND f.head_version_id = ver.version_id
 		 WHERE ver.vault_id = ? AND ver.deleted = 1`, "v.seq DESC",
 		vaultID)
 }
@@ -209,6 +281,9 @@ type Head struct {
 // Heads pages through every file's head in file_id order, starting after
 // `after` (nil = from the start).
 func (s *Store) Heads(ctx context.Context, vaultID string, after []byte, limit int) ([]Head, error) {
+	if limit <= 0 {
+		return nil, errBadLimit
+	}
 	q := `SELECT f.file_id, f.head_version_id, v.seq, v.deleted FROM files f
 	      JOIN versions v ON v.vault_id = f.vault_id AND v.version_id = f.head_version_id
 	      WHERE f.vault_id = ?`

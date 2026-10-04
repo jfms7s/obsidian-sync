@@ -2,8 +2,12 @@ package store_test
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/store/storetest"
@@ -84,6 +88,44 @@ func TestCommitRetryIsIdempotent(t *testing.T) {
 	if out, _ := f.st.Commit(ctx, other); out.Reason != store.CommitInvalid {
 		t.Fatalf("out = %+v", out)
 	}
+
+	// The same version id on the same file with different content is not a
+	// retry either. A fresh enc_meta alone is (the client re-encrypted).
+	reEncrypted := v
+	reEncrypted.EncMeta = []byte("other nonce")
+	if out, err := f.st.Commit(ctx, reEncrypted); err != nil || !out.OK() || out.Seq != first.Seq {
+		t.Fatalf("re-encrypted retry = %+v, err %v", out, err)
+	}
+	tamper := map[string]func(*store.Version){
+		"chunks":    func(c *store.Version) { c.ChunkIDs = [][]byte{storetest.ChunkID(2)} },
+		"no chunks": func(c *store.Version) { c.ChunkIDs = nil },
+		"order": func(c *store.Version) {
+			c.ChunkIDs = [][]byte{storetest.ChunkID(1), storetest.ChunkID(1)}
+		},
+		"size":    func(c *store.Version) { c.Size = 99 },
+		"epoch":   func(c *store.Version) { c.Epoch = 2 },
+		"deleted": func(c *store.Version) { c.Deleted = true; c.ChunkIDs = nil },
+		"base":    func(c *store.Version) { c.BaseVersionID = bytes.Repeat([]byte{7}, 16) },
+	}
+	for name, mutate := range tamper {
+		c := v
+		mutate(&c)
+		out, err := f.st.Commit(ctx, c)
+		if err != nil || out.Reason != store.CommitInvalid {
+			t.Errorf("%s: out = %+v, err %v; want invalid", name, out, err)
+		}
+	}
+}
+
+func TestCommitRetryComparesChunkOrder(t *testing.T) {
+	f := newFixture(t)
+	v := storetest.NewVersion(f.vault.ID, storetest.FileID(1), nil, storetest.ChunkID(1), storetest.ChunkID(2))
+	storetest.MustCommit(t, f.st, v)
+	swapped := v
+	swapped.ChunkIDs = [][]byte{storetest.ChunkID(2), storetest.ChunkID(1)}
+	if out, err := f.st.Commit(ctx, swapped); err != nil || out.Reason != store.CommitInvalid {
+		t.Fatalf("out = %+v, err %v; want invalid", out, err)
+	}
 }
 
 func TestCommitRejections(t *testing.T) {
@@ -106,7 +148,14 @@ func TestCommitRejections(t *testing.T) {
 		t.Fatalf("delete of unknown file: %+v", out)
 	}
 
-	if v, _ := f.st.VaultForMember(ctx, f.vault.ID, f.vault.OwnerID); v.Seq != 0 {
+	live := storetest.MustCommit(t, f.st, storetest.NewVersion(f.vault.ID, storetest.FileID(4), nil, storetest.ChunkID(1)))
+	withChunks := storetest.NewVersion(f.vault.ID, storetest.FileID(4), live.VersionID, storetest.ChunkID(1))
+	withChunks.Deleted = true
+	if out, _ := f.st.Commit(ctx, withChunks); out.Reason != store.CommitInvalid {
+		t.Fatalf("tombstone with chunks: %+v", out)
+	}
+
+	if v, _ := f.st.VaultForMember(ctx, f.vault.ID, f.vault.OwnerID); v.Seq != 1 {
 		t.Fatalf("rejected commits advanced seq to %d", v.Seq)
 	}
 }
@@ -164,6 +213,105 @@ func TestConcurrentCommitsGetGaplessSeqs(t *testing.T) {
 	for i, c := range changes {
 		if c.Seq != int64(i+1) {
 			t.Fatalf("change %d has seq %d", i, c.Seq)
+		}
+	}
+}
+
+func TestConcurrentCommitsFromTwoConnections(t *testing.T) {
+	// Two stores on one file stand in for two processes (or two pooled
+	// connections) committing at once: neither may fail with SQLITE_BUSY.
+	url := "file:" + filepath.Join(t.TempDir(), "meta.db")
+	clk := storetest.NewClock()
+	open := func() *store.Store {
+		st, err := store.Open(context.Background(), store.Options{URL: url, Now: clk.Now})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		t.Cleanup(func() { _ = st.Close() })
+		return st
+	}
+	a, b := open(), open()
+	if err := a.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	u := storetest.SeedUser(t, a, "alice")
+	vault := storetest.SeedVault(t, a, u.ID)
+
+	const n = 40
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			st := a
+			if i%2 == 1 {
+				st = b
+			}
+			if out, err := st.Commit(ctx, storetest.NewVersion(vault.ID, storetest.FileID(byte(10+i)), nil)); err != nil || !out.OK() {
+				t.Errorf("commit %d: out %+v err %v", i, out, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	changes, err := b.Changes(ctx, vault.ID, 0, 100)
+	if err != nil || len(changes) != n {
+		t.Fatalf("changes = %d, err %v", len(changes), err)
+	}
+	for i, c := range changes {
+		if c.Seq != int64(i+1) {
+			t.Fatalf("change %d has seq %d", i, c.Seq)
+		}
+	}
+}
+
+func TestCommitTouchesReferencedChunks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "meta.db")
+	clk := storetest.NewClock()
+	st, err := store.Open(ctx, store.Options{URL: "file:" + path, Now: clk.Now})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	u := storetest.SeedUser(t, st, "alice")
+	vault := storetest.SeedVault(t, st, u.ID)
+	storetest.SeedChunk(t, st, vault.ID, storetest.ChunkID(1), 10)
+	storetest.SeedChunk(t, st, vault.ID, storetest.ChunkID(2), 10)
+	seeded := clk.Now().UnixMilli()
+	clk.Advance(time.Hour)
+	storetest.MustCommit(t, st, storetest.NewVersion(vault.ID, storetest.FileID(1), nil, storetest.ChunkID(1)))
+
+	raw, err := sql.Open("libsql", "file:"+path)
+	if err != nil {
+		t.Fatalf("open raw: %v", err)
+	}
+	defer raw.Close()
+	touchedAt := func(id []byte) int64 {
+		var ms int64
+		if err := raw.QueryRowContext(ctx, `SELECT touched_at FROM chunks WHERE vault_id = ? AND chunk_id = ?`, vault.ID, id).Scan(&ms); err != nil {
+			t.Fatalf("read touched_at: %v", err)
+		}
+		return ms
+	}
+	if got := touchedAt(storetest.ChunkID(1)); got != clk.Now().UnixMilli() {
+		t.Errorf("referenced chunk touched_at = %d, want %d", got, clk.Now().UnixMilli())
+	}
+	if got := touchedAt(storetest.ChunkID(2)); got != seeded {
+		t.Errorf("unreferenced chunk touched_at = %d, want %d", got, seeded)
+	}
+}
+
+func TestPagingRejectsNonPositiveLimit(t *testing.T) {
+	f := newFixture(t)
+	storetest.MustCommit(t, f.st, storetest.NewVersion(f.vault.ID, storetest.FileID(1), nil))
+	for _, limit := range []int{0, -1} {
+		if got, err := f.st.Changes(ctx, f.vault.ID, 0, limit); err == nil {
+			t.Errorf("Changes limit %d = %d versions, want error", limit, len(got))
+		}
+		if got, err := f.st.Heads(ctx, f.vault.ID, nil, limit); err == nil {
+			t.Errorf("Heads limit %d = %d heads, want error", limit, len(got))
 		}
 	}
 }
