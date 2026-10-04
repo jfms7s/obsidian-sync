@@ -63,6 +63,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("DELETE /v1/devices/{device}", h.authed(h.revokeDevice))
 	mux.HandleFunc("GET /v1/keys", h.authed(h.getKeys))
 	mux.HandleFunc("PUT /v1/keys", h.authed(h.putKeys))
+	h.registerVaultRoutes(mux)
 	if d.Hub != nil {
 		mux.Handle("GET /v1/ws", d.Hub)
 	}
