@@ -5,6 +5,7 @@ go 1.23
 require google.golang.org/protobuf v1.35.2
 
 require (
+	github.com/coder/websocket v1.8.12
 	github.com/tursodatabase/go-libsql v0.0.0-20260424063416-3051e37e6e04
 	golang.org/x/crypto v0.31.0
 	gopkg.in/yaml.v3 v3.0.1
