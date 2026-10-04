@@ -127,42 +127,23 @@ type authedHandler func(w http.ResponseWriter, r *http.Request, sess auth.Sessio
 // authed authenticates the bearer token, then spends one of the device's
 // requests before next runs.
 //
-// Requests with a missing, unknown or revoked token spend from a per-address
-// budget, which is checked before the token is looked up: once an address
-// has used it up, all its bearer requests wait, valid ones included, so token
-// guessing gets no answers. Valid tokens never spend from it, so a well-behaved
-// client is only ever held back by a bad token from its own address. The check
-// and the spend are not one atomic step, so many concurrent guesses can each
-// pass the check before the first is counted; that slack is bounded by the
-// lookup's latency, and tokens are 256 random bits in any case.
+// A request with a missing, unknown or revoked token spends from a
+// per-address budget instead, and once that is used up gets 429 rather than
+// 401. The token is always looked up first (one indexed query), so valid
+// tokens never touch that budget and are never blocked by it: behind a shared
+// proxy or NAT, a stranger sending junk tokens must not stop everyone's sync.
+// Tokens are 256 random bits, so answering a guess reveals nothing useful.
 func (h *handlers) authed(next authedHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var ipKey string
-		if h.limits.authFail != nil {
-			ipKey = h.clientKey(r)
-			if retry := h.limits.authFail.Delay(ipKey); retry > 0 {
-				writeRateLimited(w, retry)
-				return
-			}
-		}
-		fail := func(err error) {
-			if h.limits.authFail != nil {
-				switch apperr.CodeOf(err) {
-				case apperr.Unauthorized, apperr.DeviceRevoked:
-					h.limits.authFail.Take(ipKey)
-				}
-			}
-			h.writeError(w, r, err)
-		}
 		scheme, token, _ := strings.Cut(strings.TrimSpace(r.Header.Get("Authorization")), " ")
 		token = strings.TrimSpace(token)
 		if !strings.EqualFold(scheme, "Bearer") || token == "" {
-			fail(auth.ErrUnauthorized)
+			h.authFailed(w, r, auth.ErrUnauthorized)
 			return
 		}
 		sess, err := h.auth.Authenticate(r.Context(), token)
 		if err != nil {
-			fail(err)
+			h.authFailed(w, r, err)
 			return
 		}
 		if h.limits.device != nil {
@@ -173,6 +154,22 @@ func (h *handlers) authed(next authedHandler) http.HandlerFunc {
 		}
 		next(w, r, sess)
 	}
+}
+
+// authFailed answers a failed bearer authentication. Token failures spend
+// from the client address's bad-token budget, answered with 429 once it is
+// exhausted; other errors (such as a store failure) pass through.
+func (h *handlers) authFailed(w http.ResponseWriter, r *http.Request, err error) {
+	if h.limits.authFail != nil {
+		switch apperr.CodeOf(err) {
+		case apperr.Unauthorized, apperr.DeviceRevoked:
+			if ok, retry := h.limits.authFail.Take(h.clientKey(r)); !ok {
+				writeRateLimited(w, retry)
+				return
+			}
+		}
+	}
+	h.writeError(w, r, err)
 }
 
 // recoverer turns a handler panic into an INTERNAL error, unless the handler

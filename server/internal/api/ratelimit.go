@@ -38,7 +38,7 @@ type limiters struct {
 	device *ratelimit.Limiter // key: device ID
 	ip     *ratelimit.Limiter // key: client address; login and WebSocket upgrade
 	// authFail is kept apart from ip so that logins and WebSocket reconnects
-	// from an address never block that address's valid-token requests.
+	// do not use up an address's allowance for bad bearer tokens.
 	authFail *ratelimit.Limiter // key: client address; bad bearer tokens
 	clients  *clientip.Resolver
 	xffOnce  sync.Once
@@ -69,7 +69,8 @@ func (h *handlers) clientKey(r *http.Request) string {
 	if untrustedXFF {
 		h.limits.xffOnce.Do(func() {
 			h.log.Warn("ignoring X-Forwarded-For from a peer not in trusted_proxies; "+
-				"if obsync runs behind a reverse proxy, list it there or all clients share its rate limits",
+				"if obsync runs behind a reverse proxy, add it to trusted_proxies (OBSYNC_TRUSTED_PROXIES) "+
+				"or all clients share its per-IP rate limits",
 				"peer", r.RemoteAddr)
 		})
 	}

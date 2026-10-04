@@ -111,8 +111,8 @@ func TestHealthIsExempt(t *testing.T) {
 	}
 }
 
-// Requests with a missing, unknown or revoked token draw on a per-IP budget
-// checked before the token is looked up; valid tokens do not touch it.
+// Requests with a missing, unknown or revoked token draw on a per-IP budget;
+// valid tokens do not touch it.
 func TestInvalidTokenThrottledPerIP(t *testing.T) {
 	e := newTestEnvLimited(t, api.RateLimits{IPRPS: 1, IPBurst: 3}, nil)
 	e.createUser("alice", "correct horse")
@@ -130,8 +130,7 @@ func TestInvalidTokenThrottledPerIP(t *testing.T) {
 		}
 	}
 	wantLimited(t, e.serve("GET", "/v1/devices", "guess-3", client1), "1")
-	// Blocked before lookup: even a valid token from that address waits.
-	wantLimited(t, e.serve("GET", "/v1/devices", token, client1), "1")
+	wantLimited(t, e.serve("GET", "/v1/devices", "", client1), "1")
 	// Other addresses are unaffected.
 	if w := e.serve("GET", "/v1/devices", "guess-4", "198.51.100.9:1"); w.Code != 401 {
 		t.Fatalf("other IP = %d", w.Code)
@@ -188,5 +187,24 @@ func TestRateLimitsDisabledByDefault(t *testing.T) {
 	// (Fewer logins: the per-username login limiter still applies.)
 	for i := 0; i < 4; i++ {
 		notLimited(t, e.serve("POST", "/v1/auth/login", "", client1))
+	}
+}
+
+// Regression: an address whose bad-token budget is spent (a stranger behind
+// the same proxy or NAT sending junk tokens) must not block valid tokens from
+// it; only further bad tokens get 429.
+func TestBadTokenLimitNeverBlocksValidTokens(t *testing.T) {
+	e := newTestEnvLimited(t, api.RateLimits{IPRPS: 0.01, IPBurst: 2}, nil)
+	e.createUser("alice", "correct horse")
+	token, _ := e.login("alice", "correct horse")
+	for i := 0; i < 2; i++ {
+		e.serve("GET", "/v1/devices", "junk", client1)
+	}
+	wantLimited(t, e.serve("GET", "/v1/devices", "junk", client1), "100")
+	for i := 0; i < 5; i++ {
+		if w := e.serve("GET", "/v1/devices", token, client1); w.Code != 200 {
+			t.Fatalf("valid token from a blocked address = %d %q", w.Code, w.Body.Bytes())
+		}
+		wantLimited(t, e.serve("GET", "/v1/devices", "junk", client1), "100")
 	}
 }

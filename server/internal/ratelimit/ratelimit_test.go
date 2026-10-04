@@ -60,29 +60,6 @@ func TestIntervalForRate(t *testing.T) {
 	}
 }
 
-// Delay reports the wait without spending a token or tracking a new key.
-func TestDelayDoesNotConsume(t *testing.T) {
-	clk := storetest.NewClock()
-	l := newLimiter(clk, 1, time.Minute, 0)
-	if d := l.Delay("a"); d != 0 {
-		t.Fatalf("Delay on unknown key = %v", d)
-	}
-	if l.Len() != 0 {
-		t.Fatal("Delay tracked a new key")
-	}
-	l.Take("a")
-	if d := l.Delay("a"); d != time.Minute {
-		t.Fatalf("Delay on drained key = %v", d)
-	}
-	clk.Advance(time.Minute)
-	if d := l.Delay("a"); d != 0 {
-		t.Fatalf("Delay after refill = %v", d)
-	}
-	if ok, _ := l.Take("a"); !ok {
-		t.Fatal("Delay consumed a token")
-	}
-}
-
 func TestTakeIsAtomic(t *testing.T) {
 	l := ratelimit.New(ratelimit.Options{Burst: 5, Interval: time.Hour})
 	var granted atomic.Int32

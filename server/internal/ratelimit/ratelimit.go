@@ -114,21 +114,6 @@ func (l *Limiter) Take(key string) (bool, time.Duration) {
 	return true, 0
 }
 
-// Delay reports how long until key has a token, without consuming one or
-// starting to track key: zero if a token is available now.
-func (l *Limiter) Delay(key string) time.Duration {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	e, ok := l.buckets[key]
-	if !ok {
-		return 0
-	}
-	if t := l.refilled(e.Value.(*bucket), l.now()); t < 1 {
-		return l.wait(t)
-	}
-	return 0
-}
-
 // Reset forgets key, restoring its full burst.
 func (l *Limiter) Reset(key string) {
 	l.mu.Lock()
