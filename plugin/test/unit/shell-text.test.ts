@@ -32,7 +32,7 @@ describe('diffLines', () => {
   });
 
   it('keeps the unchanged lines around an edit and still diffs long notes with an edit in the middle', () => {
-    const before = Array.from({ length: 4000 }, (_, i) => (i % 3 === 0 ? '' : `line ${i}`));
+    const before = Array.from({ length: 4000 }, (_, i) => (i % 3 === 1 ? '' : `line ${i}`));
     const after = [...before];
     after[2000] = 'edited';
     const out = diffLines(before.join('\n'), after.join('\n'))!;
