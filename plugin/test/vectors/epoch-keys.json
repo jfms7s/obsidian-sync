@@ -1,0 +1,34 @@
+{
+  "generated_by": "server/cmd/vectorgen (do not edit; run make vectors)",
+  "vectors": {
+    "cases": [
+      {
+        "vault_id": "0123456789abcdef0123456789abcdef",
+        "epoch": 1,
+        "epoch_key": "18733f4edbbbe66e3c29ac212c5807379be801baf017b51687fb5c9319641362",
+        "content_key": "02abe9bed0905c460742bb9877d26796eda30eccc063ac3d6adbdbba897b4133",
+        "meta_key": "5dbb0b1f4f4c1413f94c966a1c9834ef20aec589e66fdd723dbf52fb5b9fda74",
+        "chunk_id_key": "a66f81b64b0363d349ec1601bcb62204b1805ef38b4cb7f34f6b1443ca6dc870",
+        "vault_name_key": "9d528151f65cf48d18fecb143e805ec7cd17fbc26f7e34f743f8b4f09e94ee27"
+      },
+      {
+        "vault_id": "fedcba9876543210fedcba9876543210",
+        "epoch": 2,
+        "epoch_key": "95a244b4123ae3496bcd3337772aedf459eaa60b36ec886f8aa08259b12b69b3",
+        "content_key": "bd2776b4634767228981326790d8ee14afac0a22291c2e8f5f10e98d8c8b4336",
+        "meta_key": "db8ec9bd05e357988f8e8ce1b85f7acb4ddd9a3a1c63617201b307808bdad4fb",
+        "chunk_id_key": "be02f93056f7113acf055da8c4d733580e8630166e2681e6cc088be4316e56de",
+        "vault_name_key": "da8d264170d3e0606103b75648c4db96c4ef65f466c7caaa093d8e92f844351f"
+      },
+      {
+        "vault_id": "00000000000000000000000000000001",
+        "epoch": 4294967295,
+        "epoch_key": "655e282a170c30026e1c626880268c5be148d6c872fdefec1f7ac65d01f014ee",
+        "content_key": "3c9979c50934c104cecd872499af075b6f70c9a213721843c3cb238f4916a602",
+        "meta_key": "369210b3159ae9ee0f6585e346e45241445931da88a7c6f22ea183fb0db9e51b",
+        "chunk_id_key": "192f6e38b3f065e329c131d600b31f1b78dd966732a666a8bf06142636f7c533",
+        "vault_name_key": "256dcace3d50f8cf92877277bae49353f222a982f4cd932efe00e2cc80af71d3"
+      }
+    ]
+  }
+}

@@ -5,7 +5,7 @@ export PATH := $(BIN):$(PATH)
 export GOTOOLCHAIN := auto
 export CGO_ENABLED := 1
 
-.PHONY: tools proto proto-lint test vet plugin-test
+.PHONY: tools proto proto-lint test vet plugin-test vectors
 
 tools: plugin/node_modules
 	GOBIN=$(BIN) go install github.com/bufbuild/buf/cmd/buf@v1.47.2
@@ -30,3 +30,7 @@ vet:
 
 plugin-test: plugin/node_modules
 	cd plugin && npm run typecheck && npm test
+
+# Known-answer vectors for the plugin, computed by the Go implementation.
+vectors:
+	cd server && go run ./cmd/vectorgen -out ../plugin/test/vectors

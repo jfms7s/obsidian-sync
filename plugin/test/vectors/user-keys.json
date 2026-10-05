@@ -1,0 +1,57 @@
+{
+  "generated_by": "server/cmd/vectorgen (do not edit; run make vectors)",
+  "vectors": {
+    "cases": [
+      {
+        "user_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "enc_priv": "2ba131c927a3ef7af1560a1142c4a6106bba04d2f0f7657ab90b5ced858d0321",
+        "enc_pub": "18d86142bd66a24a533b8b1e28a8f2fc299768a5be40eb74e94c75c9fe75f114",
+        "sign_seed": "deabee4285b5516b84d5c5680b9918fb863de06ed1979485b38f2d0afc8afcbb",
+        "sign_pub": "0388cfa7409752736db585408ff2ff0237f38f3274c20ca638b4c0ec02ae5239",
+        "passphrase_input": "correct horse battery staple",
+        "passphrase": "correct horse battery staple",
+        "pass_salt": "7c4a9164a13159a45d5265049f2dae6e",
+        "pass_params": {
+          "memory_kib": 8192,
+          "iterations": 1,
+          "parallelism": 1
+        },
+        "pass_kek": "28e65fdd8b328084c234046a0f744404f176753b2b050fa79204bd17a8c5c9bc",
+        "pass_nonce": "89e2efb8a076dd0b17e75828",
+        "pass_aad": "6f6273796e632f76312f6b6579732d70617373aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa18d86142bd66a24a533b8b1e28a8f2fc299768a5be40eb74e94c75c9fe75f1140388cfa7409752736db585408ff2ff0237f38f3274c20ca638b4c0ec02ae5239107c4a9164a13159a45d5265049f2dae6e000020000000000100000001",
+        "pass_wrapped": "89e2efb8a076dd0b17e7582807bf263653893e0366b7def17cb747a691a14cb6bca5b7ba09018f17f7ae63e646a4f1d01f3ff594de899a16dc43f8b489d75582a2e6bec35dfc00611e587a5a0f2c17d6ca35b1c7f694859d893f6db1",
+        "recovery_key": "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
+        "recovery_words": "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title",
+        "recovery_kek": "6775b2de486693bbc621317dcc79ca01b3f97c8d0b3e528e67043e266626e403",
+        "recovery_nonce": "052607f6206213067cb889a7",
+        "recovery_aad": "6f6273796e632f76312f6b6579732d7265636f76657279aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa18d86142bd66a24a533b8b1e28a8f2fc299768a5be40eb74e94c75c9fe75f1140388cfa7409752736db585408ff2ff0237f38f3274c20ca638b4c0ec02ae5239",
+        "recovery_wrapped": "052607f6206213067cb889a789a200a261f92ce056ac54e6813abdf9850b51855aad8880c725c6e62a443cf2a8e7669a27a3d550744f356639eddc6a5f58986e64848cbc8d09b41c9260d7333d62447d2e434535a5e0e96c243f037c"
+      },
+      {
+        "user_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "enc_priv": "3efda6410b67e235643c5ca722d3dc2913850f02d8ab845dc4abaabaa1c2f35f",
+        "enc_pub": "d74003d51780d8f53e57da174417004057c0bb06490587739e5f1ee4707c0f15",
+        "sign_seed": "a9d91c0549338e301ac9fc7d13dd4446799e53c7fc84384f135869c741cca68f",
+        "sign_pub": "76b18cd531a70612618030c7ead9b071cad946fa9dfff4f6199e2c5f427af190",
+        "passphrase_input": "pásse-partout",
+        "passphrase": "pásse-partout",
+        "pass_salt": "735164a4aaf03e05af0f50d35379cbd4",
+        "pass_params": {
+          "memory_kib": 19456,
+          "iterations": 2,
+          "parallelism": 1
+        },
+        "pass_kek": "8afa5a359d9edd02252110ea744b617100f8274eb5027411f109792dd4170b4c",
+        "pass_nonce": "582dc24992e5f1b2d9e2d4bc",
+        "pass_aad": "6f6273796e632f76312f6b6579732d70617373bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbd74003d51780d8f53e57da174417004057c0bb06490587739e5f1ee4707c0f1576b18cd531a70612618030c7ead9b071cad946fa9dfff4f6199e2c5f427af19010735164a4aaf03e05af0f50d35379cbd400004c000000000200000001",
+        "pass_wrapped": "582dc24992e5f1b2d9e2d4bca25d2a1a65d13cc7f4196490ce76088fd5c70b9400e2b428374062a296ad37e70d9a807b350af3fe2bd8bd0402be70368eb46b3e4dbcebc6796c16579c0f751e76ef4bf81eb2baabc6af23c2949bd5ef",
+        "recovery_key": "8080808080808080808080808080808080808080808080808080808080808080",
+        "recovery_words": "letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic bless",
+        "recovery_kek": "02d168b354c107ca2f9d179f64c75c4f5148eb609a4176d63e4db300da7a7d5e",
+        "recovery_nonce": "414333a00298d5e0fb21374b",
+        "recovery_aad": "6f6273796e632f76312f6b6579732d7265636f76657279bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbd74003d51780d8f53e57da174417004057c0bb06490587739e5f1ee4707c0f1576b18cd531a70612618030c7ead9b071cad946fa9dfff4f6199e2c5f427af190",
+        "recovery_wrapped": "414333a00298d5e0fb21374b8bcc03d55c6a674b2fa6c710ba1474bd3fd3f48946daacf5bffb8ca9e6f8138c55965ce0eecfb2ef4e36a2770931f46cf0690708f087bd62b532c86c87776d28bd3662fbe6d466a619c15c34b2707a0d"
+      }
+    ]
+  }
+}

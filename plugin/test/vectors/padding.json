@@ -1,0 +1,39 @@
+{
+  "generated_by": "server/cmd/vectorgen (do not edit; run make vectors)",
+  "vectors": {
+    "cases": [
+      {
+        "length": 0,
+        "padded_length": 128
+      },
+      {
+        "length": 1,
+        "padded_length": 128
+      },
+      {
+        "length": 124,
+        "padded_length": 128
+      },
+      {
+        "length": 125,
+        "padded_length": 256
+      },
+      {
+        "length": 252,
+        "padded_length": 256
+      },
+      {
+        "length": 253,
+        "padded_length": 512
+      },
+      {
+        "length": 1000,
+        "padded_length": 1024
+      },
+      {
+        "length": 5000,
+        "padded_length": 8192
+      }
+    ]
+  }
+}
