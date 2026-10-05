@@ -571,6 +571,18 @@ export class Outside {
   }
 }
 
+/** What Obsidian's "Deleted files" setting says: the system trash, its .trash folder, or deleting for good. */
+export type TrashPreference = 'system' | 'local' | 'permanent';
+
+export class FileManager {
+  constructor(private readonly vault: Vault, readonly preference: TrashPreference = 'system') {}
+
+  async trashFile(file: TAbstractFile): Promise<void> {
+    if (this.preference === 'permanent') await this.vault.delete(file, true);
+    else await this.vault.trash(file, this.preference === 'system');
+  }
+}
+
 // ---------- the rest of the module surface used by the shell ----------
 
 export function normalizePath(path: string): string {
@@ -759,6 +771,7 @@ export class PluginSettingTab {
 
 export class App {
   readonly vault: Vault;
+  readonly fileManager: FileManager;
   private storage = new Map<string, unknown>();
   activeFile: TFile | null = null;
   readonly workspace = {
@@ -768,6 +781,7 @@ export class App {
   };
   constructor(vault: Vault) {
     this.vault = vault;
+    this.fileManager = new FileManager(vault);
   }
   loadLocalStorage(key: string): unknown {
     return this.storage.get(key) ?? null;

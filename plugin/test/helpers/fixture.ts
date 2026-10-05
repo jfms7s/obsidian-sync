@@ -81,7 +81,7 @@ export async function newDevice(srv: TestServer, user: User, o: DeviceOptions): 
   const events: EngineEvent[] = [];
   const ctx: SyncContext = {
     api, state, adapter, ring, deviceName: o.name, clock, random,
-    ignore: new IgnoreRules(o.ignoreGlobs ?? [], { caseInsensitive: adapter.caseInsensitive }), maxFileBytes: o.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES, emit: (e) => events.push(e),
+    ignore: new IgnoreRules(o.ignoreGlobs ?? [], { caseInsensitive: adapter.caseInsensitive, configDir: '.obsidian' }), maxFileBytes: o.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES, emit: (e) => events.push(e),
   };
   return { name: o.name, api, state, adapter, net, ring, session, vaultId: stored.vaultId, events, ctx, clock, random };
 }

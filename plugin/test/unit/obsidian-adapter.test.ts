@@ -1,16 +1,17 @@
-import type { Vault as RealVault } from 'obsidian';
+import type { FileManager as RealFileManager, Vault as RealVault } from 'obsidian';
 import { describe, expect, it, vi } from 'vitest';
 import { ObsidianAdapter, TEMP_SUFFIX } from '../../src/shell/obsidian-adapter';
 import type { AdapterEvent } from '../../src/vault/adapter';
 import { describeAdapterContract, type ContractFixture } from '../contract/adapter-contract';
-import { Outside, TFolder, Vault, type VaultOptions } from '../fakes/obsidian';
+import { FileManager, Outside, TFolder, Vault, type TrashPreference, type VaultOptions } from '../fakes/obsidian';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 const PROBE_DIR = '.obsidian/plugins/obsync';
 
-async function build(o: VaultOptions = {}) {
+async function build(o: VaultOptions & { trash?: TrashPreference } = {}) {
   const vault = new Vault(o);
-  const adapter = await ObsidianAdapter.create(vault as unknown as RealVault, PROBE_DIR);
+  const fileManager = new FileManager(vault, o.trash ?? 'system');
+  const adapter = await ObsidianAdapter.create(vault as unknown as RealVault, PROBE_DIR, fileManager as unknown as RealFileManager);
   const outside = new Outside(vault);
   const fixture: ContractFixture = { adapter, outside: (p, d) => outside.write(p, d), settle: async () => vault.flushWatcher() };
   return { vault, adapter, outside, fixture };
@@ -60,24 +61,31 @@ describe('ObsidianAdapter', () => {
     expect(await adapter.list()).toEqual(['.config/x.json']);
   });
 
-  it('moves deleted files to the system trash, or to .trash when there is none, never deleting for good', async () => {
-    const withSystem = await build({ systemTrash: true });
-    await withSystem.adapter.write('a.md', bytes('kept'));
-    await withSystem.outside.write('b.md', bytes('also kept')); // not indexed in 'lagging' mode: the disk route
+  it('deletes indexed files the way the user\'s Obsidian setting says, and unindexed ones to a trash', async () => {
+    for (const [trash, expected] of [['system', 'system'], ['local', '.trash'], ['permanent', 'gone']] as const) {
+      const { vault, adapter } = await build({ trash });
+      await adapter.write('a.md', bytes('kept'));
+      await adapter.remove('a.md');
+      expect(await adapter.list()).toEqual(expected === '.trash' ? ['.trash/a.md'] : []);
+      expect(vault.systemTrashed.length).toBe(expected === 'system' ? 1 : 0);
+    }
+  });
+
+  it('moves files the index does not know to the system trash, or to .trash when there is none, never deleting for good', async () => {
+    const withSystem = await build({ systemTrash: true, index: 'lagging' });
+    withSystem.outside.write('a.md', bytes('kept'));
+    withSystem.outside.write('b.md', bytes('also kept')); // not indexed: the disk route
     await withSystem.adapter.remove('a.md');
     await withSystem.adapter.remove('b.md');
     expect(withSystem.vault.systemTrashed.map((t) => `${t.path}:${new TextDecoder().decode(t.data!)}`).sort()).toEqual(['a.md:kept', 'b.md:also kept']);
 
-    for (const index of ['sync', 'lagging'] as const) {
-      const local = await build({ systemTrash: false, index });
-      await local.adapter.write('a.md', bytes('kept'));
-      await local.outside.write('b.md', bytes('also kept'));
-      await local.adapter.remove('a.md');
-      await local.adapter.remove('b.md');
-      expect(local.vault.fs.paths()).toEqual(expect.arrayContaining(['.trash/a.md', '.trash/b.md']));
-      expect(await local.adapter.list()).toEqual(['.trash/a.md', '.trash/b.md']);
-      expect(new TextDecoder().decode(local.vault.fs.read('.trash/a.md'))).toBe('kept');
-    }
+    const local = await build({ systemTrash: false, index: 'lagging' });
+    local.outside.write('a.md', bytes('kept'));
+    local.outside.write('b.md', bytes('also kept'));
+    await local.adapter.remove('a.md');
+    await local.adapter.remove('b.md');
+    expect(await local.adapter.list()).toEqual(['.trash/a.md', '.trash/b.md']);
+    expect(new TextDecoder().decode(local.vault.fs.read('.trash/a.md'))).toBe('kept');
   });
 
   it('replaces an empty folder, indexed or not, when a file takes its name', async () => {

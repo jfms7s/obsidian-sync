@@ -8,6 +8,7 @@ export default defineConfig({
     // Conflict-copy names use local time; pin it so names are reproducible.
     env: { TZ: 'UTC' },
     pool: 'forks',
+    setupFiles: ['test/helpers/setup-transport.ts'],
     projects: [
       {
         extends: true,
