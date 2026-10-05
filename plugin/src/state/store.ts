@@ -119,25 +119,32 @@ export interface StoredVault {
   currentEpoch: number;
 }
 
-export class LocalState {
-  private gen = 0;
+/** Creates or migrates the stores; each step runs only for databases older than it. */
+export function upgradeSchema(d: IDBDatabase, oldVersion: number): void {
+  if (oldVersion < 1) {
+    d.createObjectStore(KV);
+    const files = d.createObjectStore(FILES, { keyPath: 'fileId' });
+    files.createIndex('path', 'path', { unique: false });
+    d.createObjectStore(BASES);
+    d.createObjectStore(DIRTY, { keyPath: 'path' });
+    d.createObjectStore(PENDING, { keyPath: 'fileId' });
+    d.createObjectStore(REFUSED, { keyPath: 'path' });
+    d.createObjectStore(FAILURES, { keyPath: 'key' });
+  }
+}
 
+/** The failure key of a pushed path (see sync/failures.ts). */
+export const pushFailureKey = (path: string): string => `push:${path}`;
+
+/** KV key of the last dirty generation handed out; never reset, so generations stay unique. */
+const DIRTY_GEN = 'dirtyGen';
+
+export class LocalState {
   private constructor(private readonly db: IDBDatabase) {}
 
   static async open(factory: IDBFactory, name: string): Promise<LocalState> {
-    const db = await openDb(factory, name, DB_VERSION, (d) => {
-      d.createObjectStore(KV);
-      const files = d.createObjectStore(FILES, { keyPath: 'fileId' });
-      files.createIndex('path', 'path', { unique: false });
-      d.createObjectStore(BASES);
-      d.createObjectStore(DIRTY, { keyPath: 'path' });
-      d.createObjectStore(PENDING, { keyPath: 'fileId' });
-      d.createObjectStore(REFUSED, { keyPath: 'path' });
-      d.createObjectStore(FAILURES, { keyPath: 'key' });
-    });
-    const st = new LocalState(db);
-    for (const e of await st.dirtyEntries()) st.gen = Math.max(st.gen, e.gen);
-    return st;
+    const db = await openDb(factory, name, DB_VERSION, upgradeSchema);
+    return new LocalState(db);
   }
 
   close(): void {
@@ -179,6 +186,14 @@ export class LocalState {
   async getCursorAnchor(): Promise<CursorAnchor | null> { return (await this.kvGet<CursorAnchor | null>('cursorAnchor')) ?? null; }
   setCursorAnchor(a: CursorAnchor | null): Promise<void> { return this.kvPut('cursorAnchor', a); }
 
+  /** Moves the cursor and its anchor together, so a crash cannot leave an anchor for another seq. */
+  async setCursorAndAnchor(seq: number, anchor: CursorAnchor | null): Promise<void> {
+    await inTx(this.db, [KV], 'readwrite', async (t) => {
+      await req(t.objectStore(KV).put(seq, 'cursor'));
+      await req(t.objectStore(KV).put(anchor, 'cursorAnchor'));
+    });
+  }
+
   async getSetting<T>(key: string, fallback: T): Promise<T> { return (await this.kvGet<T>(`setting:${key}`)) ?? fallback; }
   setSetting(key: string, value: unknown): Promise<void> { return this.kvPut(`setting:${key}`, value); }
 
@@ -203,15 +218,19 @@ export class LocalState {
 
   /**
    * Stores what was synced for one file in one transaction: the record, its
-   * base text (a string to store, null to drop) and, optionally, removes the
-   * pending commit that produced it.
+   * base text (a string to store, null to drop) and, with clearPending, the
+   * removal of the pending commit that produced it: only if that pending
+   * commit is for rec.versionId, so a newer one is never lost.
    */
   async recordSynced(rec: FileRecord, base: string | null, clearPending = false): Promise<void> {
     await inTx(this.db, [FILES, BASES, PENDING], 'readwrite', async (t) => {
       await req(t.objectStore(FILES).put({ ...rec, hasBase: base !== null }));
       if (base !== null) await req(t.objectStore(BASES).put(base, rec.fileId));
       else await req(t.objectStore(BASES).delete(rec.fileId));
-      if (clearPending) await req(t.objectStore(PENDING).delete(rec.fileId));
+      if (clearPending) {
+        const p = (await req(t.objectStore(PENDING).get(rec.fileId))) as PendingCommit | undefined;
+        if (p && p.versionId === rec.versionId) await req(t.objectStore(PENDING).delete(rec.fileId));
+      }
     });
   }
 
@@ -222,31 +241,44 @@ export class LocalState {
 
   // ---------- dirty paths ----------
 
-  /** Marks path as changed locally. A later rename hint replaces an earlier one. */
+  /**
+   * Marks path as changed locally. A later rename hint replaces an earlier
+   * one. The generation counter lives in the database, in the same
+   * transaction, so two LocalState instances never hand out the same one.
+   * A rename drops the push failure of the old path (it no longer exists).
+   */
   async markDirty(path: string, renamedFrom?: string): Promise<number> {
-    const gen = ++this.gen;
-    await inTx(this.db, [DIRTY], 'readwrite', async (t) => {
+    return inTx(this.db, [DIRTY, KV, FAILURES], 'readwrite', async (t) => {
+      const kv = t.objectStore(KV);
+      const gen = (((await req(kv.get(DIRTY_GEN))) as number | undefined) ?? (await maxGen(t.objectStore(DIRTY)))) + 1;
+      await req(kv.put(gen, DIRTY_GEN));
       const store = t.objectStore(DIRTY);
       const prev = (await req(store.get(path))) as DirtyEntry | undefined;
       const entry: DirtyEntry = { path, gen };
       const hint = renamedFrom ?? prev?.renamedFrom;
       if (hint !== undefined) entry.renamedFrom = hint;
       await req(store.put(entry));
+      if (renamedFrom !== undefined && renamedFrom !== path) await req(t.objectStore(FAILURES).delete(pushFailureKey(renamedFrom)));
+      return gen;
     });
-    return gen;
   }
 
   dirtyEntries(): Promise<DirtyEntry[]> {
     return inTx(this.db, [DIRTY], 'readonly', (t) => req(t.objectStore(DIRTY).getAll()) as Promise<DirtyEntry[]>);
   }
 
-  /** Removes path's entry if nothing marked it again since gen; reports whether it did. */
+  /**
+   * Removes path's entry if nothing marked it again since gen; reports
+   * whether it did. Push is then done with the path, so its push failure
+   * (if any) goes too.
+   */
   async clearDirty(path: string, gen: number): Promise<boolean> {
-    return inTx(this.db, [DIRTY], 'readwrite', async (t) => {
+    return inTx(this.db, [DIRTY, FAILURES], 'readwrite', async (t) => {
       const store = t.objectStore(DIRTY);
       const cur = (await req(store.get(path))) as DirtyEntry | undefined;
       if (!cur || cur.gen !== gen) return false;
       await req(store.delete(path));
+      await req(t.objectStore(FAILURES).delete(pushFailureKey(path)));
       return true;
     });
   }
@@ -319,7 +351,12 @@ export class LocalState {
     });
   }
 
-  /** Drops all sync state for the vault (switching vaults or logging out), keeping nothing but settings. */
+  /**
+   * Drops all sync state for the vault (switching vaults or logging out):
+   * files, bases, pending commits, dirty paths, refusals, failures, the
+   * cursor and the stored vault keys. The session, the user's keys, a
+   * pending key setup, settings and the dirty generation counter are kept.
+   */
   async resetVaultState(): Promise<void> {
     await inTx(this.db, [FILES, BASES, PENDING, DIRTY, REFUSED, FAILURES, KV], 'readwrite', async (t) => {
       for (const s of [FILES, BASES, PENDING, DIRTY, REFUSED, FAILURES]) await req(t.objectStore(s).clear());
@@ -328,4 +365,10 @@ export class LocalState {
       await req(t.objectStore(KV).delete('vault'));
     });
   }
+}
+
+/** The highest generation among stored dirty entries (databases written before the counter was persisted). */
+async function maxGen(store: IDBObjectStore): Promise<number> {
+  const all = (await req(store.getAll())) as DirtyEntry[];
+  return all.reduce((m, e) => Math.max(m, e.gen), 0);
 }

@@ -16,13 +16,37 @@ export function done(t: IDBTransaction): Promise<void> {
   });
 }
 
+/**
+ * Opens (and upgrades) a database. The connection closes itself when another
+ * one needs a newer version, so this device never blocks an upgrade in
+ * another tab or window; callers notice by their next transaction failing.
+ * A blocked open rejects at once, and if it goes through later anyway, that
+ * late connection is closed instead of leaking.
+ */
 export function openDb(factory: IDBFactory, name: string, version: number, upgrade: (db: IDBDatabase, oldVersion: number) => void): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    let settled = false;
     const r = factory.open(name, version);
     r.onupgradeneeded = (ev) => upgrade(r.result, ev.oldVersion);
-    r.onsuccess = () => resolve(r.result);
-    r.onerror = () => reject(r.error ?? new Error(`cannot open IndexedDB ${name}`));
-    r.onblocked = () => reject(new Error(`IndexedDB ${name} is open elsewhere with an older version`));
+    r.onsuccess = () => {
+      const db = r.result;
+      if (settled) {
+        db.close();
+        return;
+      }
+      settled = true;
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
+    r.onerror = () => {
+      settled = true;
+      reject(r.error ?? new Error(`cannot open IndexedDB ${name}`));
+    };
+    r.onblocked = () => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`IndexedDB ${name} is open elsewhere with an older version`));
+    };
   });
 }
 
