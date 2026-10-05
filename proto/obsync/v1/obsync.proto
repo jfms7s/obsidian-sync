@@ -229,3 +229,16 @@ message ServerFrame {
     Error error = 4;
   }
 }
+
+// ---------- Client-side plaintexts ----------
+// The server never sees these; they only ever travel encrypted.
+
+// FileMeta is the plaintext of Commit.enc_meta and Version.enc_meta.
+message FileMeta {
+  string path = 1;         // vault-relative, NFC, '/' separators
+  int64 mtime_ms = 2;      // local modification time when committed
+  uint64 size = 3;         // plaintext size in bytes; 0 for a deletion
+  bytes content_hash = 4;  // SHA-256 of the plaintext; empty for a deletion
+  string renamed_from = 5; // the old path, on the create half of a rename
+  string device_name = 6;  // the committing device's name, for conflict copies
+}
