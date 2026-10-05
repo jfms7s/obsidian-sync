@@ -80,7 +80,8 @@ jobs:
           cache-dependency-path: plugin/package-lock.json
       - run: make tools proto vectors
       - name: Nothing changed
-        run: git diff --exit-code
+        run: |
+          test -z "$(git status --porcelain)" || { git status --porcelain; git diff; exit 1; }
 
   protocol:
     name: Protocol lint and compatibility
@@ -93,7 +94,9 @@ jobs:
       - name: Find the commit this branch left main at
         id: base
         if: github.event_name == 'pull_request'
-        run: echo "sha=$(git merge-base "origin/${{ github.base_ref }}" HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: echo "sha=$(git merge-base "origin/$BASE_REF" HEAD)" >> "$GITHUB_OUTPUT"
       - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
         with:
           lint: true
