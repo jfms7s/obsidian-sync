@@ -17,6 +17,18 @@ export class UnsyncedChangesError extends Error {
   }
 }
 
+/**
+ * On a case-insensitive file system, another file whose name differs only
+ * in letter case already holds the path; restoring would overwrite it.
+ * Rename or remove that file first.
+ */
+export class PathOccupiedError extends Error {
+  constructor(readonly path: string, readonly occupiedBy: string) {
+    super(`${path} cannot be restored: ${occupiedBy} already holds that name`);
+    this.name = 'PathOccupiedError';
+  }
+}
+
 export interface HistoryEntry {
   version: RemoteVersion;
   versionId: string; // hex
@@ -60,7 +72,9 @@ export async function readVersion(api: ApiClient, ring: VaultKeyring, entry: His
  * new version on top of the current head. For a trash entry (a tombstone),
  * the newest version with content is restored. A local file with unsynced
  * changes is never overwritten: that throws UnsyncedChangesError. So does a
- * commit of the file that is still waiting for the server's answer.
+ * local delete that is not synced yet, and a commit of the file that is
+ * still waiting for the server's answer. On a case-insensitive file system,
+ * a different file whose name differs only in case throws PathOccupiedError.
  */
 export async function restore(api: ApiClient, ring: VaultKeyring, adapter: VaultAdapter, state: LocalState, entry: HistoryEntry): Promise<string> {
   let target = entry;
@@ -76,10 +90,14 @@ export async function restore(api: ApiClient, ring: VaultKeyring, adapter: Vault
   const data = await readVersion(api, ring, target);
   if (await state.getPending(fileId)) throw new UnsyncedChangesError(path);
   const stat = await adapter.stat(path);
+  if (stat && stat.path !== path) throw new PathOccupiedError(path, stat.path);
   const local = stat ? await adapter.read(path) : null;
+  const rec = await state.getFile(fileId);
   if (local) {
-    const rec = await state.getFile(fileId);
     if (!rec || rec.deleted || rec.contentHash !== (await hashHex(local))) throw new UnsyncedChangesError(path);
+  } else if (rec && !rec.deleted) {
+    // Synced as live but gone here: a local delete (or rename) not pushed yet.
+    throw new UnsyncedChangesError(path);
   }
   if (!(await adapter.write(path, data, expectFor(stat)))) throw new UnsyncedChangesError(path);
   return path;
