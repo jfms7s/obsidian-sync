@@ -4,6 +4,7 @@ import { create, fromBinary, toBinary, type MessageInitShape } from '@bufbuild/p
 import { ClientFrameSchema, ErrorCode, ServerFrameSchema } from '../gen/obsync/v1/obsync_pb';
 import { backoffDelay, type BackoffPolicy, DEFAULT_BACKOFF } from '../util/backoff';
 import type { Clock, TimerHandle } from '../util/clock';
+import { toSafeNumber } from '../util/int';
 import type { Random } from '../util/random';
 import type { RateGate } from './gate';
 
@@ -73,7 +74,12 @@ export class HubClient {
   start(): void {
     if (!this.stopped) return;
     this.stopped = false;
-    this.connect();
+    const wait = this.opts.gate?.remainingMs() ?? 0;
+    if (wait > 0) this.reconnectTimer = this.opts.clock.setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, wait);
+    else this.connect();
   }
 
   stop(): void {
@@ -81,14 +87,7 @@ export class HubClient {
     this.clearTimers();
     const ws = this.ws;
     this.ws = null;
-    if (ws) {
-      ws.onclose = ws.onmessage = ws.onerror = ws.onopen = null;
-      try {
-        ws.close(1000, 'client stopping');
-      } catch {
-        // already closed
-      }
-    }
+    if (ws) detach(ws, 1000, 'client stopping');
     if (this.authed) {
       this.authed = false;
       this.handlers.onDisconnected();
@@ -144,6 +143,7 @@ export class HubClient {
   }
 
   private schedulePing(): void {
+    if (this.pingTimer) this.opts.clock.clearTimeout(this.pingTimer);
     this.pingTimer = this.opts.clock.setTimeout(() => {
       this.pingTimer = null;
       this.send({ case: 'ping', value: { nonce: BigInt(++this.nonce) } });
@@ -152,11 +152,8 @@ export class HubClient {
         this.pongTimer = null;
         const ws = this.ws;
         if (ws) {
-          try {
-            ws.close(4000, 'pong timeout');
-          } catch {
-            // ignore
-          }
+          // Detached first: the socket's own (late) close must not run onClose again.
+          detach(ws, 4000, 'pong timeout');
           this.onClose(ws);
         }
       }, this.opts.pongTimeoutMs ?? PONG_TIMEOUT_MS);
@@ -171,11 +168,6 @@ export class HubClient {
     } catch {
       return;
     }
-    if (this.pongTimer) {
-      // Any frame proves the connection is alive.
-      this.opts.clock.clearTimeout(this.pongTimer);
-      this.pongTimer = null;
-    }
     const f = frame.frame;
     switch (f.case) {
       case 'authOk':
@@ -187,7 +179,12 @@ export class HubClient {
         this.handlers.onConnected();
         break;
       case 'notify': {
-        const seq = Number(f.value.seq);
+        let seq: number;
+        try {
+          seq = toSafeNumber(f.value.seq, 'seq');
+        } catch {
+          break;
+        }
         // The server keeps notifications monotonic per vault; this guards anyway.
         if (seq > (this.lastSeq.get(f.value.vaultId) ?? -1)) {
           this.lastSeq.set(f.value.vaultId, seq);
@@ -196,6 +193,10 @@ export class HubClient {
         break;
       }
       case 'pong':
+        // Only a Pong ends the wait: other frames (a Notify racing the Ping)
+        // do not schedule the next Ping, so they must not cancel this one.
+        if (this.pongTimer) this.opts.clock.clearTimeout(this.pongTimer);
+        this.pongTimer = null;
         this.schedulePing();
         break;
       case 'error': {
@@ -213,5 +214,14 @@ export class HubClient {
       default:
         break;
     }
+  }
+}
+
+function detach(ws: WebSocketLike, code: number, reason: string): void {
+  ws.onclose = ws.onmessage = ws.onerror = ws.onopen = null;
+  try {
+    ws.close(code, reason);
+  } catch {
+    // already closed
   }
 }

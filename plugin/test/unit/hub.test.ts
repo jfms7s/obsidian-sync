@@ -87,6 +87,51 @@ describe('HubClient', () => {
     expect(sockets).toHaveLength(2);
   });
 
+  it('detects a dead connection after a Ping answered only by a Notify', () => {
+    const { clock, sockets, calls, hub } = setup();
+    hub.start();
+    sockets[0]!.open();
+    sockets[0]!.serverSends({ case: 'authOk', value: {} });
+    clock.advance(30_000); // ping 1
+    sockets[0]!.serverSends({ case: 'notify', value: { vaultId: 'v1', seq: 1n } });
+    clock.advance(60_000); // silence: no pong, no further frames
+    expect(sockets[0]!.closed).toBe(true);
+    expect(calls).toContain('disconnected');
+    clock.advance(1000);
+    expect(sockets).toHaveLength(2);
+  });
+
+  it('detaches the old socket when the pong times out, so its late close is ignored', () => {
+    const { clock, sockets, calls, hub } = setup();
+    hub.start();
+    sockets[0]!.open();
+    sockets[0]!.serverSends({ case: 'authOk', value: {} });
+    clock.advance(45_000);
+    expect(sockets[0]!.onclose).toBeNull();
+    expect(sockets[0]!.onmessage).toBeNull();
+    expect(calls.filter((c) => c === 'disconnected')).toHaveLength(1);
+  });
+
+  it('waits out a Retry-After before the first connection too', () => {
+    const { clock, sockets, hub, gate } = setup(true);
+    gate!.block(10_000);
+    hub.start();
+    expect(sockets).toHaveLength(0);
+    clock.advance(9_999);
+    expect(sockets).toHaveLength(0);
+    clock.advance(1);
+    expect(sockets).toHaveLength(1);
+  });
+
+  it('ignores a notify whose seq a number cannot hold exactly', () => {
+    const { sockets, calls, hub } = setup();
+    hub.start();
+    sockets[0]!.open();
+    sockets[0]!.serverSends({ case: 'authOk', value: {} });
+    sockets[0]!.serverSends({ case: 'notify', value: { vaultId: 'v1', seq: 2n ** 53n + 1n } });
+    expect(calls).toEqual(['connected']);
+  });
+
   it('backs off exponentially between failed connections and waits out a Retry-After', () => {
     const { clock, sockets, hub, gate } = setup(true);
     hub.start();

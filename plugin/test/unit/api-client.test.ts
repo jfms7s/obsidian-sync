@@ -1,7 +1,8 @@
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 import { describe, expect, it } from 'vitest';
 import { ApiClient, parseRetryAfter, type FetchLike } from '../../src/api/client';
-import { ApiError, ErrorCode, isTemporary, NetworkError } from '../../src/api/errors';
+import { ApiError, ErrorCode, isAuthFailure, isTemporary, NetworkError } from '../../src/api/errors';
+import { LOGIN_BODY_LIMIT, MAX_CHUNK_EXISTS_BATCH } from '../../src/api/limits';
 import { InsecureServerUrlError, hubUrl, normalizeServerUrl } from '../../src/api/url';
 import { ChangesResponseSchema, CommitRequestSchema, ErrorSchema, KeyBundleSchema } from '../../src/gen/obsync/v1/obsync_pb';
 import { ManualClock } from '../../src/util/clock';
@@ -139,5 +140,67 @@ describe('ApiClient', () => {
       .rejects.toBeInstanceOf(NetworkError); // zero results for one commit
     expect(await api.changes('0123456789abcdef0123456789abcdef', 3)).toEqual({ versions: [], vaultSeq: 9, more: true });
     expect(m.seen[1]!.url).toBe('https://s/v1/vaults/0123456789abcdef0123456789abcdef/changes?since=3&limit=1000');
+  });
+
+  it('does not trust status codes from a non-protobuf error page', async () => {
+    const html = (status: number) => mock(() => new Response('<html>proxy says no</html>', { status, headers: { 'Content-Type': 'text/html' } }));
+    for (const status of [401, 403, 404, 409, 400, 507]) {
+      const err = await new ApiClient({ baseUrl: 'https://s', token: 't', fetch: html(status).fetch }).listVaults().catch((e: unknown) => e);
+      expect(err, String(status)).toMatchObject({ code: ErrorCode.INTERNAL, status });
+      expect(isTemporary(err), String(status)).toBe(true);
+      expect(isAuthFailure(err), String(status)).toBe(false);
+    }
+    const tooLarge = await new ApiClient({ baseUrl: 'https://s', token: 't', fetch: html(413).fetch }).listVaults().catch((e: unknown) => e);
+    expect(tooLarge).toMatchObject({ code: ErrorCode.TOO_LARGE });
+    const limited = await new ApiClient({ baseUrl: 'https://s', token: 't', fetch: html(429).fetch }).listVaults().catch((e: unknown) => e);
+    expect(limited).toMatchObject({ code: ErrorCode.RATE_LIMITED });
+  });
+
+  it('ignores a protobuf content type whose body is not an Error', async () => {
+    const m = mock(() => new Response('<html>401</html>', { status: 401, headers: { 'Content-Type': 'application/x-protobuf' } }));
+    const err = await new ApiClient({ baseUrl: 'https://s', token: 't', fetch: m.fetch }).listVaults().catch((e: unknown) => e);
+    expect(isAuthFailure(err)).toBe(false);
+    expect(isTemporary(err)).toBe(true);
+  });
+
+  it('reports a missing key bundle only for a protobuf NOT_FOUND', async () => {
+    const proxy404 = mock(() => new Response('Not Found', { status: 404, headers: { 'Content-Type': 'text/plain' } }));
+    await expect(new ApiClient({ baseUrl: 'https://s', token: 't', fetch: proxy404.fetch }).getKeyBundle()).rejects.toMatchObject({ code: ErrorCode.INTERNAL, status: 404 });
+  });
+
+  it('reads and discards an error body it does not decode', async () => {
+    let read = false;
+    const transport: FetchLike = async () => ({
+      status: 502, headers: { get: () => 'text/html' }, arrayBuffer: async () => { read = true; return new ArrayBuffer(0); },
+    });
+    await expect(new ApiClient({ baseUrl: 'https://s', token: 't', fetch: transport }).listVaults()).rejects.toBeInstanceOf(ApiError);
+    expect(read).toBe(true);
+  });
+
+  it('checks Content-Length only when it is a plain number and the body is not content-encoded', async () => {
+    const vault = '0123456789abcdef0123456789abcdef';
+    const respond = (headers: Record<string, string>): FetchLike => async () => ({
+      status: 200, headers: { get: (n: string) => headers[n.toLowerCase()] ?? null }, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+    });
+    const get = (h: Record<string, string>) => new ApiClient({ baseUrl: 'https://s', token: 't', fetch: respond(h) }).getChunk(vault, new Uint8Array(32));
+    expect(await get({ 'content-length': '2', 'content-encoding': 'gzip' })).toEqual(new Uint8Array([1, 2, 3]));
+    expect(await get({ 'content-length': '3, 3' })).toEqual(new Uint8Array([1, 2, 3]));
+    await expect(get({ 'content-length': '5' })).rejects.toBeInstanceOf(NetworkError);
+  });
+
+  it('refuses 64-bit values a number cannot hold exactly', async () => {
+    const m = mock(() => protoResponse(200, toBinary(ChangesResponseSchema, create(ChangesResponseSchema, { vaultSeq: 2n ** 53n + 1n }))));
+    await expect(new ApiClient({ baseUrl: 'https://s', token: 't', fetch: m.fetch }).changes('0123456789abcdef0123456789abcdef', 0)).rejects.toBeInstanceOf(NetworkError);
+  });
+
+  it('keeps requests inside the server limits before sending', async () => {
+    const m = mock(() => protoResponse(200, new Uint8Array(0)));
+    const api = new ApiClient({ baseUrl: 'https://s', token: 't', fetch: m.fetch });
+    const vault = '0123456789abcdef0123456789abcdef';
+    await expect(api.chunksExist(vault, Array.from({ length: MAX_CHUNK_EXISTS_BATCH + 1 }, () => new Uint8Array(32)))).rejects.toThrow(RangeError);
+    const big = { fileId: new Uint8Array(32), versionId: new Uint8Array(16), baseVersionId: new Uint8Array(0), epoch: 1, encMeta: new Uint8Array(60 << 10), chunkIds: [], size: 0, deleted: false };
+    await expect(api.commit(vault, Array.from({ length: 140 }, () => big))).rejects.toThrow(RangeError);
+    await expect(api.login('u', 'p', 'd'.repeat(LOGIN_BODY_LIMIT), 'x')).rejects.toMatchObject({ code: ErrorCode.INVALID });
+    expect(m.seen).toHaveLength(0);
   });
 });

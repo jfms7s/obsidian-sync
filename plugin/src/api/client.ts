@@ -13,7 +13,10 @@ import { bs, toHex, utf8 } from '../util/bytes';
 import { systemClock, type Clock } from '../util/clock';
 import { ApiError, NetworkError } from './errors';
 import { RateGate } from './gate';
-import { CHANGES_PAGE_SIZE, HEADS_PAGE_SIZE, MAX_COMMITS_PER_REQUEST, MAX_PASSWORD_BYTES } from './limits';
+import { toSafeNumber } from '../util/int';
+import {
+  CHANGES_PAGE_SIZE, COMMIT_BODY_LIMIT, HEADS_PAGE_SIZE, LOGIN_BODY_LIMIT, MAX_CHUNK_EXISTS_BATCH, MAX_COMMITS_PER_REQUEST, MAX_PASSWORD_BYTES,
+} from './limits';
 import type {
   ChangesPage, CommitInput, CommitReply, DeviceInfo, HeadsPage, KeyBundleFields, LoginResult, RemoteVersion,
   SealedVaultKey, VaultInfo,
@@ -31,6 +34,12 @@ export interface HttpRequest {
   method: string;
   /** Header names as written here; a transport may lower-case them. */
   headers: Record<string, string>;
+  /**
+   * May be a view into a larger buffer (byteOffset > 0 or a shorter
+   * byteLength). A transport that takes an ArrayBuffer, like Obsidian's
+   * requestUrl, must send body.buffer.slice(byteOffset, byteOffset + byteLength),
+   * never body.buffer itself.
+   */
   body?: Uint8Array<ArrayBuffer>;
 }
 
@@ -74,32 +83,42 @@ export function parseRetryAfter(value: string | null, nowMs: number): number | u
   return Number.isNaN(at) ? undefined : Math.max(0, at - nowMs);
 }
 
+/**
+ * The code for an error that did not come with a protobuf Error body (a
+ * proxy, load balancer or captive portal answered). Only 413 and 429 mean
+ * the same thing everywhere; anything else is treated as a transient
+ * server-side failure, never as UNAUTHORIZED, NOT_FOUND and the like,
+ * which would stop sync or claim the account has no key bundle.
+ */
 function statusCode(status: number): ErrorCode {
   switch (status) {
-    case 400: case 415: return ErrorCode.INVALID;
-    case 401: return ErrorCode.UNAUTHORIZED;
-    case 403: return ErrorCode.WRONG_PASSWORD;
-    case 404: return ErrorCode.NOT_FOUND;
-    case 409: return ErrorCode.CONFLICT;
     case 413: return ErrorCode.TOO_LARGE;
     case 429: return ErrorCode.RATE_LIMITED;
-    case 507: return ErrorCode.QUOTA_EXCEEDED;
     default: return ErrorCode.INTERNAL;
+  }
+}
+
+/** A 64-bit field as a number; a value beyond 2^53 - 1 is a malformed response. */
+function num(v: bigint, what: string): number {
+  try {
+    return toSafeNumber(v, what);
+  } catch (err) {
+    throw new NetworkError(`malformed response: ${(err as Error).message}`, err);
   }
 }
 
 function versionFromProto(v: Version): RemoteVersion {
   return {
     fileId: v.fileId, versionId: v.versionId, baseVersionId: v.baseVersionId, epoch: v.epoch, encMeta: v.encMeta,
-    chunkIds: v.chunkIds, size: Number(v.size), deleted: v.deleted, deviceId: v.deviceId,
-    createdAtMs: Number(v.createdAtMs), seq: Number(v.seq),
+    chunkIds: v.chunkIds, size: num(v.size, 'size'), deleted: v.deleted, deviceId: v.deviceId,
+    createdAtMs: num(v.createdAtMs, 'created_at_ms'), seq: num(v.seq, 'seq'),
   };
 }
 
 function vaultFromProto(v: Vault): VaultInfo {
   return {
-    vaultId: v.vaultId, encName: v.encName, currentEpoch: v.currentEpoch, seq: Number(v.seq),
-    createdAtMs: Number(v.createdAtMs), ownerId: v.ownerId,
+    vaultId: v.vaultId, encName: v.encName, currentEpoch: v.currentEpoch, seq: num(v.seq, 'seq'),
+    createdAtMs: num(v.createdAtMs, 'created_at_ms'), ownerId: v.ownerId,
   };
 }
 
@@ -148,13 +167,19 @@ export class ApiClient {
     if (resp.status === 429 && retryAfterMs !== undefined) this.gate.block(retryAfterMs);
     let code = statusCode(resp.status);
     let message = `HTTP ${resp.status}`;
-    if ((resp.headers.get('Content-Type') ?? '').startsWith(PROTO)) {
+    // Always read the body, so the connection is released.
+    const body = await resp.arrayBuffer().catch(() => null);
+    // Only a protobuf Error with a code is the obsync server speaking; a
+    // body that is cut off, empty or something else keeps the status-derived code.
+    if (body !== null && (resp.headers.get('Content-Type') ?? '').startsWith(PROTO)) {
       try {
-        const e = fromBinary(ErrorSchema, new Uint8Array(await resp.arrayBuffer()));
-        if (e.code !== ErrorCode.UNSPECIFIED) code = e.code;
-        if (e.message) message = e.message;
+        const e = fromBinary(ErrorSchema, new Uint8Array(body));
+        if (e.code !== ErrorCode.UNSPECIFIED) {
+          code = e.code;
+          if (e.message) message = e.message;
+        }
       } catch {
-        // A body that is cut off or not an Error keeps the status-derived code.
+        // not an Error
       }
     }
     return new ApiError(code, message, resp.status, retryAfterMs);
@@ -187,6 +212,7 @@ export class ApiClient {
   async login(username: string, password: string, deviceName: string, platform: string): Promise<LoginResult> {
     checkPassword(password);
     const body = toBinary(LoginRequestSchema, create(LoginRequestSchema, { username, password, deviceName, platform }));
+    if (body.length > LOGIN_BODY_LIMIT) throw new ApiError(ErrorCode.INVALID, `the login request is over ${LOGIN_BODY_LIMIT} bytes`, 0);
     const r = await this.decode(LoginResponseSchema, await this.send('POST', '/v1/auth/login', { body, auth: false }), 'login');
     this.token = r.token;
     return { token: r.token, deviceId: r.deviceId, userId: r.userId };
@@ -199,8 +225,8 @@ export class ApiClient {
   async listDevices(): Promise<DeviceInfo[]> {
     const r = await this.decode(ListDevicesResponseSchema, await this.send('GET', '/v1/devices'), 'devices');
     return r.devices.map((d) => ({
-      deviceId: d.deviceId, name: d.name, platform: d.platform, createdAtMs: Number(d.createdAtMs),
-      lastSeenAtMs: Number(d.lastSeenAtMs), current: d.current, revoked: d.revoked,
+      deviceId: d.deviceId, name: d.name, platform: d.platform, createdAtMs: num(d.createdAtMs, 'created_at_ms'),
+      lastSeenAtMs: num(d.lastSeenAtMs, 'last_seen_at_ms'), current: d.current, revoked: d.revoked,
     }));
   }
 
@@ -211,7 +237,7 @@ export class ApiClient {
 
   // ---------- key bundle ----------
 
-  /** The stored bundle, or null before first-time setup. */
+  /** The stored bundle, or null before first-time setup (a protobuf NOT_FOUND from the server, not any 404). */
   async getKeyBundle(): Promise<KeyBundleFields | null> {
     let resp: HttpResponse;
     try {
@@ -264,6 +290,7 @@ export class ApiClient {
   // ---------- chunks ----------
 
   async chunksExist(vaultId: string, chunkIds: Uint8Array[]): Promise<boolean[]> {
+    if (chunkIds.length > MAX_CHUNK_EXISTS_BATCH) throw new RangeError(`ask about at most ${MAX_CHUNK_EXISTS_BATCH} chunks at a time`);
     const body = toBinary(ChunkExistsRequestSchema, create(ChunkExistsRequestSchema, { chunkIds }));
     const r = await this.decode(ChunkExistsResponseSchema, await this.send('POST', this.vaultPath(vaultId, '/chunks/exists'), { body }), 'chunks exist');
     if (r.exists.length !== chunkIds.length) throw new NetworkError('chunks exist: wrong number of answers');
@@ -278,8 +305,12 @@ export class ApiClient {
   async getChunk(vaultId: string, chunkId: Uint8Array): Promise<Uint8Array> {
     const resp = await this.send('GET', this.vaultPath(vaultId, `/chunks/${toHex(chunkId)}`));
     const b = await this.body(resp, 'chunk');
-    const declared = resp.headers.get('Content-Length');
-    if (declared !== null && Number(declared) !== b.length) throw new NetworkError('chunk: truncated body');
+    // Content-Length counts encoded bytes: with a Content-Encoding (a proxy
+    // compressing) the decoded body is longer, so only a plain one is checked.
+    const declared = resp.headers.get('Content-Length')?.trim() ?? null;
+    if (declared !== null && /^\d+$/.test(declared) && resp.headers.get('Content-Encoding') === null && Number(declared) !== b.length) {
+      throw new NetworkError('chunk: truncated body');
+    }
     return b;
   }
 
@@ -290,12 +321,13 @@ export class ApiClient {
     const body = toBinary(CommitRequestSchema, create(CommitRequestSchema, {
       commits: commits.map((c) => ({ ...c, size: BigInt(c.size) })),
     }));
+    if (body.length > COMMIT_BODY_LIMIT) throw new RangeError(`commit request is ${body.length} bytes, over the ${COMMIT_BODY_LIMIT}-byte limit`);
     const r = await this.decode(CommitResponseSchema, await this.send('POST', this.vaultPath(vaultId, '/commit'), { body }), 'commit');
     if (r.results.length !== commits.length) throw new NetworkError('commit: wrong number of results');
     return {
-      vaultSeq: Number(r.vaultSeq),
+      vaultSeq: num(r.vaultSeq, 'vault_seq'),
       results: r.results.map((x) => ({
-        fileId: x.fileId, ok: x.ok, seq: Number(x.seq), headVersionId: x.headVersionId,
+        fileId: x.fileId, ok: x.ok, seq: num(x.seq, 'seq'), headVersionId: x.headVersionId,
         ...(x.error ? { error: { code: x.error.code, message: x.error.message } } : {}),
       })),
     };
@@ -303,13 +335,13 @@ export class ApiClient {
 
   async changes(vaultId: string, since: number, limit = CHANGES_PAGE_SIZE): Promise<ChangesPage> {
     const r = await this.decode(ChangesResponseSchema, await this.send('GET', this.vaultPath(vaultId, `/changes?since=${since}&limit=${limit}`)), 'changes');
-    return { versions: r.versions.map(versionFromProto), vaultSeq: Number(r.vaultSeq), more: r.more };
+    return { versions: r.versions.map(versionFromProto), vaultSeq: num(r.vaultSeq, 'vault_seq'), more: r.more };
   }
 
   async heads(vaultId: string, after: Uint8Array | null, limit = HEADS_PAGE_SIZE): Promise<HeadsPage> {
     const q = `?limit=${limit}` + (after ? `&after=${toHex(after)}` : '');
     const r = await this.decode(HeadsResponseSchema, await this.send('GET', this.vaultPath(vaultId, `/heads${q}`)), 'heads');
-    return { heads: r.heads.map((x) => ({ fileId: x.fileId, versionId: x.versionId, seq: Number(x.seq), deleted: x.deleted })), more: r.more };
+    return { heads: r.heads.map((x) => ({ fileId: x.fileId, versionId: x.versionId, seq: num(x.seq, 'seq'), deleted: x.deleted })), more: r.more };
   }
 
   /** Every retained version of one file, newest first. */
