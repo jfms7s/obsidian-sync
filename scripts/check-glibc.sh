@@ -5,7 +5,7 @@
 #
 # 2.36 is the glibc of Debian 12, which both the build image (golang:*-bookworm)
 # and the runtime image (distroless/cc-debian12) are based on. Exit status:
-# 0 ok, 1 the binary needs a newer glibc, 2 bad usage or missing tool.
+# 0 ok, 1 the binary needs a newer glibc, 2 bad usage, a missing tool or a file readelf cannot read.
 set -euo pipefail
 
 bin="${1:-}"
@@ -25,7 +25,12 @@ fi
 
 # readelf reads the dynamic symbol table of any architecture, so this also
 # checks a cross-compiled arm64 binary on an amd64 host.
-versions="$(readelf --dyn-syms -W "$bin" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/^GLIBC_//' | sort -Vu || true)"
+if ! syms="$(readelf --dyn-syms -W "$bin" 2>&1)"; then
+  echo "check-glibc: readelf cannot read $bin:" >&2
+  printf '%s\n' "$syms" >&2
+  exit 2
+fi
+versions="$(printf '%s\n' "$syms" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/^GLIBC_//' | sort -Vu || true)"
 if [ -z "$versions" ]; then
   echo "check-glibc: $bin references no versioned glibc symbols (static?)"
   exit 0
