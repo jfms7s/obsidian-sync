@@ -9,6 +9,22 @@
 // file holding it, a line replacement, or a binary overwrite. Such tokens go
 // into `removed`. At the end, every token ever written and not in `removed`
 // must appear in some file of the final vault, possibly a conflict copy.
+//
+// The settled vaults must also match the server: every live head (its path
+// and content hash, decrypted with a device's keys) is on every device with
+// that content, and no device has a file the server does not hold live.
+//
+// Conflict copies are checked both ways. Every copy in the final vault must
+// come from a conflict event, and every conflict event's copy must still be
+// there unless the harness itself later deleted or renamed that copy (the
+// random operations pick any existing file, copies included). Copy names
+// can repeat (the name is free again once a copy is gone), so a removal
+// only excuses the conflict events for that name seen before it.
+import type { ApiClient } from '../../src/api/client';
+import { decryptMeta } from '../../src/crypto/objects';
+import type { VaultKeyring } from '../../src/crypto/vaultkeys';
+import { hashHex } from '../../src/sync/content';
+import { equalBytes, toHex } from '../../src/util/bytes';
 import { ManualClock } from '../../src/util/clock';
 import { CONFLICT_COPY_PATTERN } from '../../src/util/path';
 import { seededRandom } from '../../src/util/random';
@@ -69,7 +85,13 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
       return t;
     };
     const tokensIn = (data: Uint8Array) => latin1.decode(data).match(/<<s\d+\.c\d+\.t\d+>>/g) ?? [];
-    const isBinary = (p: string) => BINARY_PATHS.includes(p) || /\.(png|pdf)$/.test(p);
+    // Conflict copy path → number of conflict events for it when the harness last deleted or renamed it.
+  const copyRemovedAfter = new Map<string, number>();
+  const conflictEventsFor = (p: string) => clients.reduce((k, c) => k + c.events.filter((e) => e.type === 'conflict' && e.conflictPath === p).length, 0);
+  const noteRemoval = (p: string) => {
+    if (CONFLICT_COPY_PATTERN.test(p)) copyRemovedAfter.set(p, conflictEventsFor(p));
+  };
+  const isBinary = (p: string) => BINARY_PATHS.includes(p) || /\.(png|pdf)$/.test(p);
 
     for (let step = 0; step < steps; step++) {
       clock.advance(rnd.int(120_000));
@@ -116,12 +138,14 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
         const free = ALL_PATHS.filter((p) => !existing.includes(p) && isBinary(p) === isBinary(src));
         if (free.length === 0) continue;
         const dst = rnd.pick(free);
+        noteRemoval(src);
         await c.adapter.rename(src, dst);
         log.push(`${step} ${c.name} rename ${src} -> ${dst}`);
       } else if (roll < 0.68) {
         if (existing.length === 0) continue;
         const p = rnd.pick(existing);
         for (const x of tokensIn((await c.adapter.read(p))!)) removed.add(x);
+        noteRemoval(p);
         await c.adapter.remove(p);
         log.push(`${step} ${c.name} delete ${p}`);
       } else if (roll < 0.76) {
@@ -162,6 +186,21 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
     const reported = new Set(clients.flatMap((c) => c.events.flatMap((e) => (e.type === 'conflict' ? [e.conflictPath] : []))));
     const unexplained = copies.filter((p) => !reported.has(p));
     if (unexplained.length > 0) throw new Error(`seed ${o.seed}: conflict copies without a conflict event: ${unexplained.join(', ')}`);
+
+    const missingCopies = [...new Set(clients.flatMap((c) => c.events.flatMap((e) => (e.type === 'conflict' ? [e.conflictPath] : []))))]
+      .filter((p) => !first.has(p) && (copyRemovedAfter.get(p) ?? -1) < conflictEventsFor(p));
+    if (missingCopies.length > 0) throw new Error(`seed ${o.seed}: conflict events whose copy is gone: ${missingCopies.join(', ')}\n--- final\n${describe(first)}\n--- log\n${log.join('\n')}`);
+
+    const server = await serverFiles(clients[0]!.api, clients[0]!.ring);
+    const describeHashes = (m: Map<string, string>) => [...m.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([p, h]) => `${p} ${h}`).join('\n');
+    for (let i = 0; i < snaps.length; i++) {
+      const local = new Map<string, string>();
+      for (const [p, d] of snaps[i]!) local.set(p, await hashHex(d));
+      if (describeHashes(local) !== describeHashes(server)) {
+        throw new Error(`seed ${o.seed}: ${clients[i]!.name} differs from the server's live heads\n--- server\n${describeHashes(server)}\n--- ${clients[i]!.name}\n${describeHashes(local)}\n--- log\n${log.join('\n')}`);
+      }
+    }
+
     ok = true;
     return { seed: o.seed, files: first.size, conflictCopies: copies.length, tokens: written.size, log };
   } finally {
@@ -176,6 +215,25 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
       }
     }
     if (ok && stopError) throw stopError;
+  }
+}
+
+/** The server's live files: path → content hash (hex), from each live head's decrypted metadata. */
+async function serverFiles(api: ApiClient, ring: VaultKeyring): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  let after: Uint8Array | null = null;
+  for (;;) {
+    const page = await api.heads(ring.vaultId, after);
+    for (const h of page.heads) {
+      if (h.deleted) continue;
+      const v = (await api.history(ring.vaultId, h.fileId)).find((x) => equalBytes(x.versionId, h.versionId));
+      if (!v) throw new Error(`head ${toHex(h.versionId)} of ${toHex(h.fileId)} is not in its history`);
+      const meta = await decryptMeta(ring, v.epoch, v.fileId, v.versionId, v.encMeta);
+      if (out.has(meta.path)) throw new Error(`two live heads claim ${meta.path}`);
+      out.set(meta.path, toHex(meta.contentHash));
+    }
+    if (!page.more || page.heads.length === 0) return out;
+    after = page.heads[page.heads.length - 1]!.fileId;
   }
 }
 
