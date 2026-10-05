@@ -12,6 +12,11 @@ interface Entry {
   mtime: number;
 }
 
+/**
+ * An in-memory adapter for tests and tooling; it holds nothing on disk and
+ * is not meant to back a real vault. Exported so the Obsidian integration's
+ * tests (plan 3) can drive the engine without a file system.
+ */
 export class MemoryAdapter implements VaultAdapter {
   private files = new Map<string, Entry>();
   private listeners = new Set<(ev: AdapterEvent) => void>();
