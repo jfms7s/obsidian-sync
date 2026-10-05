@@ -59,10 +59,13 @@ export default class ObsyncPlugin extends Plugin {
       if (n) new Notice(n.message, n.timeoutMs);
     });
 
-    this.addRibbonIcon('refresh-cw', 'Obsync: sync now', () => shell.syncNow());
+    const syncNow = (): void => {
+      if (!shell.syncNow()) new Notice('Obsync: sync is not running. Finish the setup in the plugin settings.');
+    };
+    this.addRibbonIcon('refresh-cw', 'Obsync: sync now', syncNow);
     this.addSettingTab(new ObsyncSettingTab(this.app, this, shell, state, fetch));
 
-    this.addCommand({ id: 'sync-now', name: 'Sync now', callback: () => shell.syncNow() });
+    this.addCommand({ id: 'sync-now', name: 'Sync now', callback: syncNow });
     this.addCommand({
       id: 'file-history',
       name: 'Show history of the current file',

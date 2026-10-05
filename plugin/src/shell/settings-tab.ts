@@ -269,8 +269,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
       .setName(`Syncing ${stored?.name ?? 'your vault'}`)
       .setDesc(`${statusLabel(this.shell.status)}. Signed in as ${session.username} on ${session.deviceName}.`)
       .addButton((b) => b.setButtonText('Sync now').onClick(() => {
-        this.shell.syncNow();
-        new Notice('Obsync: syncing.');
+        new Notice(this.shell.syncNow() ? 'Obsync: syncing.' : 'Obsync: sync is not running. Use Start to begin.');
       }));
     if (this.shell.status === 'stopped') {
       new Setting(this.containerEl).setName('Sync is not running').addButton((b) => b.setButtonText('Start').setCta().onClick(this.action(b, async () => {

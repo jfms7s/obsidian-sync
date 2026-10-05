@@ -137,9 +137,11 @@ export class ShellController {
     return this.start();
   }
 
-  /** "Sync now": a cycle that also compares everything with the server. */
-  syncNow(): void {
-    this.running?.engine.requestReconcile();
+  /** "Sync now": a cycle that also compares everything with the server. False when no engine runs, so nothing happened. */
+  syncNow(): boolean {
+    if (!this.running) return false;
+    this.running.engine.requestReconcile();
+    return true;
   }
 
   async ignoreGlobs(): Promise<string[]> {
