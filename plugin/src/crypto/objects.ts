@@ -4,6 +4,7 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 import { FileMetaSchema } from '../gen/obsync/v1/obsync_pb';
 import { concat, equalBytes, fromUtf8Strict, u32be, utf8 } from '../util/bytes';
+import { toSafeNumber } from '../util/int';
 import { normalizePath } from '../util/path';
 import type { Random } from '../util/random';
 import { chunkAad, metaAad, vaultNameAad, vaultNameSigMessage } from './labels';
@@ -22,6 +23,7 @@ export function chunkIdFor(keys: EpochKeys, plaintext: Uint8Array): Promise<Uint
   return hmacSha256(keys.chunkIdKey, plaintext);
 }
 
+/** @internal test-only: caller supplies nonce */
 export function encryptChunkWith(nonce: Uint8Array, vaultId: string, keys: EpochKeys, chunkId: Uint8Array, plaintext: Uint8Array): Promise<Uint8Array> {
   return aesGcmSeal(keys.contentKey, nonce, plaintext, chunkAad(vaultId, keys.epoch, chunkId));
 }
@@ -61,8 +63,8 @@ export function decodeFileMeta(b: Uint8Array): FileMeta {
   const m = fromBinary(FileMetaSchema, b);
   return {
     path: m.path,
-    mtimeMs: Number(m.mtimeMs),
-    size: Number(m.size),
+    mtimeMs: toSafeNumber(m.mtimeMs, 'mtime_ms'),
+    size: toSafeNumber(m.size, 'size'),
     contentHash: m.contentHash,
     renamedFrom: m.renamedFrom,
     deviceName: m.deviceName,
@@ -70,6 +72,7 @@ export function decodeFileMeta(b: Uint8Array): FileMeta {
 }
 
 /** enc_meta = AES-256-GCM(meta_key[e], pad(FileMeta), AAD); see padding.ts. */
+/** @internal test-only: caller supplies nonce */
 export function encryptMetaWith(nonce: Uint8Array, vaultId: string, keys: EpochKeys, fileId: Uint8Array, versionId: Uint8Array, meta: FileMeta): Promise<Uint8Array> {
   return aesGcmSeal(keys.metaKey, nonce, pad(encodeFileMeta(meta)), metaAad(vaultId, keys.epoch, fileId, versionId));
 }
@@ -92,10 +95,19 @@ export async function decryptMeta(ring: VaultKeyring, epoch: number, fileId: Uin
   } catch {
     throw new CryptoError('enc_meta is not a FileMeta');
   }
-  if (normalizePath(meta.path) !== meta.path || !equalBytes(await fileIdFor(ring.namingKey, meta.path), fileId)) {
+  if (!isNormalizedPath(meta.path) || !equalBytes(await fileIdFor(ring.namingKey, meta.path), fileId)) {
     throw new CryptoError('enc_meta path does not match the file id');
   }
+  if (meta.renamedFrom !== '' && !isNormalizedPath(meta.renamedFrom)) throw new CryptoError('enc_meta renamed_from is not a normalized path');
   return meta;
+}
+
+function isNormalizedPath(p: string): boolean {
+  try {
+    return normalizePath(p) === p;
+  } catch {
+    return false;
+  }
 }
 
 export const MAX_VAULT_NAME_BYTES = 200;
@@ -104,6 +116,7 @@ export const MAX_VAULT_NAME_BYTES = 200;
  * enc_name = core ‖ Ed25519(creator, "obsync/v1/vault-name-sig" ‖ vault_id ‖ u32be(e) ‖ core)
  * core     = u32be(e) ‖ AES-256-GCM(vault_name_key[e], pad(UTF-8(NFC(name))), AAD = label ‖ vault_id ‖ u32be(e)).
  */
+/** @internal test-only: caller supplies nonce */
 export async function encryptVaultNameWith(nonce: Uint8Array, vaultId: string, keys: EpochKeys, name: string, signSeed: Uint8Array): Promise<Uint8Array> {
   const pt = utf8(name.normalize('NFC'));
   if (pt.length === 0 || pt.length > MAX_VAULT_NAME_BYTES) throw new RangeError(`vault names are 1 to ${MAX_VAULT_NAME_BYTES} bytes`);
@@ -125,7 +138,9 @@ export async function decryptVaultName(ring: VaultKeyring, encName: Uint8Array, 
   }
   const keys = epochKeys(ring, epoch);
   const pt = unpad(await aesGcmOpen(keys.vaultNameKey, core.subarray(4), vaultNameAad(ring.vaultId, epoch)));
+  if (pt.length === 0 || pt.length > MAX_VAULT_NAME_BYTES) throw new CryptoError(`vault name is not 1 to ${MAX_VAULT_NAME_BYTES} bytes`);
   const name = fromUtf8Strict(pt);
   if (name === null) throw new CryptoError('vault name is not UTF-8');
+  if (name.normalize('NFC') !== name) throw new CryptoError('vault name is not NFC');
   return name;
 }

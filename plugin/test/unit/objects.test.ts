@@ -54,6 +54,15 @@ describe('object encryption', () => {
     await expect(decryptMeta(r, 1, wrongFileId, versionId, enc)).rejects.toThrow(/does not match the file id/);
   });
 
+  it('reports a metadata path that is not a valid vault path as CryptoError', async () => {
+    const r = await ring();
+    const k = r.epochs.get(1)!;
+    const fileId = seededRandom(6).bytes(32);
+    const versionId = seededRandom(2).bytes(16);
+    const enc = await encryptMeta(seededRandom(3), VAULT, k, fileId, versionId, { path: '../a.md', mtimeMs: 1, size: 0, contentHash: new Uint8Array(0), renamedFrom: '', deviceName: '' });
+    await expect(decryptMeta(r, 1, fileId, versionId, enc)).rejects.toBeInstanceOf(CryptoError);
+  });
+
   it('round-trips vault names and rejects tampering, another vault or another signer', async () => {
     const r = await ring();
     const seed = seededRandom(11).bytes(32);

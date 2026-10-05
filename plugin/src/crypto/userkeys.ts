@@ -21,6 +21,24 @@ export const DEFAULT_ARGON2: Argon2Params = { memoryKib: 19456, iterations: 2, p
 /** The server's bounds (server/internal/api/keys.go). */
 export const ARGON2_LIMITS = { minMemoryKib: 8192, maxMemoryKib: 4 << 20, maxIterations: 64, maxParallelism: 16 } as const;
 
+/**
+ * What this device is willing to spend on one Argon2id derivation. The
+ * parameters come from the server, which could otherwise make the plugin
+ * allocate up to 4 GiB and run 64 passes (a denial of service on a phone).
+ */
+export const CLIENT_ARGON2_MAX = { memoryKib: 1 << 20, iterations: 16 } as const;
+
+/** The key bundle asks for a more expensive Argon2id than this device allows. */
+export class Argon2TooCostlyError extends CryptoError {
+  constructor(p: Argon2Params) {
+    super(
+      `the key bundle asks for Argon2id with ${Math.round(p.memoryKib / 1024)} MiB and ${p.iterations} iterations, ` +
+      `more than this device allows (${CLIENT_ARGON2_MAX.memoryKib / 1024} MiB, ${CLIENT_ARGON2_MAX.iterations} iterations)`,
+    );
+    this.name = 'Argon2TooCostlyError';
+  }
+}
+
 export const PASS_SALT_LEN = 16;
 export const RECOVERY_KEY_LEN = 32;
 
@@ -60,9 +78,13 @@ export function checkArgon2Params(p: Argon2Params): void {
   if (!ok) throw new RangeError(`argon2 parameters out of range: ${JSON.stringify(p)}`);
 }
 
-/** KEK_pass = Argon2id(UTF-8(NFC(passphrase)), salt, params), 32 bytes, version 0x13. */
+/**
+ * KEK_pass = Argon2id(UTF-8(NFC(passphrase)), salt, params), 32 bytes, version 0x13.
+ * Rejects with Argon2TooCostlyError above CLIENT_ARGON2_MAX, before any work.
+ */
 export async function derivePassKek(passphrase: string, salt: Uint8Array, params: Argon2Params): Promise<Uint8Array> {
   checkArgon2Params(params);
+  if (params.memoryKib > CLIENT_ARGON2_MAX.memoryKib || params.iterations > CLIENT_ARGON2_MAX.iterations) throw new Argon2TooCostlyError(params);
   return argon2idAsync(utf8(passphrase.normalize('NFC')), salt, {
     m: params.memoryKib,
     t: params.iterations,
@@ -115,6 +137,7 @@ function wrapAad(b: WrapBinding, userId: string, encPub: Uint8Array, signPub: Ui
 }
 
 /** nonce ‖ AES-256-GCM(kek, encPriv ‖ signSeed, AAD per the binding). */
+/** @internal test-only: caller supplies nonce */
 export function wrapPrivateKeys(kek: Uint8Array, nonce: Uint8Array, binding: WrapBinding, userId: string, keys: UserKeys): Promise<Uint8Array> {
   const plaintext = new Uint8Array(64);
   plaintext.set(keys.encPriv, 0);

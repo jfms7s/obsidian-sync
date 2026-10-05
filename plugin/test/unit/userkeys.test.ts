@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CryptoError } from '../../src/crypto/primitives';
 import {
-  checkArgon2Params, createKeyBundle, DEFAULT_ARGON2, InvalidRecoveryWordsError, rewrapPassphrase, strengthenParams, unlockWithPassphrase,
+  Argon2TooCostlyError, checkArgon2Params, CLIENT_ARGON2_MAX, createKeyBundle, derivePassKek, DEFAULT_ARGON2, InvalidRecoveryWordsError, rewrapPassphrase, strengthenParams, unlockWithPassphrase,
   unlockWithRecoveryWords,
 } from '../../src/crypto/userkeys';
 import { seededRandom } from '../../src/util/random';
@@ -48,5 +48,17 @@ describe('key bundle', () => {
     expect(() => checkArgon2Params({ memoryKib: 8192, iterations: 65, parallelism: 1 })).toThrow(RangeError);
     expect(() => checkArgon2Params({ memoryKib: 8192, iterations: 1, parallelism: 17 })).toThrow(RangeError);
     expect(() => checkArgon2Params({ memoryKib: 19456, iterations: 2, parallelism: 1 })).not.toThrow();
+  });
+
+  it('refuses to derive with server-supplied parameters above the device ceiling, before running Argon2', async () => {
+    const created = await createKeyBundle(USER, 'pp', seededRandom(10), FAST);
+    // Iterations first: without the ceiling this one runs Argon2 (8 MiB × 17) and fails later with a plain CryptoError.
+    const slow = { ...created.bundle, passParams: { ...FAST, iterations: CLIENT_ARGON2_MAX.iterations + 1 } };
+    await expect(unlockWithPassphrase(slow, USER, 'pp')).rejects.toBeInstanceOf(Argon2TooCostlyError);
+    await expect(unlockWithPassphrase(slow, USER, 'pp')).rejects.toThrow(/more than this device allows/);
+    const big = { ...created.bundle, passParams: { ...FAST, memoryKib: CLIENT_ARGON2_MAX.memoryKib + 1 } };
+    await expect(unlockWithPassphrase(big, USER, 'pp')).rejects.toBeInstanceOf(Argon2TooCostlyError);
+    await expect(derivePassKek('pp', created.bundle.passSalt, { memoryKib: 4 << 20, iterations: 1, parallelism: 1 })).rejects.toBeInstanceOf(CryptoError);
+    expect(CLIENT_ARGON2_MAX.memoryKib).toBe(1 << 20);
   });
 });
