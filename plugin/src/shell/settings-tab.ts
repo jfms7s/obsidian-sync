@@ -63,8 +63,18 @@ export class ObsyncSettingTab extends PluginSettingTab {
     } catch (err) {
       if (token !== this.renderToken) return;
       containerEl.empty();
-      containerEl.createEl('p', { text: describeError(err).message });
-      new Setting(containerEl).addButton((b) => b.setButtonText('Try again').onClick(() => void this.render()));
+      const shown = describeError(err);
+      containerEl.createEl('p', { text: shown.message });
+      this.errorEl = containerEl.createDiv({ cls: 'obsync-error' });
+      if (shown.kind === 'login') {
+        // The server no longer accepts this device, so the setup steps cannot run: forgetting the account locally is the way back to the sign-in screen.
+        new Setting(containerEl).addButton((b) => b.setButtonText('Sign in again').setCta().onClick(this.action(b, async () => {
+          await this.shell.logout();
+          await this.render();
+        })));
+      } else {
+        new Setting(containerEl).addButton((b) => b.setButtonText('Try again').onClick(() => void this.render()));
+      }
       return;
     }
     if (token !== this.renderToken) return;
