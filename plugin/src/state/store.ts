@@ -122,6 +122,8 @@ export interface PendingVault {
 }
 
 export interface StoredVault {
+  /** The account this device chose the vault for; another account logged in here must not sync it. */
+  userId: string;
   vaultId: string;
   name: string;
   namingKey: Uint8Array;

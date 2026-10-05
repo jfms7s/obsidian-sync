@@ -30,7 +30,8 @@ export async function openSyncSession(o: SyncSessionOptions): Promise<SyncSessio
   const keys = await loadUserKeys(o.state, session.userId);
   if (!keys) return { ok: false, reason: 'locked' };
   const vault = await o.state.getVault();
-  if (!vault) return { ok: false, reason: 'no-vault' };
+  // A vault chosen by another account that logged in here earlier is not this account's to sync.
+  if (!vault || vault.userId !== session.userId) return { ok: false, reason: 'no-vault' };
   const deps: ClientDeps = {};
   if (o.fetch) deps.fetch = o.fetch;
   if (o.clock) deps.clock = o.clock;

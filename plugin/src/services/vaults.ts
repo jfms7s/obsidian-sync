@@ -76,7 +76,7 @@ export async function createVault(state: LocalState, api: ApiClient, session: Se
   } catch (err) {
     if (!(err instanceof ApiError && err.code === ErrorCode.INVALID) || !(await landed(api, session, keys, pending))) throw err;
   }
-  const stored: StoredVault = { vaultId, name: nfc, namingKey, epochKeys: [[1, epochKey]], currentEpoch: 1 };
+  const stored: StoredVault = { userId: session.userId, vaultId, name: nfc, namingKey, epochKeys: [[1, epochKey]], currentEpoch: 1 };
   await state.resetVaultState();
   await state.setVault(stored);
   await state.clearPendingVault();
@@ -98,11 +98,11 @@ export async function chooseVault(state: LocalState, api: ApiClient, session: Se
   const opened = await openVaultKeys(await api.vaultKeys(vaultId), vaultId, session, keys);
   const ring = await buildKeyring(vaultId, opened.namingKey, opened.epochKeys, v.currentEpoch);
   const stored: StoredVault = {
-    vaultId, name: await decryptVaultName(ring, v.encName, keys.signPub), namingKey: opened.namingKey,
+    userId: session.userId, vaultId, name: await decryptVaultName(ring, v.encName, keys.signPub), namingKey: opened.namingKey,
     epochKeys: [...opened.epochKeys.entries()], currentEpoch: v.currentEpoch,
   };
   const previous = await state.getVault();
-  if (previous?.vaultId !== vaultId) await state.resetVaultState();
+  if (previous?.vaultId !== vaultId || previous.userId !== session.userId) await state.resetVaultState();
   await state.setVault(stored);
   return stored;
 }

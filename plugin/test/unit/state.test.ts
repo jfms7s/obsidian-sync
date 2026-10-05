@@ -110,7 +110,7 @@ describe('LocalState', () => {
     const st = await open();
     await st.recordSynced(rec(), 'b');
     await st.markDirty('x.md');
-    await st.setVault({ vaultId: 'v', name: 'n', namingKey: new Uint8Array(32), epochKeys: [], currentEpoch: 1 });
+    await st.setVault({ userId: 'u', vaultId: 'v', name: 'n', namingKey: new Uint8Array(32), epochKeys: [], currentEpoch: 1 });
     await st.resetVaultState();
     expect(await st.allFiles()).toEqual([]);
     expect(await st.dirtyEntries()).toEqual([]);

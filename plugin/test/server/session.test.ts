@@ -55,3 +55,17 @@ it('applies the stored ignore globs, case-insensitively on a case-insensitive ad
   expect((await api.heads((await state.getVault())!.vaultId, null)).heads).toHaveLength(1);
   await opened.engine.stop();
 });
+
+it("does not start syncing another account's stored vault", async () => {
+  await srv.createUser('ann', 'ann-password');
+  await srv.createUser('bob', 'bob-password');
+  const state = await LocalState.open(new IDBFactory(), 'session-other-user');
+  const adapter = new MemoryAdapter();
+  const ann = await login(state, srv.url, 'ann', 'ann-password', 'Laptop', 'linux');
+  const annKeys = (await setupKeys(state, apiFor(ann), ann, 'pp', seededRandom(5), { memoryKib: 8192, iterations: 1, parallelism: 1 })).keys;
+  await createVault(state, apiFor(ann), ann, annKeys, 'Ann notes', seededRandom(6));
+  // Bob logs in on the same device without Ann logging out first.
+  const bob = await login(state, srv.url, 'bob', 'bob-password', 'Laptop', 'linux');
+  await setupKeys(state, apiFor(bob), bob, 'pp', seededRandom(7), { memoryKib: 8192, iterations: 1, parallelism: 1 });
+  expect(await openSyncSession({ state, adapter, webSocket: null, autoRun: false })).toEqual({ ok: false, reason: 'no-vault' });
+});
