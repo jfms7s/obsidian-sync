@@ -1,0 +1,13 @@
+# Allowlist: the server build needs only the server module.
+*
+!server/go.mod
+!server/go.sum
+!server/cmd
+!server/internal
+
+# Never ship local state or tests into the build context.
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*_test.go
+**/testdata
