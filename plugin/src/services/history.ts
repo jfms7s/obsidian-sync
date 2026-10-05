@@ -108,6 +108,12 @@ export async function restore(api: ApiClient, ring: VaultKeyring, adapter: Vault
   if (await state.getPending(fileId)) throw new UnsyncedChangesError(path);
   const stat = await adapter.stat(path);
   if (stat && stat.path !== path) throw new PathOccupiedError(path, stat.path);
+  if (await adapter.hasFolder(path)) throw new PathOccupiedError(path, `${path}/`);
+  const parts = path.split('/');
+  for (let i = 1; i < parts.length; i++) {
+    const above = await adapter.stat(parts.slice(0, i).join('/'));
+    if (above) throw new PathOccupiedError(path, above.path);
+  }
   const local = stat ? await adapter.read(path) : null;
   const rec = await state.getFile(fileId);
   if (local) {
