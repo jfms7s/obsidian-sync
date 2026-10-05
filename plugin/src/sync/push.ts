@@ -83,7 +83,7 @@ function toCommit(p: PendingCommit): CommitInput {
  * commit (the entry is then cleared), or 'wait' when the entry must wait
  * (it stays dirty and is not worked on this round).
  */
-async function buildOp(ctx: SyncContext, entry: DirtyEntry): Promise<Op | null | 'wait'> {
+async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<string>): Promise<Op | null | 'wait'> {
   const { state, ring } = ctx;
   let path: string;
   try {
@@ -100,6 +100,10 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry): Promise<Op | null |
   }
   const fileIdBytes = await fileIdFor(ring.namingKey, path);
   const fileId = toHex(fileIdBytes);
+  // Another entry of this round (the same path spelled differently, e.g.
+  // NFD) already has an op for the file: leave this one for the next round
+  // before touching its pending commit.
+  if (taken.has(fileId)) return 'wait';
   // The file's remote version failed to apply and waits out its backoff: a
   // commit could only conflict with that version, so wait for it too.
   if (await isDeferred(ctx, applyKey(fileId))) return 'wait';
@@ -270,7 +274,7 @@ export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<Push
     if (await isDeferred(ctx, pushKey(entry.path))) continue;
     let op: Op | null | 'wait';
     try {
-      op = await buildOp(ctx, entry);
+      op = await buildOp(ctx, entry, fileIds);
     } catch (err) {
       // One unreadable file must not stop the others (failures.ts).
       if (isCycleError(err)) throw err;
@@ -281,7 +285,7 @@ export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<Push
     if (op === 'wait') continue;
     result.attempted++;
     await clearFailure(ctx, pushKey(entry.path));
-    if (!op || fileIds.has(op.pending.fileId)) continue;
+    if (!op) continue;
     fileIds.add(op.pending.fileId);
     ops.push(op);
     bytes += op.pending.size;
