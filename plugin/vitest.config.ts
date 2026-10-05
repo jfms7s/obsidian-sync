@@ -1,6 +1,9 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // Shell code imports 'obsidian'; under test it gets the hand-written fake.
+  resolve: { alias: { obsidian: fileURLToPath(new URL('./test/fakes/obsidian.ts', import.meta.url)) } },
   test: {
     // Conflict-copy names use local time; pin it so names are reproducible.
     env: { TZ: 'UTC' },

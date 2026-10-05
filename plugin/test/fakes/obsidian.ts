@@ -314,6 +314,25 @@ export class Vault {
     this.index.delete(path);
   }
 
+  /** Moves an indexed node and everything below it to newPath, keeping the same objects (Obsidian updates a TFile in place). */
+  private indexMove(node: TAbstractFile, newPath: string): boolean {
+    const oldPath = node.path;
+    node.parent?.children.splice(node.parent.children.indexOf(node), 1);
+    const rekey = (n: TAbstractFile): void => {
+      this.index.delete(n.path);
+      n.path = newPath + n.path.slice(oldPath.length);
+      if (!hidden(n.path)) this.index.set(n.path, n);
+      if (n instanceof TFolder) for (const c of [...n.children]) rekey(c);
+    };
+    rekey(node);
+    if (hidden(newPath)) return false; // it left the index
+    const slash = newPath.lastIndexOf('/');
+    const parent = slash < 0 ? this.root : (this.indexAdd(newPath.slice(0, slash), true) as TFolder);
+    node.parent = parent;
+    parent.children.push(node);
+    return true;
+  }
+
   private refreshStat(path: string): void {
     const node = this.index.get(path);
     const e = this.fs.get(path);
@@ -433,18 +452,13 @@ export class Vault {
   }
 
   async rename(file: TAbstractFile, newPath: string): Promise<void> {
-    // Obsidian checks for the destination without regard to case, so even a case-only change is refused.
-    if (this.fs.get(newPath)) throw new Error('Destination file already exists!');
     const folder = file instanceof TFolder;
     const oldPath = file.path;
     const kids = folder ? this.fs.subtree(oldPath).slice(1).map((e) => e.path) : [];
     this.fs.rename(oldPath, newPath);
-    this.indexRemove(oldPath);
-    const node = this.indexAdd(newPath, folder);
-    if (node instanceof TFolder) for (const e of this.fs.subtree(newPath).slice(1)) this.indexAdd(e.path, e.kind === 'folder');
-    if (!node) {
-      // Moved to a hidden path: it left the index.
-      this.trigger('delete', file);
+    if (!this.index.has(oldPath)) return; // not indexed (it was hidden or unknown): nothing to move or report
+    if (!this.indexMove(file, newPath)) {
+      this.trigger('delete', file); // moved to a hidden path: it left the index
       return;
     }
     if (this.opts.childEvents) {
@@ -453,7 +467,7 @@ export class Vault {
         if (kid) this.trigger('rename', kid, oldKid);
       }
     }
-    this.trigger('rename', node, oldPath);
+    this.trigger('rename', file, oldPath);
   }
 }
 
