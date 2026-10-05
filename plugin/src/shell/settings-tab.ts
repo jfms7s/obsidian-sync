@@ -17,6 +17,13 @@ import { statusLabel } from './status';
 
 export const MIN_PASSPHRASE_LENGTH = 10;
 
+const START_FAILURES: Record<Extract<Awaited<ReturnType<ShellController['start']>>, { ok: false }>['reason'], string> = {
+  'not-logged-in': 'this device is not signed in.',
+  locked: 'this device is locked. Open the settings again to unlock it.',
+  'no-vault': 'no vault is chosen for this device.',
+  stopped: 'sync was stopped.',
+};
+
 interface Form {
   server: string;
   username: string;
@@ -234,8 +241,15 @@ export class ObsyncSettingTab extends PluginSettingTab {
       this.containerEl.createEl('p', { text: describeError(err).message });
       return;
     }
-    const begin = async (): Promise<void> => {
-      await this.shell.start();
+    const begin = async (button: ButtonComponent): Promise<void> => {
+      const started = await this.shell.start();
+      if (!started.ok) {
+        const message = `Sync could not start: ${START_FAILURES[started.reason]}`;
+        this.errorEl?.setText(message);
+        new Notice(`Obsync: ${message}`, 10000);
+        button.setDisabled(false);
+        return;
+      }
       new Notice('Obsync: sync has started.');
       await this.render();
     };
@@ -247,7 +261,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
           b.setButtonText('Use this vault').onClick(this.action(b, async () => {
             await this.shell.stop();
             await vaults.chooseVault(this.state, api, session, keys, v.vaultId);
-            await begin();
+            await begin(b);
           }));
           if (v.name === null) b.setDisabled(true);
         });
@@ -257,7 +271,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
       if (f.vaultName.trim() === '') throw new Error('Give the vault a name.');
       await this.shell.stop();
       await vaults.createVault(this.state, api, session, keys, f.vaultName.trim());
-      await begin();
+      await begin(b);
     })));
   }
 
