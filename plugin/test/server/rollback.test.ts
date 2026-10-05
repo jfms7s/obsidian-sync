@@ -79,3 +79,26 @@ it('notices a restored server whose new commits reuse the seq of a version this 
   expect(files(c.adapter)).toEqual(files(a.adapter));
   expect(a.events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'SERVER_ROLLBACK' }));
 });
+
+it('notices a restored server when a new commit takes the seq of this device\'s own, not yet pulled, commit', async () => {
+  const user = await newUser(srv);
+  const a = await makeClient(srv, user, { name: 'Laptop', vault: 'create' });
+  const b = await makeClient(srv, user, { name: 'Phone', vault: a.vaultId });
+  await a.adapter.write('base.md', text('base\n'));
+  await settle([a, b]);
+  const backup = await srv.snapshot();
+
+  await a.adapter.write('mine.md', text('mine\n'));
+  await a.engine.runCycle(); // pushed at seq 2; this device's cursor is still 1
+  expect(await a.state.getCursor()).toBe(1);
+  await srv.restore(backup); // the server forgets mine.md
+
+  const c = await makeClient(srv, user, { name: 'Tablet', vault: a.vaultId });
+  await settle([c]);
+  await c.adapter.write('theirs.md', text('theirs\n')); // takes seq 2
+  await settle([c]);
+
+  await settle([a, b, c]);
+  for (const d of [a, b, c]) expect(files(d.adapter)).toEqual({ 'base.md': 'base\n', 'mine.md': 'mine\n', 'theirs.md': 'theirs\n' });
+  expect(a.events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'SERVER_ROLLBACK' }));
+});

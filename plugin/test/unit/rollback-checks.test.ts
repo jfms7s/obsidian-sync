@@ -5,7 +5,7 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { expect, it } from 'vitest';
 import type { ApiClient } from '../../src/api/client';
-import type { ChangesPage, HeadsPage, RemoteHead } from '../../src/api/types';
+import type { ChangesPage, HeadsPage, RemoteHead, RemoteVersion } from '../../src/api/types';
 import { buildKeyring } from '../../src/crypto/vaultkeys';
 import { LocalState } from '../../src/state/store';
 import { DEFAULT_MAX_FILE_BYTES, ServerRollbackError, type SyncContext } from '../../src/sync/context';
@@ -32,6 +32,16 @@ it('detects a rollback from a synced version newer than the server\'s seq, even 
   // cursor behind its records; a restored server then has a seq below them.
   const ctx = await context('ahead', { changes: async (): Promise<ChangesPage> => ({ versions: [], vaultSeq: 4, more: false }) });
   expect(await ctx.state.getCursor()).toBe(0);
+  await expect(pull(ctx)).rejects.toBeInstanceOf(ServerRollbackError);
+});
+
+it('detects a rollback from a version at the seq of a different synced version', async () => {
+  const other: RemoteVersion = {
+    fileId: new Uint8Array([7]), versionId: new Uint8Array([8]), baseVersionId: new Uint8Array(0), epoch: 1, encMeta: new Uint8Array(0),
+    chunkIds: [], size: 0, deleted: false, deviceId: 'd', createdAtMs: 1, seq: 9,
+  };
+  // The record says version 01 of file aa sits at seq 9; the server has a different version there.
+  const ctx = await context('reused', { changes: async (): Promise<ChangesPage> => ({ versions: [other], vaultSeq: 9, more: false }) });
   await expect(pull(ctx)).rejects.toBeInstanceOf(ServerRollbackError);
 });
 
