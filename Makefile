@@ -5,7 +5,7 @@ export PATH := $(BIN):$(PATH)
 export GOTOOLCHAIN := auto
 export CGO_ENABLED := 1
 
-.PHONY: tools proto proto-lint test vet lint-go plugin-test vectors convergence
+.PHONY: tools proto proto-lint test vet lint-go docker-build plugin-test vectors convergence
 
 tools: plugin/node_modules
 	GOBIN=$(BIN) go install github.com/bufbuild/buf/cmd/buf@v1.47.2
@@ -42,3 +42,9 @@ vectors:
 # CONVERGENCE_SEEDS=1000 make convergence (plan 3's CI); default 20.
 convergence: plugin/node_modules
 	cd plugin && OBSYNC_CONVERGENCE_SEEDS=$${CONVERGENCE_SEEDS:-20} npx vitest run --project convergence
+
+# Single-arch image for the local machine; CI builds both platforms with buildx.
+# Podman users: DOCKER_BUILD_FLAGS=--format=docker keeps the HEALTHCHECK.
+VERSION ?= $(shell git describe --tags --always --dirty)
+docker-build:
+	docker build $(DOCKER_BUILD_FLAGS) --build-arg VERSION=$(VERSION) -t obsync:$(VERSION) .
