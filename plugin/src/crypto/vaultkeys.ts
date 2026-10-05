@@ -104,8 +104,20 @@ export async function buildKeyring(vaultId: string, namingKey: Uint8Array, epoch
   return { vaultId, namingKey, epochs, currentEpoch };
 }
 
+/**
+ * This device has no key for an epoch a version uses: the keyring is out of
+ * date (the vault was re-keyed), not the version broken. Fails the cycle,
+ * which fetches the vault keys again, rather than one file.
+ */
+export class MissingEpochKeyError extends CryptoError {
+  constructor(readonly epoch: number) {
+    super(`no key for epoch ${epoch}`);
+    this.name = 'MissingEpochKeyError';
+  }
+}
+
 export function epochKeys(ring: VaultKeyring, epoch: number): EpochKeys {
   const k = ring.epochs.get(epoch);
-  if (!k) throw new CryptoError(`no key for epoch ${epoch}`);
+  if (!k) throw new MissingEpochKeyError(epoch);
   return k;
 }

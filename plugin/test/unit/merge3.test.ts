@@ -1,6 +1,8 @@
 // The table of diff3 cases from spec §8.
 import { describe, expect, it } from 'vitest';
 import { detectEol, merge3 } from '../../src/merge/merge3';
+import { decodeText } from '../../src/sync/content';
+import { utf8 } from '../../src/util/bytes';
 
 type Case = [name: string, base: string, local: string, remote: string, expected: string | null];
 
@@ -50,3 +52,22 @@ describe('merge3', () => {
     expect(detectEol('no newline')).toBe('\n');
   });
 });
+
+  it('keeps a byte-order mark through decode, merge and encode', () => {
+    const bom = [0xef, 0xbb, 0xbf];
+    const enc = (t: string) => new Uint8Array([...bom, ...utf8(t)]);
+    const [base, local, remote] = ['a\nb\nc\nd\n', 'A\nb\nc\nd\n', 'a\nb\nc\nD\n'].map((t) => decodeText('n.md', enc(t))!);
+    const m = merge3(base!, local!, remote!);
+    expect(m.clean).toBe(true);
+    expect(utf8(m.text)).toEqual(enc('A\nb\nc\nD\n'));
+  });
+
+  it('writes LF when local mixes line endings, rather than forcing the majority on every line', () => {
+    expect(merge3('a\nb\nc\nd\n', 'A\r\nb\r\nc\nd\r\n', 'a\nb\nc\nD\n')).toEqual({ clean: true, text: 'A\nb\nc\nD\n' });
+    expect(merge3('a\nb\n', 'a\r\nb\n', 'a\nB\n')).toEqual({ clean: true, text: 'a\nB\n' });
+  });
+
+  it('returns raw text when one side equals the base byte for byte', () => {
+    expect(merge3('a\r\nb\n', 'a\r\nb\n', 'x\ny\r\n').text).toBe('x\ny\r\n');
+    expect(merge3('a\r\nb\n', 'x\ny\r\n', 'a\r\nb\n').text).toBe('x\ny\r\n');
+  });

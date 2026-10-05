@@ -18,6 +18,22 @@ export const DEFAULT_IGNORES: readonly string[] = [
   '*.swp',
 ];
 
+/** A glob uses syntax these rules do not support. */
+export class InvalidIgnorePatternError extends Error {
+  constructor(readonly pattern: string, why: string) {
+    super(`ignore pattern ${JSON.stringify(pattern)}: ${why}`);
+    this.name = 'InvalidIgnorePatternError';
+  }
+}
+
+/** null if pattern can be used, else why not (for a settings UI). */
+export function validateIgnorePattern(pattern: string): string | null {
+  const p = pattern.trim();
+  if (p.startsWith('!')) return 'negation ("!") is not supported';
+  if (p.includes('[')) return 'character classes ("[...]") are not supported';
+  return null;
+}
+
 function escape(ch: string): string {
   return /[\\^$.*+?()[\]{}|]/.test(ch) ? `\\${ch}` : ch;
 }
@@ -35,7 +51,9 @@ function segment(glob: string): string {
  * - a pattern containing '/' is anchored at the vault root, and `**` matches any number of folders;
  * - a trailing '/' matches folders only (so everything inside them).
  */
-export function compileGlob(pattern: string): RegExp {
+export function compileGlob(pattern: string, caseInsensitive = false): RegExp {
+  const invalid = validateIgnorePattern(pattern);
+  if (invalid !== null) throw new InvalidIgnorePatternError(pattern, invalid);
   let p = pattern.trim().replace(/^\.\//, '');
   const dirOnly = p.endsWith('/');
   if (dirOnly) p = p.replace(/\/+$/, '');
@@ -46,14 +64,25 @@ export function compileGlob(pattern: string): RegExp {
   body = body.replace(/\(\?:\.\*\/\)\?\/?$/, '.*');
   const prefix = anchored ? '^' : '(?:^|/)';
   const suffix = dirOnly ? '/' : '(?:$|/)';
-  return new RegExp(prefix + body + suffix);
+  return new RegExp(prefix + body + suffix, caseInsensitive ? 'i' : '');
+}
+
+export interface IgnoreOptions {
+  /** Match regardless of letter case: set it from VaultAdapter.caseInsensitive. */
+  caseInsensitive?: boolean;
+  defaults?: readonly string[];
 }
 
 export class IgnoreRules {
   private readonly res: RegExp[];
 
-  constructor(readonly userGlobs: readonly string[] = [], defaults: readonly string[] = DEFAULT_IGNORES) {
-    this.res = [...defaults, ...userGlobs].filter((g) => g.trim() !== '' && !g.trim().startsWith('#')).map(compileGlob);
+  /** Throws InvalidIgnorePatternError for a glob that uses unsupported syntax ('!', '['). */
+  constructor(readonly userGlobs: readonly string[] = [], opts: IgnoreOptions | readonly string[] = {}) {
+    const o: IgnoreOptions = Array.isArray(opts) ? { defaults: opts as readonly string[] } : (opts as IgnoreOptions);
+    const ci = o.caseInsensitive ?? false;
+    this.res = [...(o.defaults ?? DEFAULT_IGNORES), ...userGlobs]
+      .filter((g) => g.trim() !== '' && !g.trim().startsWith('#'))
+      .map((g) => compileGlob(g, ci));
   }
 
   matches(path: string): boolean {

@@ -3,7 +3,7 @@ import { expect, it } from 'vitest';
 import type { ApiClient } from '../../src/api/client';
 import { ApiError, ErrorCode, NetworkError } from '../../src/api/errors';
 import { CryptoError } from '../../src/crypto/primitives';
-import { buildKeyring } from '../../src/crypto/vaultkeys';
+import { buildKeyring, epochKeys, MissingEpochKeyError } from '../../src/crypto/vaultkeys';
 import { LocalState } from '../../src/state/store';
 import { DEFAULT_MAX_FILE_BYTES, ServerRollbackError, type SyncContext } from '../../src/sync/context';
 import type { EngineEvent } from '../../src/sync/events';
@@ -53,5 +53,21 @@ it('separates cycle errors from per-file errors', () => {
   expect(isCycleError(new ApiError(ErrorCode.INTERNAL, 'x', 500))).toBe(true);
   expect(isCycleError(new ServerRollbackError(5, 3))).toBe(true);
   expect(isCycleError(new Error('EIO'))).toBe(false);
+  expect(isCycleError(new CryptoError('bad'))).toBe(false);
+});
+
+it('fails the cycle on programming errors, IndexedDB errors and a missing epoch key', async () => {
+  expect(isCycleError(new TypeError('x is undefined'))).toBe(true);
+  expect(isCycleError(new RangeError('bad length'))).toBe(true);
+  const st = await LocalState.open(new IDBFactory(), 'closed');
+  st.close();
+  const idbErr = await st.getFile('aa').catch((e: unknown) => e);
+  expect(idbErr).toBeInstanceOf(DOMException);
+  expect(isCycleError(idbErr)).toBe(true);
+  const ring = await buildKeyring('0123456789abcdef0123456789abcdef', new Uint8Array(32), new Map([[1, new Uint8Array(32)]]), 1);
+  const missing = (() => { try { epochKeys(ring, 2); } catch (e) { return e; } })();
+  expect(missing).toBeInstanceOf(MissingEpochKeyError);
+  expect(missing).toBeInstanceOf(CryptoError);
+  expect(isCycleError(missing)).toBe(true);
   expect(isCycleError(new CryptoError('bad'))).toBe(false);
 });

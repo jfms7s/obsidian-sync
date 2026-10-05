@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { IgnoreRules } from '../../src/vault/ignore';
+import { IgnoreRules, InvalidIgnorePatternError, validateIgnorePattern } from '../../src/vault/ignore';
 
 describe('ignore rules', () => {
   const rules = new IgnoreRules(['Private/', '*.pdf', 'drafts/**/*.md', 'Templates/Daily.md']);
@@ -30,3 +30,18 @@ describe('ignore rules', () => {
     expect(new IgnoreRules(['', '# comment']).matches('# comment')).toBe(false);
   });
 });
+
+  it('matches regardless of case on a case-insensitive vault', () => {
+    expect(new IgnoreRules(['Private/']).matches('private/x.md')).toBe(false);
+    const ci = new IgnoreRules(['Private/', '*.pdf'], { caseInsensitive: true });
+    expect(ci.matches('private/x.md')).toBe(true);
+    expect(ci.matches('Paper.PDF')).toBe(true);
+    expect(ci.matches('.OBSIDIAN/app.json')).toBe(true);
+    expect(ci.matches('Notes/x.md')).toBe(false);
+  });
+  it('refuses negation and character classes, which it does not support', () => {
+    expect(() => new IgnoreRules(['!keep.md'])).toThrow(InvalidIgnorePatternError);
+    expect(() => new IgnoreRules(['[abc].md'])).toThrow(/not supported/);
+    expect(validateIgnorePattern('notes/*.md')).toBeNull();
+    expect(validateIgnorePattern('!x')).toMatch(/not supported/);
+  });

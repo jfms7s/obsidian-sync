@@ -1,6 +1,6 @@
 // File content: text detection, chunking, hashing, and download/verify.
 import type { ApiClient } from '../api/client';
-import { ApiError, ErrorCode, NetworkError } from '../api/errors';
+import { ApiError, ErrorCode, isVaultNotFound, TruncatedBodyError } from '../api/errors';
 import { CHUNK_SIZE } from '../api/limits';
 import type { RemoteVersion } from '../api/types';
 import { chunkIdFor, decryptChunk } from '../crypto/objects';
@@ -51,40 +51,46 @@ export async function hashHex(data: Uint8Array): Promise<string> {
 
 async function fetchChunk(api: ApiClient, vaultId: string, chunkId: Uint8Array): Promise<Uint8Array> {
   // A download cut off mid-stream (the server aborts the connection) is
-  // retried at once a couple of times before the cycle gives up.
+  // retried at once a couple of times before the cycle gives up. A request
+  // that got no answer at all (offline) is not: retrying at once would fail too.
   for (let attempt = 0; ; attempt++) {
     try {
       return await api.getChunk(vaultId, chunkId);
     } catch (err) {
       // The server lost this chunk: the version cannot be read, but the
-      // rest of the vault can (failures.ts retries it later).
-      if (err instanceof ApiError && err.code === ErrorCode.NOT_FOUND && !/vault/i.test(err.message)) {
+      // rest of the vault can (failures.ts retries it later). A lost vault
+      // fails the cycle instead.
+      if (err instanceof ApiError && err.code === ErrorCode.NOT_FOUND && !isVaultNotFound(err)) {
         throw new FileSyncError('CONTENT_MISSING', 'the server is missing part of this version');
       }
-      if (!(err instanceof NetworkError) || attempt >= 2) throw err;
+      if (!(err instanceof TruncatedBodyError) || attempt >= 2) throw err;
     }
   }
 }
 
 /**
  * Downloads, decrypts and reassembles a version's content, then checks it
- * against the content hash and size from its metadata.
+ * against the content hash and size from its metadata. The chunk list must
+ * have the shape splitChunks gives that size (ceil(size / CHUNK_SIZE)
+ * chunks, all but the last exactly CHUNK_SIZE), checked before and while
+ * downloading, so a hostile list (one chunk id repeated many times) fails
+ * early instead of being downloaded and assembled.
  */
 export async function downloadContent(api: ApiClient, ring: VaultKeyring, v: RemoteVersion, contentHash: Uint8Array): Promise<Uint8Array> {
   const keys = epochKeys(ring, v.epoch);
-  const parts: Uint8Array[] = [];
-  let size = 0;
-  for (const id of v.chunkIds) {
-    const pt = await decryptChunk(ring.vaultId, keys, id, await fetchChunk(api, ring.vaultId, id));
-    parts.push(pt);
-    size += pt.length;
-  }
-  const out = new Uint8Array(size);
+  if (!Number.isSafeInteger(v.size) || v.size < 0) throw new CryptoError(`version size ${v.size} is not valid`);
+  const want = Math.ceil(v.size / CHUNK_SIZE);
+  if (v.chunkIds.length !== want) throw new CryptoError(`a ${v.size}-byte version has ${want} chunks, not ${v.chunkIds.length}`);
+  const out = new Uint8Array(v.size);
   let off = 0;
-  for (const p of parts) {
-    out.set(p, off);
-    off += p.length;
+  for (let i = 0; i < want; i++) {
+    const id = v.chunkIds[i]!;
+    const pt = await decryptChunk(ring.vaultId, keys, id, await fetchChunk(api, ring.vaultId, id));
+    const expected = i < want - 1 ? CHUNK_SIZE : v.size - off;
+    if (pt.length !== expected) throw new CryptoError(`chunk ${i} has ${pt.length} bytes, not ${expected}`);
+    out.set(pt, off);
+    off += pt.length;
   }
-  if (size !== v.size || !equalBytes(await sha256(out), contentHash)) throw new CryptoError('content does not match its hash');
+  if (!equalBytes(await sha256(out), contentHash)) throw new CryptoError('content does not match its hash');
   return out;
 }

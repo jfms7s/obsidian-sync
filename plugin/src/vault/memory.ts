@@ -17,6 +17,7 @@ export class MemoryAdapter implements VaultAdapter {
   private listeners = new Set<(ev: AdapterEvent) => void>();
   private lastMtime = 0;
   private broken = new Set<string>();
+  private brokenStat = new Set<string>();
 
   constructor(readonly caseInsensitive = false, private readonly clock: Clock = systemClock) {}
 
@@ -44,6 +45,7 @@ export class MemoryAdapter implements VaultAdapter {
   }
 
   async stat(path: string): Promise<FileStat | null> {
+    if (this.brokenStat.has(this.key(path))) throw new Error(`EIO: cannot stat ${path}`);
     const e = this.files.get(this.key(path));
     return e ? { path: e.path, mtime: e.mtime, size: e.data.length } : null;
   }
@@ -79,15 +81,25 @@ export class MemoryAdapter implements VaultAdapter {
     if (!e || !this.holds(e, expect)) return false;
     if (this.key(oldPath) !== this.key(newPath) && this.files.has(this.key(newPath))) return false;
     this.files.delete(this.key(oldPath));
-    this.files.set(this.key(newPath), { path: newPath, data: e.data, mtime: this.nextMtime() });
+    // A rename keeps the mtime, as on real file systems.
+    this.files.set(this.key(newPath), { path: newPath, data: e.data, mtime: e.mtime });
     this.emit({ type: 'rename', path: newPath, oldPath: e.path });
     return true;
   }
 
-  /** Makes the next read of path throw, like a disk or permission error. */
-  failReads(path: string, fail = true): void {
-    if (fail) this.broken.add(this.key(path));
-    else this.broken.delete(this.key(path));
+  /**
+   * Makes reads of path throw, like a disk or permission error; with
+   * { stat: true } stat throws as well. fail = false clears both.
+   */
+  failReads(path: string, fail = true, opts: { stat?: boolean } = {}): void {
+    const k = this.key(path);
+    if (fail) {
+      this.broken.add(k);
+      if (opts.stat) this.brokenStat.add(k);
+    } else {
+      this.broken.delete(k);
+      this.brokenStat.delete(k);
+    }
   }
 
   watch(listener: (ev: AdapterEvent) => void): () => void {

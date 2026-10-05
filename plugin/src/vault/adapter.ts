@@ -19,6 +19,15 @@ export type AdapterEvent =
   | { type: 'create' | 'modify' | 'delete'; path: string }
   | { type: 'rename'; path: string; oldPath: string };
 
+/**
+ * Paths passed to an adapter are already normalized (NFC, '/' separators):
+ * the engine normalizes them; an adapter need not.
+ *
+ * mtime may be coarse (whole seconds on some file systems and in Obsidian's
+ * mobile adapter), so two writes can share an mtime; the engine never
+ * relies on mtime alone to tell versions apart (plan 3's adapter must keep
+ * that in mind for expect preconditions). A rename keeps the file's mtime.
+ */
 export interface VaultAdapter {
   /** Two paths that differ only in letter case name the same file. */
   readonly caseInsensitive: boolean;

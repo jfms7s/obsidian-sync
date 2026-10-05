@@ -7,9 +7,12 @@
 // a pushed path when push next sees its dirty entry, a remote version when
 // reconcile next finds its head not applied. The pull cursor moves on.
 // Errors that concern the connection or the account (ApiError,
-// NetworkError, a server rollback) are not per-file: they fail the cycle.
+// NetworkError, a server rollback), the device's own state (an IndexedDB
+// error, a keyring without the version's epoch key) or a bug (TypeError,
+// RangeError) are not per-file: they fail the cycle.
 import { ApiError, NetworkError } from '../api/errors';
 import { CryptoError } from '../crypto/primitives';
+import { MissingEpochKeyError } from '../crypto/vaultkeys';
 import { backoffDelay, type BackoffPolicy } from '../util/backoff';
 import { ServerRollbackError, type SyncContext } from './context';
 import type { NoticeCode } from './events';
@@ -26,10 +29,15 @@ export class FileSyncError extends Error {
 
 /** Errors that must fail the whole cycle rather than one file. */
 export function isCycleError(err: unknown): boolean {
-  return err instanceof ApiError || err instanceof NetworkError || err instanceof ServerRollbackError;
+  return (
+    err instanceof ApiError || err instanceof NetworkError || err instanceof ServerRollbackError || err instanceof MissingEpochKeyError ||
+    err instanceof TypeError || err instanceof RangeError ||
+    // IndexedDB reports failures as DOMException; the vault adapter never does.
+    (typeof DOMException !== 'undefined' && err instanceof DOMException)
+  );
 }
 
-export const pushKey = (path: string) => `push:${path}`;
+export { pushFailureKey as pushKey } from '../state/store';
 export const applyKey = (fileId: string) => `apply:${fileId}`;
 
 /** True while key's last failure is still backing off. */

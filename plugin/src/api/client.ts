@@ -11,7 +11,7 @@ import {
 } from '../gen/obsync/v1/obsync_pb';
 import { bs, toHex, utf8 } from '../util/bytes';
 import { systemClock, type Clock } from '../util/clock';
-import { ApiError, NetworkError } from './errors';
+import { ApiError, NetworkError, TruncatedBodyError } from './errors';
 import { RateGate } from './gate';
 import { toSafeNumber } from '../util/int';
 import {
@@ -189,7 +189,7 @@ export class ApiClient {
     try {
       return new Uint8Array(await resp.arrayBuffer());
     } catch (err) {
-      throw new NetworkError(`${what}: response body interrupted`, err);
+      throw new TruncatedBodyError(`${what}: response body interrupted`, err);
     }
   }
 
@@ -309,7 +309,7 @@ export class ApiClient {
     // compressing) the decoded body is longer, so only a plain one is checked.
     const declared = resp.headers.get('Content-Length')?.trim() ?? null;
     if (declared !== null && /^\d+$/.test(declared) && resp.headers.get('Content-Encoding') === null && Number(declared) !== b.length) {
-      throw new NetworkError('chunk: truncated body');
+      throw new TruncatedBodyError('chunk: truncated body');
     }
     return b;
   }

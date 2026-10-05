@@ -62,3 +62,21 @@ describe('MemoryAdapter', () => {
     expect(await a.read('a.md')).toEqual(t('a'));
   });
 });
+
+  it('keeps a file\'s mtime across a rename, like a real file system', async () => {
+    const a = new MemoryAdapter();
+    await a.write('a.md', t('a'));
+    const before = (await a.stat('a.md'))!.mtime;
+    await a.rename('a.md', 'b.md');
+    expect((await a.stat('b.md'))!.mtime).toBe(before);
+  });
+
+  it('can make stat fail too', async () => {
+    const a = new MemoryAdapter();
+    await a.write('a.md', t('a'));
+    a.failReads('a.md', true, { stat: true });
+    await expect(a.stat('a.md')).rejects.toThrow(/EIO/);
+    await expect(a.read('a.md')).rejects.toThrow(/EIO/);
+    a.failReads('a.md', false);
+    expect((await a.stat('a.md'))?.size).toBe(1);
+  });

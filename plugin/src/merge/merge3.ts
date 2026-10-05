@@ -7,7 +7,7 @@ export type Eol = '\n' | '\r\n';
 export interface MergeResult {
   /** false: overlapping changes; the caller keeps local and writes remote as a conflict copy. */
   clean: boolean;
-  /** The merged text when clean, written with local's line endings. */
+  /** The merged text when clean, written with local's line endings (LF when local mixes them). */
   text: string;
 }
 
@@ -16,6 +16,13 @@ export function detectEol(s: string): Eol {
   const crlf = (s.match(/\r\n/g) ?? []).length;
   const lf = (s.match(/\n/g) ?? []).length - crlf;
   return crlf > lf ? '\r\n' : '\n';
+}
+
+/** The one line ending local uses throughout, or LF when it mixes them or has none. */
+function uniformEol(s: string): Eol {
+  const crlf = (s.match(/\r\n/g) ?? []).length;
+  const lfOnly = (s.match(/\n/g) ?? []).length - crlf;
+  return crlf > 0 && lfOnly === 0 ? '\r\n' : '\n';
 }
 
 function lf(s: string): string {
@@ -27,16 +34,20 @@ function withEol(s: string, eol: Eol): string {
 }
 
 /**
- * Merges local and remote edits of base. Line endings are normalized to LF
- * for comparison only: the result uses local's line endings. A trailing
- * newline is an ordinary (empty last) line, so adding or removing one is an
- * edit like any other.
+ * Merges local and remote edits of base, deterministically:
+ * 1. byte for byte: local = base → remote; remote = base → local; local = remote → local;
+ * 2. otherwise line endings are normalized to LF for comparison, and the
+ *    result is written in local's style if local uses one style throughout,
+ *    else in LF (lines from a mixed file cannot keep their own endings
+ *    through node-diff3, so none is preferred).
+ * A trailing newline is an ordinary (empty last) line, so adding or
+ * removing one is an edit like any other.
  */
 export function merge3(base: string, local: string, remote: string): MergeResult {
-  if (local === remote || base === remote) return { clean: true, text: local };
   if (base === local) return { clean: true, text: remote };
+  if (base === remote || local === remote) return { clean: true, text: local };
   const [b, l, r] = [lf(base), lf(local), lf(remote)];
-  const eol = detectEol(local);
+  const eol = uniformEol(local);
   if (l === r) return { clean: true, text: local };
   if (b === l) return { clean: true, text: withEol(r, eol) };
   if (b === r) return { clean: true, text: local };
