@@ -11,7 +11,7 @@ import { evictBlockingFile, moveToCopy, saveBeside } from './collisions';
 import { decodeText, downloadContent, hashHex } from './content';
 import type { SyncContext } from './context';
 import { applyKey, clearFailure, isFileError, recordFailure } from './failures';
-import { isSyncedHere, readLocal, type LocalFile } from './local';
+import { isSyncedHere, readLocal } from './local';
 
 export { isSyncedHere, readLocal, type LocalFile } from './local';
 
