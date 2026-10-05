@@ -8,7 +8,8 @@ import {
   createKeyBundle, rewrapPassphrase, unlockWithPassphrase, unlockWithRecoveryWords, userKeysFromSecrets,
   DEFAULT_ARGON2, type Argon2Params, type UserKeys,
 } from '../crypto/userkeys';
-import type { LocalState, Session } from '../state/store';
+import { CryptoError } from '../crypto/primitives';
+import type { LocalState, PendingKeySetup, Session } from '../state/store';
 import { equalBytes } from '../util/bytes';
 import type { Clock } from '../util/clock';
 import { cryptoRandom, type Random } from '../util/random';
@@ -54,7 +55,17 @@ export async function logout(state: LocalState, deps: ClientDeps = {}): Promise<
   await state.clearSession();
 }
 
-export type KeyStatus = 'needs-setup' | 'needs-unlock' | 'unlocked';
+/**
+ * - 'needs-setup': the account has no keys yet: setupKeys.
+ * - 'needs-unlock': the account has keys this device does not hold: unlock
+ *   with the passphrase or the recovery words.
+ * - 'needs-reupload': this device holds the account's keys but the server
+ *   has no bundle (it lost it, e.g. restored from an older backup): call
+ *   setupKeys, which uploads these keys again with a new passphrase wrap
+ *   and new recovery words, so vaults sealed to them stay readable.
+ * - 'unlocked': ready to sync.
+ */
+export type KeyStatus = 'needs-setup' | 'needs-unlock' | 'needs-reupload' | 'unlocked';
 
 /** Thrown by setupKeys when another device finished setup first: unlock with the passphrase instead. */
 export class KeysAlreadySetUpError extends Error {
@@ -65,21 +76,75 @@ export class KeysAlreadySetUpError extends Error {
 }
 
 /**
+ * Thrown by setupKeys when an earlier attempt, with another passphrase,
+ * reached the server although its response was lost: that setup is
+ * finished (keys stored, recovery words to confirm) and its passphrase is
+ * the one in effect. Change it with changePassphrase if wanted.
+ */
+export class SetupPassphraseMismatchError extends Error {
+  constructor() {
+    super('the keys were already set up with the passphrase entered first; use that one, or change it in the settings');
+    this.name = 'SetupPassphraseMismatchError';
+  }
+}
+
+const samePublicKeys = (a: KeyBundleFields, b: KeyBundleFields) =>
+  equalBytes(a.publicEncKey, b.publicEncKey) && equalBytes(a.publicSignKey, b.publicSignKey);
+
+/** Records that pending's bundle is on the server and stores its keys. */
+async function finishSetup(state: LocalState, pending: PendingKeySetup): Promise<PendingKeySetup> {
+  const done = { ...pending, uploaded: true };
+  await state.setPendingKeySetup(done);
+  await state.setUserKeys(done.keys);
+  return done;
+}
+
+/**
  * Whether this device can sync. Stored keys count only if they belong to
- * this session's account and match the bundle on the server; otherwise
- * they are dropped.
+ * this session's account and match the bundle on the server; keys of
+ * another account, or that do not match the server's bundle, are dropped.
+ * Keys of this account are kept when the server has no bundle at all
+ * ('needs-reupload').
+ *
+ * An unfinished setup whose bundle is on the server (its upload landed but
+ * the response was lost) is finished here: the bundle is resent (the
+ * server accepts an identical one), the keys stored, and the recovery
+ * words become available through recoveryWordsToConfirm.
  */
 export async function keyStatus(state: LocalState, api: ApiClient, session: Session): Promise<KeyStatus> {
   const bundle = await api.getKeyBundle();
+  const pending = await state.getPendingKeySetup();
+  if (pending && pending.userId === session.userId && !pending.uploaded && bundle && samePublicKeys(bundle, pending.bundle)) {
+    try {
+      await api.putKeyBundle(pending.bundle);
+      await finishSetup(state, pending);
+      return 'unlocked';
+    } catch (err) {
+      if (!(err instanceof ApiError && err.code === ErrorCode.WRONG_PASSWORD)) throw err;
+      // Same keys, but another bundle (another device re-uploaded them): these recovery words are not valid.
+      await state.clearPendingKeySetup();
+    }
+  }
   const stored = await state.getUserKeys();
   if (stored) {
     const keys = userKeysFromSecrets(stored.encPriv, stored.signSeed);
-    if (stored.userId === session.userId && bundle && equalBytes(keys.encPub, bundle.publicEncKey) && equalBytes(keys.signPub, bundle.publicSignKey)) {
-      return 'unlocked';
+    if (stored.userId === session.userId) {
+      if (!bundle) return 'needs-reupload';
+      if (equalBytes(keys.encPub, bundle.publicEncKey) && equalBytes(keys.signPub, bundle.publicSignKey)) return 'unlocked';
     }
     await state.clearUserKeys();
   }
   return bundle ? 'needs-unlock' : 'needs-setup';
+}
+
+async function passphraseOpens(bundle: KeyBundleFields, userId: string, passphrase: string): Promise<boolean> {
+  try {
+    await unlockWithPassphrase(bundle, userId, passphrase);
+    return true;
+  } catch (err) {
+    if (err instanceof CryptoError) return false;
+    throw err;
+  }
 }
 
 /**
@@ -89,11 +154,19 @@ export async function keyStatus(state: LocalState, api: ApiClient, session: Sess
  * recoveryWordsToConfirm) until acknowledgeRecoveryWords is called, so a
  * restart before the user wrote them down does not lose them.
  *
- * If an earlier attempt's response was lost, exactly that bundle is resent:
- * the server accepts an identical re-send, while a different one would need
- * the account password. If another device set up keys first, the server
- * refuses (WRONG_PASSWORD); the unfinished setup is discarded and
- * KeysAlreadySetUpError tells the UI to offer unlocking instead.
+ * If this device already holds the account's keys (keyStatus
+ * 'needs-reupload'), those keys are uploaded again instead of new ones,
+ * with new recovery words.
+ *
+ * If an earlier attempt did not finish, its bundle is resent unchanged when
+ * passphrase opens it: the server accepts an identical re-send, while a
+ * different one would need the account password. With another passphrase,
+ * the earlier attempt is discarded and setup starts over, unless that
+ * attempt reached the server after all: then it is finished and
+ * SetupPassphraseMismatchError says so. If another device set up keys
+ * first, the server refuses (WRONG_PASSWORD); the unfinished setup is
+ * discarded and KeysAlreadySetUpError tells the UI to offer unlocking
+ * instead.
  */
 export async function setupKeys(
   state: LocalState, api: ApiClient, session: Session, passphrase: string, random: Random = cryptoRandom, params: Argon2Params = DEFAULT_ARGON2,
@@ -103,8 +176,19 @@ export async function setupKeys(
     await state.clearPendingKeySetup();
     pending = undefined;
   }
+  if (pending && !pending.uploaded && !(await passphraseOpens(pending.bundle, session.userId, passphrase))) {
+    const onServer = await api.getKeyBundle();
+    if (onServer && samePublicKeys(onServer, pending.bundle)) {
+      await finishSetup(state, pending);
+      throw new SetupPassphraseMismatchError();
+    }
+    await state.clearPendingKeySetup();
+    pending = undefined;
+  }
   if (!pending) {
-    const created = await createKeyBundle(session.userId, passphrase, random, params);
+    const stored = await state.getUserKeys();
+    const existing = stored && stored.userId === session.userId ? userKeysFromSecrets(stored.encPriv, stored.signSeed) : undefined;
+    const created = await createKeyBundle(session.userId, passphrase, random, params, existing);
     pending = {
       userId: session.userId, bundle: created.bundle, recoveryWords: created.recoveryWords, uploaded: false,
       keys: { userId: session.userId, encPriv: created.keys.encPriv, signSeed: created.keys.signSeed },
@@ -121,10 +205,8 @@ export async function setupKeys(
       }
       throw err;
     }
-    pending = { ...pending, uploaded: true };
-    await state.setPendingKeySetup(pending);
   }
-  await state.setUserKeys(pending.keys);
+  pending = await finishSetup(state, pending);
   return { recoveryWords: pending.recoveryWords, keys: userKeysFromSecrets(pending.keys.encPriv, pending.keys.signSeed) };
 }
 

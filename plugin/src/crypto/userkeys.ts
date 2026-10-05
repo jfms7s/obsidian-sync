@@ -165,8 +165,11 @@ export interface NewKeyBundle {
 }
 
 /** First-time setup: new keypairs, a new recovery key, and both wrappings. */
-export async function createKeyBundle(userId: string, passphrase: string, random: Random, params: Argon2Params = DEFAULT_ARGON2): Promise<NewKeyBundle> {
-  const keys = generateUserKeys(random);
+/** A new bundle with a new recovery key; for existingKeys (a re-upload) instead of new keypairs when given. */
+export async function createKeyBundle(
+  userId: string, passphrase: string, random: Random, params: Argon2Params = DEFAULT_ARGON2, existingKeys?: UserKeys,
+): Promise<NewKeyBundle> {
+  const keys = existingKeys ?? generateUserKeys(random);
   const recoveryKey = random.bytes(RECOVERY_KEY_LEN);
   const bundle = await wrapBundle(userId, keys, passphrase, recoveryKey, random, params);
   return { bundle, keys, recoveryKey, recoveryWords: recoveryKeyToWords(recoveryKey) };

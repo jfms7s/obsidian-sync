@@ -8,7 +8,7 @@ import { Argon2TooCostlyError, createKeyBundle, generateUserKeys } from '../../s
 import { deriveEpochKeys, sealKey } from '../../src/crypto/vaultkeys';
 import {
   acknowledgeRecoveryWords, apiFor, changePassphrase, KeysAlreadySetUpError, keyStatus, listDevices, login, logout,
-  recoveryWordsToConfirm, revokeDevice, setupKeys, unlockWithPassphraseService, unlockWithRecoveryService,
+  recoveryWordsToConfirm, revokeDevice, SetupPassphraseMismatchError, setupKeys, unlockWithPassphraseService, unlockWithRecoveryService,
 } from '../../src/services/account';
 import { chooseVault, createVault, listRemoteVaults, openVaultKeys } from '../../src/services/vaults';
 import { LocalState } from '../../src/state/store';
@@ -63,6 +63,78 @@ describe('account and keys', () => {
     const done = await setupKeys(s, api, session, 'pp', seededRandom(11), TEST_ARGON2);
     expect(done.recoveryWords).toBe(first);
     expect(await keyStatus(s, api, session)).toBe('unlocked');
+  });
+
+  it('finishes a setup whose upload landed although its response was lost when the status is checked', async () => {
+    await srv.createUser('olga', 'olga-password');
+    const s = await newState('lost-then-status');
+    const session = await login(s, srv.url, 'olga', 'olga-password', 'Laptop', 'linux');
+    const net = new Net();
+    const api = apiFor(session, { fetch: net.fetch });
+    net.loseNextResponse('PUT', '/v1/keys');
+    await expect(setupKeys(s, api, session, 'pp', seededRandom(30), TEST_ARGON2)).rejects.toBeInstanceOf(NetworkError);
+    const words = (await s.getPendingKeySetup())!.recoveryWords;
+    // The app restarts and asks for the status before the user retries.
+    expect(await keyStatus(s, api, session)).toBe('unlocked');
+    expect(await recoveryWordsToConfirm(s, session)).toBe(words);
+    const s2 = await newState('lost-then-status-2');
+    const session2 = await login(s2, srv.url, 'olga', 'olga-password', 'Phone', 'android');
+    const keys = await unlockWithRecoveryService(s2, apiFor(session2), session2, words);
+    expect(keys.encPub).toEqual((await unlockWithPassphraseService(s2, apiFor(session2), session2, 'pp')).encPub);
+  });
+
+  it('starts over with a new passphrase when the earlier setup never reached the server', async () => {
+    await srv.createUser('pia', 'pia-password');
+    const s = await newState('new-pp');
+    const session = await login(s, srv.url, 'pia', 'pia-password', 'Laptop', 'linux');
+    const net = new Net();
+    const api = apiFor(session, { fetch: net.fetch });
+    net.setOnline(false);
+    await expect(setupKeys(s, api, session, 'old pp', seededRandom(31), TEST_ARGON2)).rejects.toBeInstanceOf(NetworkError);
+    const first = (await s.getPendingKeySetup())!.recoveryWords;
+    net.setOnline(true);
+    expect(await keyStatus(s, api, session)).toBe('needs-setup');
+    const done = await setupKeys(s, api, session, 'new pp', seededRandom(32), TEST_ARGON2);
+    expect(done.recoveryWords).not.toBe(first);
+    const s2 = await newState('new-pp-2');
+    const session2 = await login(s2, srv.url, 'pia', 'pia-password', 'Phone', 'android');
+    expect((await unlockWithPassphraseService(s2, apiFor(session2), session2, 'new pp')).encPub).toEqual(done.keys.encPub);
+  });
+
+  it('refuses a different passphrase for a setup that already reached the server', async () => {
+    await srv.createUser('quentin', 'quentin-password');
+    const s = await newState('landed-pp');
+    const session = await login(s, srv.url, 'quentin', 'quentin-password', 'Laptop', 'linux');
+    const net = new Net();
+    const api = apiFor(session, { fetch: net.fetch });
+    net.loseNextResponse('PUT', '/v1/keys');
+    await expect(setupKeys(s, api, session, 'pp one', seededRandom(33), TEST_ARGON2)).rejects.toBeInstanceOf(NetworkError);
+    const words = (await s.getPendingKeySetup())!.recoveryWords;
+    await expect(setupKeys(s, api, session, 'pp two', seededRandom(34), TEST_ARGON2)).rejects.toBeInstanceOf(SetupPassphraseMismatchError);
+    expect(await keyStatus(s, api, session)).toBe('unlocked');
+    expect(await recoveryWordsToConfirm(s, session)).toBe(words);
+    const s2 = await newState('landed-pp-2');
+    const session2 = await login(s2, srv.url, 'quentin', 'quentin-password', 'Phone', 'android');
+    await expect(unlockWithPassphraseService(s2, apiFor(session2), session2, 'pp one')).resolves.toBeDefined();
+  });
+
+  it('keeps its keys when the server has no bundle and uploads them again', async () => {
+    await srv.createUser('rosa', 'rosa-password');
+    const s = await newState('reupload');
+    const session = await login(s, srv.url, 'rosa', 'rosa-password', 'Laptop', 'linux');
+    const api = apiFor(session);
+    // Keys this device unlocked earlier; the server lost the bundle (e.g. restored from an older backup).
+    const old = generateUserKeys(seededRandom(35));
+    await s.setUserKeys({ userId: session.userId, encPriv: old.encPriv, signSeed: old.signSeed });
+    expect(await keyStatus(s, api, session)).toBe('needs-reupload');
+    expect(await s.getUserKeys()).toBeDefined();
+    const done = await setupKeys(s, api, session, 'pp', seededRandom(36), TEST_ARGON2);
+    expect(done.keys.encPub).toEqual(old.encPub);
+    expect(done.keys.signPub).toEqual(old.signPub);
+    expect(await keyStatus(s, api, session)).toBe('unlocked');
+    const s2 = await newState('reupload-2');
+    const session2 = await login(s2, srv.url, 'rosa', 'rosa-password', 'Phone', 'android');
+    expect((await unlockWithRecoveryService(s2, apiFor(session2), session2, done.recoveryWords)).encPub).toEqual(old.encPub);
   });
 
   it('keeps the recovery words across a restart until the user acknowledges them', async () => {
