@@ -4,6 +4,7 @@ import { toHex } from '../../src/util/bytes';
 import { pull } from '../../src/sync/pull';
 import { PushMemory, pushRound } from '../../src/sync/push';
 import { reconcile } from '../../src/sync/reconcile';
+import { MemoryAdapter } from '../../src/vault/memory';
 import { files, landedPendingOvertakenTwice, newDevice, newUser, remoteCommit, text } from '../helpers/fixture';
 import { startServer, type TestServer } from '../helpers/server';
 
@@ -106,4 +107,24 @@ it('tells the adapter which folders its ignore rules skip, so ignored trees are 
   expect(skip).toBeDefined();
   expect([skip!('Scratch'), skip!('.git'), skip!('Notes'), skip!('Notes/Deep')]).toEqual([true, true, false, false]);
   expect((await d.state.dirtyEntries()).map((e) => e.path)).toEqual(['Notes/a.md']);
+});
+
+it('does not trust an unchanged size and mtime when mtimes are whole seconds: it compares the content', async () => {
+  const d = await newDevice(srv, await newUser(srv), { name: 'D', vault: 'create' });
+  // A file system that keeps whole seconds (FAT, some Android storage): an edit within the same second keeps the mtime.
+  class WholeSeconds extends MemoryAdapter {
+    override async stat(path: string) {
+      const s = await super.stat(path);
+      return s && { ...s, mtime: Math.floor(s.mtime / 1000) * 1000 };
+    }
+  }
+  const adapter = new WholeSeconds(false, d.clock);
+  d.adapter = adapter;
+  d.ctx.adapter = adapter;
+  await adapter.write('x.md', text('one\n'));
+  await d.state.markDirty('x.md');
+  await pushRound(d.ctx, new PushMemory());
+  expect(await reconcile(d.ctx)).toMatchObject({ markedDirty: 0 }); // nothing changed
+  adapter.writeSilently('x.md', text('two\n')); // same size, same whole second
+  expect(await reconcile(d.ctx)).toMatchObject({ markedDirty: 1 });
 });
