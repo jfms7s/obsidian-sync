@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestHealthTarget(t *testing.T) {
@@ -82,6 +83,39 @@ func TestHealthFailsOnNon200(t *testing.T) {
 		if err != nil && strings.Contains(err.Error(), "\n") {
 			t.Errorf("status %d: reason is not one line: %q", status, err)
 		}
+	}
+}
+
+// A redirect to a healthy address must not make the probe pass.
+func TestHealthDoesNotFollowRedirects(t *testing.T) {
+	healthy := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer healthy.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, healthy.URL+"/readyz", http.StatusFound)
+	}))
+	defer srv.Close()
+	listenAt(t, srv)
+	err := run(context.Background(), []string{"health"})
+	if err == nil || !strings.Contains(err.Error(), "302") {
+		t.Fatalf("err = %v, want a 302 failure", err)
+	}
+}
+
+func TestHealthTimesOutOnAHungServer(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	defer srv.Close()
+	defer close(release)
+	listenAt(t, srv)
+	old := healthTimeout
+	healthTimeout = 100 * time.Millisecond
+	defer func() { healthTimeout = old }()
+	start := time.Now()
+	if err := run(context.Background(), []string{"health"}); err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("took %v, want about the 100ms timeout", took)
 	}
 }
 
