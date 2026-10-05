@@ -46,124 +46,137 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
   await srv.createUser(user.username, user.password);
 
   const clients: SimClient[] = [];
-  for (let i = 0; i < n; i++) {
-    clients.push(await makeClient(srv, user, {
-      name: `dev${i}`, vault: i === 0 ? 'create' : clients[0]!.vaultId,
-      random: seededRandom(o.seed * 1000 + i + 1), clock,
-      // A mixed fleet: the last device has a case-insensitive file system (macOS, Windows).
-      caseInsensitive: i === n - 1,
-    }));
-  }
+  // Clients are stopped and their state closed however the seed ends, so a
+  // failing seed does not leave engines running into the next one.
+  let ok = false;
+  try {
+    for (let i = 0; i < n; i++) {
+      clients.push(await makeClient(srv, user, {
+        name: `dev${i}`, vault: i === 0 ? 'create' : clients[0]!.vaultId,
+        random: seededRandom(o.seed * 1000 + i + 1), clock,
+        // A mixed fleet: the last device has a case-insensitive file system (macOS, Windows).
+        caseInsensitive: i === n - 1,
+      }));
+    }
 
-  const log: string[] = [];
-  const written = new Set<string>();
-  const removed = new Set<string>();
-  let tokenN = 0;
-  const token = (c: number) => {
-    const t = `<<s${o.seed}.c${c}.t${tokenN++}>>`;
-    written.add(t);
-    return t;
-  };
-  const tokensIn = (data: Uint8Array) => latin1.decode(data).match(/<<s\d+\.c\d+\.t\d+>>/g) ?? [];
-  const isBinary = (p: string) => BINARY_PATHS.includes(p) || /\.(png|pdf)$/.test(p);
+    const log: string[] = [];
+    const written = new Set<string>();
+    const removed = new Set<string>();
+    let tokenN = 0;
+    const token = (c: number) => {
+      const t = `<<s${o.seed}.c${c}.t${tokenN++}>>`;
+      written.add(t);
+      return t;
+    };
+    const tokensIn = (data: Uint8Array) => latin1.decode(data).match(/<<s\d+\.c\d+\.t\d+>>/g) ?? [];
+    const isBinary = (p: string) => BINARY_PATHS.includes(p) || /\.(png|pdf)$/.test(p);
 
-  for (let step = 0; step < steps; step++) {
-    clock.advance(rnd.int(120_000));
-    const ci = rnd.int(n);
-    const c = clients[ci]!;
-    const existing = (await c.adapter.list()).filter((p) => !p.startsWith('.'));
-    const roll = rnd.float();
-    if (roll < 0.22) {
-      const free = ALL_PATHS.filter((p) => !existing.includes(p));
-      if (free.length === 0) continue;
-      const p = rnd.pick(free);
-      const t = token(ci);
-      const data = isBinary(p) ? new Uint8Array([...rnd.bytes(8), ...enc.encode(t), ...rnd.bytes(8)]) : enc.encode(`# ${p}\n${t}\n`);
-      await c.adapter.write(p, data);
-      log.push(`${step} ${c.name} create ${p} ${t}`);
-    } else if (roll < 0.52) {
-      if (existing.length === 0) continue;
-      const p = rnd.pick(existing);
-      const old = (await c.adapter.read(p))!;
-      const t = token(ci);
-      if (isBinary(p)) {
-        for (const x of tokensIn(old)) removed.add(x);
-        await c.adapter.write(p, new Uint8Array([...rnd.bytes(8), ...enc.encode(t), ...rnd.bytes(8)]));
-        log.push(`${step} ${c.name} overwrite ${p} ${t}`);
-      } else {
-        const lines = new TextDecoder().decode(old).split('\n');
-        const at = rnd.int(lines.length);
-        const tokenLines = lines.map((l, i) => (/^<<s/.test(l) ? i : -1)).filter((i) => i >= 0);
-        if (tokenLines.length > 0 && rnd.float() < 0.3) {
-          const i = rnd.pick(tokenLines);
-          removed.add(lines[i]!);
-          lines[i] = t;
-          log.push(`${step} ${c.name} replace-line ${p} ${t}`);
+    for (let step = 0; step < steps; step++) {
+      clock.advance(rnd.int(120_000));
+      const ci = rnd.int(n);
+      const c = clients[ci]!;
+      const existing = (await c.adapter.list()).filter((p) => !p.startsWith('.'));
+      const roll = rnd.float();
+      if (roll < 0.22) {
+        const free = ALL_PATHS.filter((p) => !existing.includes(p));
+        if (free.length === 0) continue;
+        const p = rnd.pick(free);
+        const t = token(ci);
+        const data = isBinary(p) ? new Uint8Array([...rnd.bytes(8), ...enc.encode(t), ...rnd.bytes(8)]) : enc.encode(`# ${p}\n${t}\n`);
+        await c.adapter.write(p, data);
+        log.push(`${step} ${c.name} create ${p} ${t}`);
+      } else if (roll < 0.52) {
+        if (existing.length === 0) continue;
+        const p = rnd.pick(existing);
+        const old = (await c.adapter.read(p))!;
+        const t = token(ci);
+        if (isBinary(p)) {
+          for (const x of tokensIn(old)) removed.add(x);
+          await c.adapter.write(p, new Uint8Array([...rnd.bytes(8), ...enc.encode(t), ...rnd.bytes(8)]));
+          log.push(`${step} ${c.name} overwrite ${p} ${t}`);
         } else {
-          lines.splice(at, 0, t);
-          log.push(`${step} ${c.name} insert ${p}@${at} ${t}`);
+          const lines = new TextDecoder().decode(old).split('\n');
+          const at = rnd.int(lines.length);
+          const tokenLines = lines.map((l, i) => (/^<<s/.test(l) ? i : -1)).filter((i) => i >= 0);
+          if (tokenLines.length > 0 && rnd.float() < 0.3) {
+            const i = rnd.pick(tokenLines);
+            removed.add(lines[i]!);
+            lines[i] = t;
+            log.push(`${step} ${c.name} replace-line ${p} ${t}`);
+          } else {
+            lines.splice(at, 0, t);
+            log.push(`${step} ${c.name} insert ${p}@${at} ${t}`);
+          }
+          await c.adapter.write(p, enc.encode(lines.join('\n')));
         }
-        await c.adapter.write(p, enc.encode(lines.join('\n')));
+      } else if (roll < 0.60) {
+        // Renames keep the kind (text or binary), so token checks stay meaningful.
+        if (existing.length === 0) continue;
+        const src = rnd.pick(existing);
+        const free = ALL_PATHS.filter((p) => !existing.includes(p) && isBinary(p) === isBinary(src));
+        if (free.length === 0) continue;
+        const dst = rnd.pick(free);
+        await c.adapter.rename(src, dst);
+        log.push(`${step} ${c.name} rename ${src} -> ${dst}`);
+      } else if (roll < 0.68) {
+        if (existing.length === 0) continue;
+        const p = rnd.pick(existing);
+        for (const x of tokensIn((await c.adapter.read(p))!)) removed.add(x);
+        await c.adapter.remove(p);
+        log.push(`${step} ${c.name} delete ${p}`);
+      } else if (roll < 0.76) {
+        c.net.setOnline(!c.net.online);
+        log.push(`${step} ${c.name} ${c.net.online ? 'online' : 'offline'}`);
+      } else if (roll < 0.79) {
+        c.net.loseNextResponse('POST', '/commit');
+        log.push(`${step} ${c.name} will lose a commit response`);
+      } else if (roll < 0.82) {
+        await c.restart();
+        log.push(`${step} ${c.name} restart`);
+      } else {
+        await c.engine.runCycle();
+        log.push(`${step} ${c.name} sync`);
       }
-    } else if (roll < 0.60) {
-      // Renames keep the kind (text or binary), so token checks stay meaningful.
-      if (existing.length === 0) continue;
-      const src = rnd.pick(existing);
-      const free = ALL_PATHS.filter((p) => !existing.includes(p) && isBinary(p) === isBinary(src));
-      if (free.length === 0) continue;
-      const dst = rnd.pick(free);
-      await c.adapter.rename(src, dst);
-      log.push(`${step} ${c.name} rename ${src} -> ${dst}`);
-    } else if (roll < 0.68) {
-      if (existing.length === 0) continue;
-      const p = rnd.pick(existing);
-      for (const x of tokensIn((await c.adapter.read(p))!)) removed.add(x);
-      await c.adapter.remove(p);
-      log.push(`${step} ${c.name} delete ${p}`);
-    } else if (roll < 0.76) {
-      c.net.setOnline(!c.net.online);
-      log.push(`${step} ${c.name} ${c.net.online ? 'online' : 'offline'}`);
-    } else if (roll < 0.79) {
-      c.net.loseNextResponse('POST', '/commit');
-      log.push(`${step} ${c.name} will lose a commit response`);
-    } else if (roll < 0.82) {
-      await c.restart();
-      log.push(`${step} ${c.name} restart`);
-    } else {
-      await c.engine.runCycle();
-      log.push(`${step} ${c.name} sync`);
     }
-  }
 
-  for (const c of clients) c.net.setOnline(true);
-  await settle(clients, 30);
+    for (const c of clients) c.net.setOnline(true);
+    await settle(clients, 30);
 
-  const snaps = clients.map((c) => c.adapter.snapshot());
-  const first = snaps[0]!;
-  const describe = (m: Map<string, Uint8Array>) => [...m.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([p, d]) => `${p} ${latin1.decode(d)}`).join('\n');
-  for (let i = 1; i < snaps.length; i++) {
-    if (describe(snaps[i]!) !== describe(first)) {
-      throw new Error(`seed ${o.seed}: ${clients[i]!.name} differs from dev0\n--- dev0\n${describe(first)}\n--- ${clients[i]!.name}\n${describe(snaps[i]!)}\n--- log\n${log.join('\n')}`);
+    const snaps = clients.map((c) => c.adapter.snapshot());
+    const first = snaps[0]!;
+    const describe = (m: Map<string, Uint8Array>) => [...m.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([p, d]) => `${p} ${latin1.decode(d)}`).join('\n');
+    for (let i = 1; i < snaps.length; i++) {
+      if (describe(snaps[i]!) !== describe(first)) {
+        throw new Error(`seed ${o.seed}: ${clients[i]!.name} differs from dev0\n--- dev0\n${describe(first)}\n--- ${clients[i]!.name}\n${describe(snaps[i]!)}\n--- log\n${log.join('\n')}`);
+      }
     }
+    const seqs = await Promise.all(clients.map((c) => c.state.getCursor()));
+    const serverSeq = (await clients[0]!.api.changes(clients[0]!.vaultId, 0, 1)).vaultSeq;
+    if (seqs.some((s) => s !== serverSeq)) throw new Error(`seed ${o.seed}: cursors ${seqs} != server seq ${serverSeq}`);
+
+    const present = new Set([...first.values()].flatMap((d) => tokensIn(d)));
+    const lost = [...written].filter((t) => !present.has(t) && !removed.has(t));
+    if (lost.length > 0) throw new Error(`seed ${o.seed}: lost edits ${lost.join(', ')}\n--- final\n${describe(first)}\n--- log\n${log.join('\n')}`);
+
+    const copies = [...first.keys()].filter((p) => CONFLICT_COPY_PATTERN.test(p));
+    const reported = new Set(clients.flatMap((c) => c.events.flatMap((e) => (e.type === 'conflict' ? [e.conflictPath] : []))));
+    const unexplained = copies.filter((p) => !reported.has(p));
+    if (unexplained.length > 0) throw new Error(`seed ${o.seed}: conflict copies without a conflict event: ${unexplained.join(', ')}`);
+    ok = true;
+    return { seed: o.seed, files: first.size, conflictCopies: copies.length, tokens: written.size, log };
+  } finally {
+    let stopError: unknown = null;
+    for (const c of clients) {
+      try {
+        await c.engine.stop();
+      } catch (err) {
+        stopError ??= err;
+      } finally {
+        c.state.close();
+      }
+    }
+    if (ok && stopError) throw stopError;
   }
-  const seqs = await Promise.all(clients.map((c) => c.state.getCursor()));
-  const serverSeq = (await clients[0]!.api.changes(clients[0]!.vaultId, 0, 1)).vaultSeq;
-  if (seqs.some((s) => s !== serverSeq)) throw new Error(`seed ${o.seed}: cursors ${seqs} != server seq ${serverSeq}`);
-
-  const present = new Set([...first.values()].flatMap((d) => tokensIn(d)));
-  const lost = [...written].filter((t) => !present.has(t) && !removed.has(t));
-  if (lost.length > 0) throw new Error(`seed ${o.seed}: lost edits ${lost.join(', ')}\n--- final\n${describe(first)}\n--- log\n${log.join('\n')}`);
-
-  const copies = [...first.keys()].filter((p) => CONFLICT_COPY_PATTERN.test(p));
-  const reported = new Set(clients.flatMap((c) => c.events.flatMap((e) => (e.type === 'conflict' ? [e.conflictPath] : []))));
-  const unexplained = copies.filter((p) => !reported.has(p));
-  if (unexplained.length > 0) throw new Error(`seed ${o.seed}: conflict copies without a conflict event: ${unexplained.join(', ')}`);
-
-  for (const c of clients) {
-    await c.engine.stop();
-    c.state.close();
-  }
-  return { seed: o.seed, files: first.size, conflictCopies: copies.length, tokens: written.size, log };
 }
 
 /** Seeds to run: OBSYNC_CONVERGENCE_SEED replays one; else OBSYNC_CONVERGENCE_SEEDS (default 20) starting at 1. */
