@@ -29,6 +29,7 @@ mkdir -p "$tmp/bin"
 cat > "$tmp/bin/readelf" <<'SHIM'
 #!/usr/bin/env bash
 printf '%s\n' "$FAKE_READELF_OUTPUT"
+exit "${FAKE_READELF_EXIT:-0}"
 SHIM
 chmod +x "$tmp/bin/readelf"
 fake="$tmp/fake-binary"; : > "$fake"
@@ -50,6 +51,8 @@ expect "the failure names the offending version" 0 bash -c \
 expect "missing binary is a usage error" 2 "$script" "$tmp/does-not-exist"
 expect "no arguments is a usage error" 2 "$script"
 expect "malformed limit is a usage error" 2 "$script" "$real" abc
+expect "a file readelf cannot read is an error, not a static binary" 2 "$script" "$script"
+expect "a failing readelf is an error, not a static binary" 2 env PATH="$tmp/bin:$PATH" FAKE_READELF_OUTPUT='' FAKE_READELF_EXIT=1 "$script" "$fake"
 
 if [ "$failures" -ne 0 ]; then echo "$failures failure(s)"; exit 1; fi
 echo "all passed"
