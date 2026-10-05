@@ -582,3 +582,232 @@ export const Platform = { isMobile: false, isDesktop: true, isIosApp: false, isA
 export function requestUrl(): never {
   throw new Error('requestUrl is not available in tests: pass a request function to the transport');
 }
+
+// ---------- a minimal UI, enough to drive the plugin's screens in tests ----------
+
+export class FakeEl {
+  children: FakeEl[] = [];
+  settings: Setting[] = [];
+  text = '';
+  cls = '';
+  attrs: Record<string, string> = {};
+  type = '';
+  rows = 0;
+  spellcheck = true;
+  constructor(readonly tag = 'div') {}
+  empty(): void {
+    this.children = [];
+    this.settings = [];
+    this.text = '';
+  }
+  createEl(tag: string, o: { text?: string; cls?: string } = {}): FakeEl {
+    const e = new FakeEl(tag);
+    e.text = o.text ?? '';
+    e.cls = o.cls ?? '';
+    this.children.push(e);
+    return e;
+  }
+  createDiv(o: { text?: string; cls?: string } = {}): FakeEl {
+    return this.createEl('div', o);
+  }
+  createSpan(o: { text?: string; cls?: string } = {}): FakeEl {
+    return this.createEl('span', o);
+  }
+  setText(t: string): void {
+    this.text = t;
+  }
+  setAttr(k: string, v: string | number | boolean | null): void {
+    this.attrs[k] = String(v);
+  }
+  addClass(c: string): void {
+    this.cls = `${this.cls} ${c}`.trim();
+  }
+  /** All the text on the element, its children and its settings, for assertions. */
+  allText(): string {
+    return [this.text, ...this.children.map((c) => c.allText()), ...this.settings.map((s) => [s.name, s.desc, ...s.buttons.map((b) => b.text)].join(' '))].join('\n');
+  }
+}
+
+export class TextComponent {
+  readonly inputEl = new FakeEl('input');
+  value = '';
+  placeholder = '';
+  private handler: ((v: string) => unknown) | null = null;
+  setValue(v: string): this {
+    this.value = v;
+    return this;
+  }
+  setPlaceholder(p: string): this {
+    this.placeholder = p;
+    return this;
+  }
+  onChange(cb: (v: string) => unknown): this {
+    this.handler = cb;
+    return this;
+  }
+  /** What the user typing v would do. */
+  type(v: string): void {
+    this.value = v;
+    void this.handler?.(v);
+  }
+}
+
+export class ButtonComponent {
+  text = '';
+  cta = false;
+  warning = false;
+  disabled = false;
+  private handler: (() => unknown) | null = null;
+  setButtonText(t: string): this {
+    this.text = t;
+    return this;
+  }
+  setCta(): this {
+    this.cta = true;
+    return this;
+  }
+  setWarning(): this {
+    this.warning = true;
+    return this;
+  }
+  setDisabled(d: boolean): this {
+    this.disabled = d;
+    return this;
+  }
+  onClick(cb: () => unknown): this {
+    this.handler = cb;
+    return this;
+  }
+  /** What the user pressing the button does; resolves when its work is done. */
+  async click(): Promise<void> {
+    if (this.disabled) return;
+    await this.handler?.();
+  }
+}
+
+export class Setting {
+  name = '';
+  desc = '';
+  heading = false;
+  texts: TextComponent[] = [];
+  buttons: ButtonComponent[] = [];
+  constructor(containerEl: FakeEl) {
+    containerEl.settings.push(this);
+  }
+  setName(n: string): this {
+    this.name = n;
+    return this;
+  }
+  setDesc(d: string): this {
+    this.desc = d;
+    return this;
+  }
+  setHeading(): this {
+    this.heading = true;
+    return this;
+  }
+  addText(cb: (t: TextComponent) => unknown): this {
+    const t = new TextComponent();
+    this.texts.push(t);
+    void cb(t);
+    return this;
+  }
+  addTextArea(cb: (t: TextComponent) => unknown): this {
+    return this.addText(cb);
+  }
+  addButton(cb: (b: ButtonComponent) => unknown): this {
+    const b = new ButtonComponent();
+    this.buttons.push(b);
+    void cb(b);
+    return this;
+  }
+}
+
+export class Notice {
+  static shown: Array<{ message: string; timeout?: number }> = [];
+  constructor(message: string, timeout?: number) {
+    Notice.shown.push(timeout === undefined ? { message } : { message, timeout });
+  }
+}
+
+export class Modal {
+  static opened: Modal[] = [];
+  readonly contentEl = new FakeEl();
+  title = '';
+  constructor(readonly app: App) {}
+  setTitle(t: string): this {
+    this.title = t;
+    return this;
+  }
+  open(): void {
+    Modal.opened.push(this);
+    this.onOpen();
+  }
+  close(): void {
+    this.onClose();
+  }
+  onOpen(): void {}
+  onClose(): void {}
+}
+
+export class PluginSettingTab {
+  readonly containerEl = new FakeEl();
+  constructor(readonly app: App, readonly plugin: Plugin) {}
+  display(): void {}
+  hide(): void {}
+}
+
+export class App {
+  readonly vault: Vault;
+  private storage = new Map<string, unknown>();
+  activeFile: TFile | null = null;
+  readonly workspace = {
+    onLayoutReady: (cb: () => unknown) => void cb(),
+    getActiveFile: () => this.activeFile,
+    on: (_name: string, _cb: (...args: never[]) => unknown): EventRef => ({ name: _name, fn: _cb }),
+  };
+  constructor(vault: Vault) {
+    this.vault = vault;
+  }
+  loadLocalStorage(key: string): unknown {
+    return this.storage.get(key) ?? null;
+  }
+  saveLocalStorage(key: string, data: unknown): void {
+    this.storage.set(key, data);
+  }
+}
+
+export interface FakeCommand {
+  id: string;
+  name: string;
+  callback?: () => unknown;
+  checkCallback?: (checking: boolean) => boolean | void;
+}
+
+export class Plugin {
+  manifest = { id: 'obsync', dir: '.obsidian/plugins/obsync', name: 'Obsync', version: '0.0.0' };
+  commands: FakeCommand[] = [];
+  settingTabs: PluginSettingTab[] = [];
+  statusItems: FakeEl[] = [];
+  ribbon: Array<{ icon: string; title: string; click: () => unknown }> = [];
+  constructor(readonly app: App, manifest?: Partial<Plugin['manifest']>) {
+    Object.assign(this.manifest, manifest);
+  }
+  addCommand(c: FakeCommand): FakeCommand {
+    this.commands.push(c);
+    return c;
+  }
+  addSettingTab(t: PluginSettingTab): void {
+    this.settingTabs.push(t);
+  }
+  addStatusBarItem(): FakeEl {
+    const e = new FakeEl();
+    this.statusItems.push(e);
+    return e;
+  }
+  addRibbonIcon(icon: string, title: string, click: () => unknown): FakeEl {
+    this.ribbon.push({ icon, title, click });
+    return new FakeEl();
+  }
+  registerEvent(_ref: EventRef): void {}
+}
