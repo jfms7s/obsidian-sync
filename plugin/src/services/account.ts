@@ -37,7 +37,7 @@ export async function login(
 
 /**
  * Revokes this device's token (best effort) and forgets the session, the
- * unlocked keys, any unfinished key setup and all sync state, so the next
+ * unlocked keys, any unfinished key setup or vault creation and all sync state, so the next
  * account to log in here starts clean.
  */
 export async function logout(state: LocalState, deps: ClientDeps = {}): Promise<void> {
@@ -52,6 +52,7 @@ export async function logout(state: LocalState, deps: ClientDeps = {}): Promise<
   await state.resetVaultState();
   await state.clearUserKeys();
   await state.clearPendingKeySetup();
+  await state.clearPendingVault();
   await state.clearSession();
 }
 

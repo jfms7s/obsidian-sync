@@ -250,6 +250,39 @@ describe('vaults', () => {
     expect(chosen.namingKey).toEqual(created.namingKey);
   });
 
+  it('retries a vault creation whose response was lost with the same vault and keys', async () => {
+    await srv.createUser('sven', 'sven-password');
+    const s = await newState('lost-vault');
+    const session = await login(s, srv.url, 'sven', 'sven-password', 'A', 'linux');
+    const net = new Net();
+    const api = apiFor(session, { fetch: net.fetch });
+    const { keys } = await setupKeys(s, api, session, 'pp', seededRandom(40), TEST_ARGON2);
+    net.loseNextResponse('POST', '/v1/vaults');
+    await expect(createVault(s, api, session, keys, 'Notes', seededRandom(41))).rejects.toBeInstanceOf(NetworkError);
+    const created = await createVault(s, api, session, keys, 'Notes', seededRandom(42));
+    expect(await listRemoteVaults(api, session, keys)).toEqual([expect.objectContaining({ vaultId: created.vaultId, name: 'Notes' })]);
+    expect(await s.getVault()).toMatchObject({ vaultId: created.vaultId });
+    const opened = await openVaultKeys(await api.vaultKeys(created.vaultId), created.vaultId, session, keys);
+    expect(opened.namingKey).toEqual(created.namingKey);
+    expect(opened.epochKeys.get(1)).toEqual(new Map(created.epochKeys).get(1));
+  });
+
+  it('retries a vault creation that never reached the server with the same vault id', async () => {
+    await srv.createUser('tara', 'tara-password');
+    const s = await newState('offline-vault');
+    const session = await login(s, srv.url, 'tara', 'tara-password', 'A', 'linux');
+    const net = new Net();
+    const api = apiFor(session, { fetch: net.fetch });
+    const { keys } = await setupKeys(s, api, session, 'pp', seededRandom(43), TEST_ARGON2);
+    net.setOnline(false);
+    await expect(createVault(s, api, session, keys, 'Notes', seededRandom(44))).rejects.toBeInstanceOf(NetworkError);
+    net.setOnline(true);
+    const created = await createVault(s, api, session, keys, 'Notes', seededRandom(45));
+    // seededRandom(44) generated the id on the first attempt.
+    expect(created.vaultId).toBe(toHex(seededRandom(44).bytes(16)));
+    expect(await listRemoteVaults(api, session, keys)).toHaveLength(1);
+  });
+
   it('rejects a seal signed by a key from a substituted bundle', async () => {
     // A malicious server plants a vault whose keys it knows, sealed to the
     // user but signed by its own key, and serves a bundle whose

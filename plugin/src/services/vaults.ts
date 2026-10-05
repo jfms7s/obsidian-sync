@@ -1,11 +1,12 @@
 // Remote vault services: list (with decrypted names), create, choose.
 import type { ApiClient } from '../api/client';
+import { ApiError, ErrorCode } from '../api/errors';
 import type { SealedVaultKey } from '../api/types';
 import { decryptVaultName, encryptVaultName } from '../crypto/objects';
 import type { UserKeys } from '../crypto/userkeys';
 import { buildKeyring, deriveEpochKeys, openSealedKey, sealKey, type VaultKeyring } from '../crypto/vaultkeys';
-import type { LocalState, Session, StoredVault } from '../state/store';
-import { toHex } from '../util/bytes';
+import type { LocalState, PendingVault, Session, StoredVault } from '../state/store';
+import { equalBytes, toHex } from '../util/bytes';
 import { cryptoRandom, type Random } from '../util/random';
 
 export interface RemoteVaultSummary {
@@ -49,21 +50,45 @@ export async function listRemoteVaults(api: ApiClient, session: Session, keys: U
   return out;
 }
 
-/** Creates a remote vault (naming key + epoch 1, sealed to this user) and makes it this device's vault. */
+/**
+ * Creates a remote vault (naming key + epoch 1, sealed to this user) and
+ * makes it this device's vault. The id and keys are stored before the
+ * request, and a retry for the same account and name reuses them: if the
+ * earlier request landed although its response was lost, the server
+ * refuses the id as taken and the vault it holds is adopted (after checking
+ * its keys), so no second vault appears.
+ */
 export async function createVault(state: LocalState, api: ApiClient, session: Session, keys: UserKeys, name: string, random: Random = cryptoRandom): Promise<StoredVault> {
-  const vaultId = toHex(random.bytes(16));
-  const namingKey = random.bytes(32);
-  const epochKey = random.bytes(32);
+  const nfc = name.normalize('NFC');
+  let pending = await state.getPendingVault();
+  if (!pending || pending.userId !== session.userId || pending.name !== nfc) {
+    pending = { userId: session.userId, vaultId: toHex(random.bytes(16)), name: nfc, namingKey: random.bytes(32), epochKey: random.bytes(32) };
+    await state.setPendingVault(pending);
+  }
+  const { vaultId, namingKey, epochKey } = pending;
   const epoch1 = await deriveEpochKeys(vaultId, 1, epochKey);
   const sealed: SealedVaultKey[] = [
     { epoch: 0, sealedKey: await sealKey(random, keys.encPub, namingKey, vaultId, 0, session.userId, keys.signSeed) },
     { epoch: 1, sealedKey: await sealKey(random, keys.encPub, epochKey, vaultId, 1, session.userId, keys.signSeed) },
   ];
-  await api.createVault(vaultId, await encryptVaultName(random, vaultId, epoch1, name, keys.signSeed), sealed);
-  const stored: StoredVault = { vaultId, name: name.normalize('NFC'), namingKey, epochKeys: [[1, epochKey]], currentEpoch: 1 };
+  try {
+    await api.createVault(vaultId, await encryptVaultName(random, vaultId, epoch1, nfc, keys.signSeed), sealed);
+  } catch (err) {
+    if (!(err instanceof ApiError && err.code === ErrorCode.INVALID) || !(await landed(api, session, keys, pending))) throw err;
+  }
+  const stored: StoredVault = { vaultId, name: nfc, namingKey, epochKeys: [[1, epochKey]], currentEpoch: 1 };
   await state.resetVaultState();
   await state.setVault(stored);
+  await state.clearPendingVault();
   return stored;
+}
+
+/** Whether the server holds pending's vault, owned by this user and sealed with exactly its keys. */
+async function landed(api: ApiClient, session: Session, keys: UserKeys, pending: PendingVault): Promise<boolean> {
+  const v = (await api.listVaults()).find((x) => x.vaultId === pending.vaultId);
+  if (!v || v.ownerId !== session.userId) return false;
+  const opened = await openVaultKeys(await api.vaultKeys(v.vaultId), v.vaultId, session, keys);
+  return equalBytes(opened.namingKey, pending.namingKey) && equalBytes(opened.epochKeys.get(1) ?? new Uint8Array(0), pending.epochKey);
 }
 
 /** Makes an existing remote vault this device's vault. Switching vaults drops the old vault's sync state. */

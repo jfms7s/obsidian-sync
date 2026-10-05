@@ -111,6 +111,16 @@ export interface PendingKeySetup {
   uploaded: boolean;
 }
 
+/** A vault creation whose request may have reached the server; retried with the same id and keys. */
+export interface PendingVault {
+  userId: string;
+  vaultId: string;
+  /** NFC. */
+  name: string;
+  namingKey: Uint8Array;
+  epochKey: Uint8Array;
+}
+
 export interface StoredVault {
   vaultId: string;
   name: string;
@@ -177,6 +187,10 @@ export class LocalState {
   getPendingKeySetup(): Promise<PendingKeySetup | undefined> { return this.kvGet('pendingKeySetup'); }
   setPendingKeySetup(p: PendingKeySetup): Promise<void> { return this.kvPut('pendingKeySetup', p); }
   clearPendingKeySetup(): Promise<void> { return this.kvDelete('pendingKeySetup'); }
+
+  getPendingVault(): Promise<PendingVault | undefined> { return this.kvGet('pendingVault'); }
+  setPendingVault(p: PendingVault): Promise<void> { return this.kvPut('pendingVault', p); }
+  clearPendingVault(): Promise<void> { return this.kvDelete('pendingVault'); }
 
   getVault(): Promise<StoredVault | undefined> { return this.kvGet('vault'); }
   setVault(v: StoredVault): Promise<void> { return this.kvPut('vault', v); }
@@ -355,7 +369,8 @@ export class LocalState {
    * Drops all sync state for the vault (switching vaults or logging out):
    * files, bases, pending commits, dirty paths, refusals, failures, the
    * cursor and the stored vault keys. The session, the user's keys, a
-   * pending key setup, settings and the dirty generation counter are kept.
+   * pending key setup, a pending vault creation, settings and the dirty
+   * generation counter are kept.
    */
   async resetVaultState(): Promise<void> {
     await inTx(this.db, [FILES, BASES, PENDING, DIRTY, REFUSED, FAILURES, KV], 'readwrite', async (t) => {
