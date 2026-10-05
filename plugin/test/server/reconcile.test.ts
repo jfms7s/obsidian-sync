@@ -90,3 +90,20 @@ it('queues a file whose size changed without reading it, and reads only same-siz
   expect(read.mock.calls.map((c) => c[0])).toEqual(['touched.md']);
   expect((await d.state.dirtyEntries()).map((e) => e.path)).toEqual(['grown.md']);
 });
+
+it('tells the adapter which folders its ignore rules skip, so ignored trees are not walked', async () => {
+  const d = await newDevice(srv, await newUser(srv), { name: 'D', vault: 'create', ignoreGlobs: ['Scratch/'] });
+  await d.adapter.write('Notes/a.md', text('a\n'));
+  await d.adapter.write('Scratch/b.md', text('b\n'));
+  await d.adapter.write('.git/objects/ab', text('g\n'));
+  let skip: ((folder: string) => boolean) | undefined;
+  const list = d.adapter.list.bind(d.adapter);
+  d.adapter.list = async (s) => {
+    skip = s;
+    return list(s);
+  };
+  await reconcile(d.ctx);
+  expect(skip).toBeDefined();
+  expect([skip!('Scratch'), skip!('.git'), skip!('Notes'), skip!('Notes/Deep')]).toEqual([true, true, false, false]);
+  expect((await d.state.dirtyEntries()).map((e) => e.path)).toEqual(['Notes/a.md']);
+});
