@@ -5,7 +5,7 @@ export PATH := $(BIN):$(PATH)
 export GOTOOLCHAIN := auto
 export CGO_ENABLED := 1
 
-.PHONY: tools proto proto-lint test vet plugin-test vectors
+.PHONY: tools proto proto-lint test vet plugin-test vectors convergence
 
 tools: plugin/node_modules
 	GOBIN=$(BIN) go install github.com/bufbuild/buf/cmd/buf@v1.47.2
@@ -34,3 +34,7 @@ plugin-test: plugin/node_modules
 # Known-answer vectors for the plugin, computed by the Go implementation.
 vectors:
 	cd server && go run ./cmd/vectorgen -out ../plugin/test/vectors
+
+# CONVERGENCE_SEEDS=1000 make convergence (plan 3's CI); default 20.
+convergence: plugin/node_modules
+	cd plugin && OBSYNC_CONVERGENCE_SEEDS=$${CONVERGENCE_SEEDS:-20} npx vitest run --project convergence

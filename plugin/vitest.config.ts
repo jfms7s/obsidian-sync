@@ -20,6 +20,16 @@ export default defineConfig({
           hookTimeout: 60_000,
         },
       },
+      {
+        extends: true,
+        test: {
+          name: 'convergence',
+          include: ['test/convergence/**/*.test.ts'],
+          globalSetup: ['test/helpers/global-setup.ts'],
+          testTimeout: 120_000,
+          hookTimeout: 60_000,
+        },
+      },
     ],
   },
 });
