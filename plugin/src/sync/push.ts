@@ -315,7 +315,10 @@ export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<Push
           // Not retried until the file changes.
           await ctx.state.deletePending(p.fileId);
           await ctx.state.putRefusal({ path: p.path, fingerprint: p.contentHash ?? 'deleted', message: r.error?.message ?? 'rejected' });
-          await ctx.state.clearDirty(op.entry.path, op.entry.gen);
+          // A resent pending commit may describe an older state of the
+          // file: then the entry stays and the next round looks at the file
+          // as it is now (the refusal only covers the refused content).
+          if (op.matchesLocal) await ctx.state.clearDirty(op.entry.path, op.entry.gen);
           ctx.emit({
             type: 'notice', code: code === ErrorCode.TOO_LARGE ? 'TOO_LARGE' : 'COMMIT_REJECTED', persistent: code === ErrorCode.TOO_LARGE,
             path: p.path, message: `${p.path} was not synced: ${r.error?.message ?? 'rejected by the server'}`,

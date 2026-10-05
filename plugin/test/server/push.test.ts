@@ -112,6 +112,18 @@ describe('push', () => {
     expect(await push(a, fa)).toMatchObject({ committed: 1 });
   });
 
+  it('keeps a newer local edit queued when a resent pending commit is refused', async () => {
+    const [a, , fa] = await pair();
+    await a.adapter.write('big.bin', new Uint8Array(100_001));
+    a.net.loseNextResponse('POST', '/commit'); // refused, but the device never hears it
+    await expect(push(a, fa)).rejects.toThrow();
+    await a.adapter.write('big.bin', new Uint8Array(10)); // edited meanwhile
+    expect(await push(a, fa)).toMatchObject({ committed: 0 }); // the resend is refused again
+    expect(await push(a, fa)).toMatchObject({ committed: 1 }); // the edit is still queued
+    const heads = (await a.api.heads(a.vaultId, null)).heads;
+    expect(heads).toHaveLength(1);
+  });
+
   it('does not read or upload a file over the device limit', async () => {
     const [a, , fa] = await pair({ maxFileBytes: 1000 });
     await a.adapter.write('video.mp4', new Uint8Array(1001));
