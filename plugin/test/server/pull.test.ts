@@ -8,7 +8,7 @@ import { ServerRollbackError } from '../../src/sync/context';
 import { newestPerFile, pull, resolveConflict } from '../../src/sync/pull';
 import { PushMemory, pushRound } from '../../src/sync/push';
 import type { RemoteVersion } from '../../src/api/types';
-import { files, landedPendingOvertakenTwice, newDevice, newUser, remoteCommit, text, type Device } from '../helpers/fixture';
+import { files, landedPendingOvertakenTwice, nameKeepingCollision, newDevice, newUser, remoteCommit, text, type Device } from '../helpers/fixture';
 import { startServer, type TestServer } from '../helpers/server';
 
 let srv: TestServer;
@@ -106,12 +106,17 @@ describe('pull', () => {
 
   it('saves a remote file that differs only in case as a conflict copy, once', async () => {
     const d = await device({ caseInsensitive: true });
-    await d.adapter.write('readme.md', text('local\n'));
-    await remoteCommit(d, 'README.md', text('remote\n'), 'Mac');
+    // The local name is the one with the lower file id, so it keeps the path and the remote one loses.
+    const local = await nameKeepingCollision(d, 'readme.md', 'README.md');
+    const remote = local === 'readme.md' ? 'README.md' : 'readme.md';
+    await d.adapter.write(local, text('local\n'));
+    await remoteCommit(d, remote, text('remote\n'), 'Mac');
     await pull(d.ctx);
-    expect(files(d.adapter)).toEqual({ 'readme.md': 'local\n', 'README (conflict Mac 2026-01-02 0304).md': 'remote\n' });
-    expect((await d.state.filesByPath('README.md'))[0]).toMatchObject({ shadowed: true });
-    await remoteCommit(d, 'README.md', text('remote 2\n'), 'Mac');
+    // The copy's name comes from the remote version (its device, and its mtime in UTC; remoteCommit uses 1 ms).
+    const copy = `${remote.replace(/\.md$/, '')} (conflict Mac 1970-01-01 0000).md`;
+    expect(files(d.adapter)).toEqual({ [local]: 'local\n', [copy]: 'remote\n' });
+    expect((await d.state.filesByPath(remote))[0]).toMatchObject({ shadowed: true });
+    await remoteCommit(d, remote, text('remote 2\n'), 'Mac');
     await pull(d.ctx);
     expect(Object.keys(files(d.adapter))).toHaveLength(2);
   });

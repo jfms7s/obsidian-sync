@@ -11,7 +11,7 @@ import { decryptMeta, type FileMeta } from '../crypto/objects';
 import { fromHex, toHex } from '../util/bytes';
 import { conflictCopyName } from '../util/path';
 import type { FileRecord } from '../state/store';
-import { expectFor } from '../vault/adapter';
+import { expectFor, type FileStat } from '../vault/adapter';
 import { hashHex } from './content';
 import type { SyncContext } from './context';
 import { isCycleError } from './failures';
@@ -68,35 +68,41 @@ async function stampOf(ctx: SyncContext, rec: FileRecord): Promise<Stamp | null>
 }
 
 /**
+ * Moves the local file st to a conflict copy (a rename, so its content is
+ * not uploaded again), because another file takes its name. A file that is
+ * unchanged since it was synced is named after its version; one that was
+ * edited or never synced is named after this device and the file's mtime,
+ * since no other device has that content. Returns false when the file
+ * changed while it was being moved.
+ */
+export async function moveToCopy(ctx: SyncContext, st: FileStat, code: 'PATH_COLLISION' | 'CASE_COLLISION', why: string): Promise<boolean> {
+  const data = await ctx.adapter.read(st.path);
+  if (!data) return false;
+  const hash = await hashHex(data);
+  const rec = (await ctx.state.filesByPath(st.path)).find(isSyncedHere);
+  const unchanged = !!rec && !rec.deleted && rec.contentHash === hash;
+  const stamp = (unchanged ? await stampOf(ctx, rec) : null) ?? { device: ctx.deviceName, mtimeMs: st.mtime };
+  const target = await copyPathFor(ctx, st.path, stamp, hash);
+  const moved = target.exists
+    ? await ctx.adapter.remove(st.path, expectFor(st))
+    : await ctx.adapter.rename(st.path, target.path, expectFor(st));
+  if (!moved) return false;
+  await ctx.state.markDirty(st.path);
+  await ctx.state.markDirty(target.path, target.exists ? undefined : st.path);
+  ctx.emit({ type: 'notice', code, persistent: false, path: st.path, conflictPath: target.path, message: `${st.path} ${why}; it was moved to ${target.path}` });
+  return true;
+}
+
+/**
  * Before path is written: a local file stands where one of path's parent
- * folders must be. It moves to a conflict copy (a rename, so its content is
- * not uploaded again). A file that is unchanged since it was synced is named
- * after its version; one that was edited or never synced is named after this
- * device and the file's mtime, since no other device has that content.
+ * folders must be. The folder wins, so the file moves to a conflict copy.
  * Returns false when the file changed while it was being moved.
  */
 export async function evictBlockingFile(ctx: SyncContext, path: string): Promise<boolean> {
   const parts = path.split('/');
   for (let i = 1; i < parts.length; i++) {
     const st = await ctx.adapter.stat(parts.slice(0, i).join('/'));
-    if (!st) continue;
-    const data = await ctx.adapter.read(st.path);
-    if (!data) return false;
-    const hash = await hashHex(data);
-    const rec = (await ctx.state.filesByPath(st.path)).find(isSyncedHere);
-    const unchanged = !!rec && !rec.deleted && rec.contentHash === hash;
-    const stamp = (unchanged ? await stampOf(ctx, rec) : null) ?? { device: ctx.deviceName, mtimeMs: st.mtime };
-    const target = await copyPathFor(ctx, st.path, stamp, hash);
-    const moved = target.exists
-      ? await ctx.adapter.remove(st.path, expectFor(st))
-      : await ctx.adapter.rename(st.path, target.path, expectFor(st));
-    if (!moved) return false;
-    await ctx.state.markDirty(st.path);
-    await ctx.state.markDirty(target.path, target.exists ? undefined : st.path);
-    ctx.emit({
-      type: 'notice', code: 'PATH_COLLISION', persistent: false, path: st.path, conflictPath: target.path,
-      message: `${st.path} is a folder on another device; this device's file was moved to ${target.path}`,
-    });
+    if (st && !(await moveToCopy(ctx, st, 'PATH_COLLISION', 'is a folder on another device'))) return false;
   }
   return true;
 }

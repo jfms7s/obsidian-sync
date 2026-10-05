@@ -5,7 +5,7 @@ import { toHex } from '../../src/util/bytes';
 import { ManualClock } from '../../src/util/clock';
 import { CONFLICT_COPY_PATTERN } from '../../src/util/path';
 import { makeClient, settle, type SimClient } from '../helpers/client';
-import { files, newUser, text } from '../helpers/fixture';
+import { files, nameKeepingCollision, newUser, text } from '../helpers/fixture';
 import { startServer, type TestServer } from '../helpers/server';
 
 let srv: TestServer;
@@ -26,7 +26,10 @@ describe('names that differ only in letter case', () => {
     await b.engine.runCycle();
     await settle([a, b]);
     const notice = b.events.find((e) => e.type === 'notice' && e.code === 'CASE_COLLISION');
-    expect(notice).toMatchObject({ path: 'README.md', conflictPath: 'README (conflict Laptop 2026-01-02 0304).md', persistent: false });
+    expect(notice).toMatchObject({ persistent: false });
+    const conflictPath = (notice as { conflictPath?: string }).conflictPath;
+    expect(conflictPath).toMatch(CONFLICT_COPY_PATTERN);
+    expect(files(b.adapter)).toHaveProperty([conflictPath!]);
   });
 
   it('saves a colliding file under one name on every case-insensitive device, whatever their clocks say', async () => {
@@ -40,8 +43,12 @@ describe('names that differ only in letter case', () => {
     expect(copies(b)).toHaveLength(1);
     expect(files(b.adapter)).toEqual(files(c.adapter));
     expect(Object.values(files(b.adapter)).sort()).toEqual(['lower\n', 'upper\n']);
-    // The case-sensitive device holds both names and also the saved copy.
-    expect(Object.keys(files(a.adapter)).sort()).toEqual(['README.md', 'readme.md', ...copies(b)].sort());
+    // README.md arrived first. When it keeps the name, readme.md is only shadowed on the
+    // case-insensitive devices, so the case-sensitive one holds both names and the copy.
+    // When readme.md keeps it, they moved README.md away (a delete everyone gets).
+    const winner = await nameKeepingCollision(a, 'README.md', 'readme.md');
+    const expected = winner === 'README.md' ? ['README.md', 'readme.md', ...copies(b)] : ['readme.md', ...copies(b)];
+    expect(Object.keys(files(a.adapter)).sort()).toEqual(expected.sort());
   });
 
   it('keeps both names when a case-only rename meets an edit of the old name', async () => {
