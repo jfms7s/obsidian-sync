@@ -12,11 +12,13 @@ import { pull, remoteHeads, serverLostHistory } from './pull';
 export interface ReconcileResult {
   fetched: number;
   markedDirty: number;
+  /** The vault seq its pull saw. */
+  vaultSeq: number;
 }
 
 export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
   const { state, adapter } = ctx;
-  await pull(ctx);
+  const { vaultSeq } = await pull(ctx);
   let fetched = 0;
   let markedDirty = 0;
 
@@ -102,5 +104,5 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
       markedDirty++;
     }
   }
-  return { fetched, markedDirty };
+  return { fetched, markedDirty, vaultSeq };
 }

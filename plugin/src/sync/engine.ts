@@ -76,7 +76,10 @@ export class SyncEngine {
   private reconcileTimer: TimerHandle | null = null;
 
   private reconcileDue = true;
+  /** The newest vault seq known: from the last pull, raised by hub notifications. */
   private knownSeq = 0;
+  /** The highest seq notified since the last pull began. */
+  private notifiedSeq = 0;
   private eventWrites: Promise<unknown> = Promise.resolve();
   /** Epochs the last keyring refresh lacked (SyncContext.unavailableEpochs); checked again with each reconcile interval. */
   private readonly unavailableEpochs = new Set<number>();
@@ -142,6 +145,7 @@ export class SyncEngine {
         {
           onNotify: (_vault, seq) => {
             this.knownSeq = Math.max(this.knownSeq, seq);
+            this.notifiedSeq = Math.max(this.notifiedSeq, seq);
             this.schedule(0);
           },
           onConnected: () => {
@@ -281,13 +285,17 @@ export class SyncEngine {
     await this.eventWrites;
     this.setStatus('syncing');
     try {
+      // The server's seq replaces what was known (it can go down after a
+      // restore from a backup); only notifications that arrived during the
+      // pull may be ahead of it.
+      this.notifiedSeq = 0;
       if (this.reconcileDue) {
         this.reconcileDue = false;
-        await reconcile(this.ctx);
+        this.knownSeq = Math.max((await reconcile(this.ctx)).vaultSeq, this.notifiedSeq);
       } else {
         // Every cycle pulls first: it is one request when nothing changed,
         // and pushing on top of the newest heads avoids needless conflicts.
-        this.knownSeq = Math.max(this.knownSeq, (await pull(this.ctx)).vaultSeq);
+        this.knownSeq = Math.max((await pull(this.ctx)).vaultSeq, this.notifiedSeq);
       }
       for (let round = 0; round < MAX_PUSH_ROUNDS_PER_CYCLE; round++) {
         await this.eventWrites;
@@ -347,6 +355,7 @@ export class SyncEngine {
     if (err instanceof ServerRollbackError) {
       this.emit({ type: 'notice', code: 'SERVER_ROLLBACK', persistent: false, message: 'the server was restored from a backup; every file is being compared with it again' });
       await this.ctx.state.forgetSyncedVersions();
+      this.knownSeq = 0;
       this.reconcileDue = true;
       this.schedule(0);
       return;

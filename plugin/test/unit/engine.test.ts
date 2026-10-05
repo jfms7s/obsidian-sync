@@ -328,4 +328,22 @@ describe('engine scheduling', () => {
     expect(server.changes).toBe(2);
     await engine.stop();
   });
+
+  it('does not spin after a server rollback lowered the vault seq', async () => {
+    const { engine, server, events, settle } = await scripted();
+    server.vaultSeq = 10;
+    await engine.start();
+    await settle();
+    engine.requestSync(); // a plain pull, which learns the vault seq
+    await settle();
+    expect(engine.status).toBe('synced');
+    server.vaultSeq = 5; // restored from a backup
+    const before = server.changes;
+    engine.requestSync();
+    await settle();
+    expect(events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'SERVER_ROLLBACK' }));
+    expect(server.changes - before).toBeLessThanOrEqual(3); // the failed pull, the reconcile's pull, one more at most
+    expect(engine.status).toBe('synced');
+    await engine.stop();
+  });
 });
