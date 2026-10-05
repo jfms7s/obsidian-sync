@@ -150,6 +150,60 @@ describe('the settings tab', () => {
     await second.shell.stop();
   }, 120_000);
 
+  it('lets a device that another device removed sign in again from the settings tab', async () => {
+    const user = await newUser(srv);
+    const first = await screen('laptop');
+    await first.render();
+    first.type('Server address', srv.url);
+    first.type('Username', user.username);
+    first.type('Password', user.password);
+    await first.press('Sign in');
+    first.type('Passphrase', 'a long enough passphrase');
+    first.type('Repeat the passphrase', 'a long enough passphrase');
+    await first.press('Create keys');
+    await first.press('I have saved them');
+    await first.press('Create vault');
+    expect(first.shell.engine).not.toBeNull();
+
+    const second = await screen('phone');
+    await second.render();
+    second.type('Server address', srv.url);
+    second.type('Username', user.username);
+    second.type('Password', user.password);
+    await second.press('Sign in');
+    second.type('Passphrase', 'a long enough passphrase');
+    await second.press('Unlock');
+    await second.press('Use this vault');
+    expect(second.shell.engine).not.toBeNull();
+
+    // The first device removes the second one.
+    await first.render();
+    await first.press('Remove');
+
+    // The second one is told so, and is offered the way back in.
+    await second.render();
+    expect(second.text()).toMatch(/removed from your account/);
+    expect(() => second.button('Try again')).toThrow();
+    await second.press('Sign in again');
+    expect(await second.state.getSession()).toBeUndefined();
+    expect(second.shell.engine).toBeNull();
+    expect(second.setting('Sign in').heading).toBe(true);
+
+    // Signing in again, unlocking and choosing the vault starts the sync.
+    second.type('Password', user.password);
+    await second.press('Sign in');
+    expect(second.setting('Unlock this device').heading).toBe(true);
+    second.type('Passphrase', 'a long enough passphrase');
+    await second.press('Unlock');
+    expect(second.setting('Choose the vault to sync').heading).toBe(true);
+    await second.press('Use this vault');
+    expect(second.shell.engine).not.toBeNull();
+    expect(second.text()).toMatch(/Syncing FakeVault/);
+
+    await first.shell.stop();
+    await second.shell.stop();
+  }, 120_000);
+
   it('saves ignore rules, reports bad lines by their line number, and signs out after a confirmation', async () => {
     const user = await newUser(srv);
     const s = await screen('laptop');
