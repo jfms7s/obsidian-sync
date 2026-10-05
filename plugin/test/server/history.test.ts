@@ -1,6 +1,6 @@
 // History, trash and restore (what plan 3's history view calls), against the real server.
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
-import { fileHistory, listTrash, PathOccupiedError, readVersion, restore, UnsyncedChangesError } from '../../src/services/history';
+import { fileHistory, listTrash, NotInTrashError, PathOccupiedError, readVersion, restore, UnsyncedChangesError } from '../../src/services/history';
 import { keyringFromStored } from '../../src/services/vaults';
 import { makeClient, settle } from '../helpers/client';
 import { files, newUser, text } from '../helpers/fixture';
@@ -132,5 +132,38 @@ describe('history and trash', () => {
     expect(files(b.adapter)).toEqual({ 'n.md': 'v1\n' });
     expect(await fileHistory(a.api, ring, 'n.md')).toHaveLength(3);
     expect([...a.events, ...b.events].some((e) => e.type === 'conflict')).toBe(false);
+  });
+
+  it('restores from the trash exactly the content the deletion removed', async () => {
+    const user = await newUser(srv);
+    const a = await makeClient(srv, user, { name: 'A', vault: 'create' });
+    const ring = await keyringFromStored((await a.state.getVault())!);
+    await a.adapter.write('n.md', text('v1\n'));
+    await settle([a]);
+    await a.adapter.write('n.md', text('v2 last\n'));
+    await settle([a]);
+    await a.adapter.remove('n.md');
+    await settle([a]);
+    const [entry] = await listTrash(a.api, ring);
+    expect(await restore(a.api, ring, a.adapter, a.state, entry!)).toBe('n.md');
+    expect(files(a.adapter)).toEqual({ 'n.md': 'v2 last\n' });
+  });
+
+  it('does not restore a trash entry over a file that exists again', async () => {
+    const user = await newUser(srv);
+    const a = await makeClient(srv, user, { name: 'A', vault: 'create' });
+    const b = await makeClient(srv, user, { name: 'B', vault: a.vaultId });
+    const ring = await keyringFromStored((await a.state.getVault())!);
+    await a.adapter.write('n.md', text('old\n'));
+    await settle([a, b]);
+    await a.adapter.remove('n.md');
+    await settle([a, b]);
+    const [stale] = await listTrash(a.api, ring); // the list the history view is showing
+    await b.adapter.write('n.md', text('brand new\n'));
+    await settle([a, b]);
+    const err = await restore(a.api, ring, a.adapter, a.state, stale!).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotInTrashError);
+    expect(err).toMatchObject({ path: 'n.md' });
+    expect(files(a.adapter)).toEqual({ 'n.md': 'brand new\n' });
   });
 });
