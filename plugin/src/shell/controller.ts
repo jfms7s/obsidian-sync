@@ -123,6 +123,7 @@ export class ShellController {
     // gives the lock straight back when it is its turn and sees nobody wants the engine.
     if (this.starting && !this.holdsLock) return;
     await this.starting?.catch(() => undefined);
+    if (this.wanted) return; // started again while the start in progress finished: keep the engine
     const r = this.running;
     this.running = null;
     if (!r) return;
