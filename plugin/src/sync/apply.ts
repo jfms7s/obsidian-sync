@@ -7,7 +7,7 @@ import type { FileRecord, PendingCommit } from '../state/store';
 import { equalBytes, toHex, utf8 } from '../util/bytes';
 import { caseFold, conflictCopyName } from '../util/path';
 import { expectFor } from '../vault/adapter';
-import { evictBlockingFile, saveBesideFolder } from './collisions';
+import { evictBlockingFile, saveBeside } from './collisions';
 import { decodeText, downloadContent, hashHex } from './content';
 import type { SyncContext } from './context';
 import { applyKey, clearFailure, isFileError, recordFailure } from './failures';
@@ -195,7 +195,7 @@ async function tryApply(
   if (!v.deleted) {
     if (await adapter.hasFolder(path)) {
       if (!rec?.shadowed) {
-        const copy = await saveBesideFolder(ctx, meta, contentHash!, await remote());
+        const copy = await saveBeside(ctx, meta, contentHash!, await remote());
         if (copy === null) return false;
         ctx.emit({ type: 'notice', code: 'PATH_COLLISION', persistent: false, path, conflictPath: copy, message: `${path} is a folder on this device; the file was saved as ${copy}` });
       }
@@ -229,10 +229,9 @@ async function tryApply(
       // Otherwise the incoming file is written once as a conflict copy and
       // not tracked at its own path.
       if (!rec?.shadowed) {
-        const copy = await freeConflictPath(ctx, path, meta.deviceName || 'unknown device');
-        if (!(await adapter.write(copy, await remote(), { absent: true }))) return false;
-        await state.markDirty(copy);
-        ctx.emit({ type: 'notice', code: 'CASE_COLLISION', persistent: false, path, message: `${path} differs only in letter case from ${st.path}; this device saved it as ${copy}` });
+        const copy = await saveBeside(ctx, meta, contentHash!, await remote());
+        if (copy === null) return false;
+        ctx.emit({ type: 'notice', code: 'CASE_COLLISION', persistent: false, path, conflictPath: copy, message: `${path} differs only in letter case from ${st.path}; this device saved it as ${copy}` });
       }
       await state.recordSynced(record(fileId, path, versionId, v, contentHash, -1, { shadowed: true }), null);
       return true;

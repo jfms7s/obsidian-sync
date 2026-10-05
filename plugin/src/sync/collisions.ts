@@ -1,7 +1,8 @@
-// A file and a folder cannot share a path (spec §5.1 has one row per path, but
-// a vault is a tree). When two versions want the same name, one as a file and
-// one as a folder, the folder wins and the file's content is saved beside it
-// as a conflict copy.
+// A file and a folder cannot share a path, and on a case-insensitive file
+// system two names that differ only in case are one path. When two versions
+// want the same name, one as a file and one as a folder, the folder wins and
+// the file's content is saved beside it as a conflict copy; for two files
+// that differ only in case, the one that arrived second is saved as a copy.
 //
 // Every device must end up with the same copy name, or each would push a
 // copy of its own. So the name comes from the file's version (its device
@@ -40,8 +41,12 @@ async function copyPathFor(ctx: SyncContext, path: string, stamp: Stamp, content
   }
 }
 
-/** Saves an incoming file whose path is a local folder; returns the copy's path, or null if the target changed meanwhile. */
-export async function saveBesideFolder(ctx: SyncContext, meta: FileMeta, contentHash: string, data: Uint8Array): Promise<string | null> {
+/**
+ * Saves an incoming file that cannot take its path here (a local folder, or
+ * a file whose name differs only in letter case holds it) as a conflict
+ * copy; returns the copy's path, or null if the target changed meanwhile.
+ */
+export async function saveBeside(ctx: SyncContext, meta: FileMeta, contentHash: string, data: Uint8Array): Promise<string | null> {
   const target = await copyPathFor(ctx, meta.path, { device: meta.deviceName || 'unknown device', mtimeMs: meta.mtimeMs }, contentHash);
   if (!target.exists && !(await ctx.adapter.write(target.path, data, { absent: true }))) return null;
   await ctx.state.markDirty(target.path);
