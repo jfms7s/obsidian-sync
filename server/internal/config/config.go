@@ -277,13 +277,13 @@ func (c Config) Validate() error {
 	// converting them to a time.Duration overflows (about 106,751 days). An
 	// overflowed retention cutoff lands in the future and prunes everything.
 	if c.Retention.HistoryDays > maxDays || c.Retention.TrashDays > maxDays {
-		add(fmt.Sprintf("retention days must be at most %d", maxDays))
+		add("retention days must be at most %d", maxDays)
 	}
 	if c.GCGraceHours < 1 || c.GCGraceHours > maxHours {
-		add(fmt.Sprintf("gc_grace_hours must be between 1 and %d", maxHours))
+		add("gc_grace_hours must be between 1 and %d", maxHours)
 	}
 	if c.JobsIntervalMinutes < 1 || c.JobsIntervalMinutes > maxHours*60 {
-		add(fmt.Sprintf("jobs_interval_minutes must be between 1 and %d", maxHours*60))
+		add("jobs_interval_minutes must be between 1 and %d", maxHours*60)
 	}
 	switch c.LogLevel {
 	case "debug", "info", "warn", "error":
