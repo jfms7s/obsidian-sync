@@ -87,6 +87,12 @@ export async function pull(ctx: SyncContext, pageSize = CHANGES_PAGE_SIZE): Prom
         await state.setCursorAnchor(null);
       }
     }
+    // A seq names one version. A different synced version at the same seq
+    // (this device's own commit, say, that it has not pulled yet) means the
+    // server was restored from a backup and its new commits reused the seq.
+    for (const v of versions) {
+      if ((await state.filesAtSeq(v.seq)).some((r) => r.versionId !== toHex(v.versionId))) throw new ServerRollbackError(cursor, page.vaultSeq);
+    }
     for (const v of newestPerFile(versions)) {
       await applyHead(ctx, v, versions);
       applied++;

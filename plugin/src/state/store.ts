@@ -244,6 +244,11 @@ export class LocalState {
     });
   }
 
+  /** The records whose version sits at server seq `seq`: normally none or one (a seq names one version). */
+  filesAtSeq(seq: number): Promise<FileRecord[]> {
+    return inTx(this.db, [FILES], 'readonly', (t) => req(t.objectStore(FILES).index('seq').getAll(seq)) as Promise<FileRecord[]>);
+  }
+
   getBase(fileId: string): Promise<string | undefined> {
     return inTx(this.db, [BASES], 'readonly', (t) => req(t.objectStore(BASES).get(fileId)) as Promise<string | undefined>);
   }
