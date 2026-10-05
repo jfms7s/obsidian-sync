@@ -30,6 +30,21 @@ describe('diffLines', () => {
     expect(diffLines(big, 'x\n')).toBeNull();
     expect(diffLines('x\n', big)).toBeNull();
   });
+
+  it('keeps the unchanged lines around an edit and still diffs long notes with an edit in the middle', () => {
+    const before = Array.from({ length: 4000 }, (_, i) => (i % 3 === 0 ? '' : `line ${i}`));
+    const after = [...before];
+    after[2000] = 'edited';
+    const out = diffLines(before.join('\n'), after.join('\n'))!;
+    expect(out.filter((l) => l.kind !== 'same')).toEqual([{ kind: 'del', text: before[2000] }, { kind: 'add', text: 'edited' }]);
+    expect(out).toHaveLength(4001);
+  });
+
+  it('refuses a diff whose equal lines would make it too slow, however few lines it has', () => {
+    const blanks = '\n'.repeat(2000);
+    const alternating = Array.from({ length: 1999 }, (_, i) => (i % 2 ? `x${i}` : '')).join('\n');
+    expect(diffLines(`a\n${blanks}`, `b\n${alternating}`)).toBeNull();
+  });
 });
 
 describe('statusLabel', () => {
@@ -92,8 +107,8 @@ describe('describeError', () => {
 
   it('keeps the wording of history errors and shows unknown errors', () => {
     expect(describeError(new UnsyncedChangesError('a.md'))).toMatchObject({ kind: 'retry', message: expect.stringContaining('not synced yet') });
-    expect(describeError(new PathOccupiedError('a.md', 'A.md')).message).toContain('A.md');
-    expect(describeError(new NotInTrashError('a.md')).message).toContain('exists again');
+    expect(describeError(new PathOccupiedError('notes/a.md', 'notes/A.md')).message).toBe('notes/a.md cannot be restored: notes/A.md already holds that name.');
+    expect(describeError(new NotInTrashError('notes/a.md')).message).toBe('notes/a.md exists again; restore an earlier version of it from its history instead.');
     expect(describeError(new Error('disk full'))).toEqual({ kind: 'none', message: 'Something went wrong: disk full' });
     expect(describeError('plain string')).toEqual({ kind: 'none', message: 'Something went wrong: plain string' });
   });
