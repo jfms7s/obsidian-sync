@@ -1,16 +1,16 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { openDb } from '../../src/state/idb';
-import { LocalState, upgradeSchema, type FileRecord, type PendingCommit } from '../../src/state/store';
+import { DB_VERSION, LocalState, upgradeSchema, type FileRecord, type PendingCommit } from '../../src/state/store';
 
 function within<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   return Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${what}: timed out`)), ms))]);
 }
 
-function rawOpen(factory: IDBFactory, name: string, version: number, upgrade?: (db: IDBDatabase, old: number) => void): Promise<IDBDatabase> {
+function rawOpen(factory: IDBFactory, name: string, version: number, upgrade?: (db: IDBDatabase, old: number, tx: IDBTransaction) => void): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const r = factory.open(name, version);
-    r.onupgradeneeded = (ev) => upgrade?.(r.result, ev.oldVersion);
+    r.onupgradeneeded = (ev) => upgrade?.(r.result, ev.oldVersion, r.transaction!);
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
   });
@@ -166,7 +166,7 @@ describe('LocalState', () => {
   it('upgrades only from the versions it knows, so a newer schema step does not recreate stores', async () => {
     const factory = new IDBFactory();
     (await open(factory, 'up')).close();
-    const db = await rawOpen(factory, 'up', 2, (d, old) => upgradeSchema(d, old));
+    const db = await rawOpen(factory, 'up', DB_VERSION + 1, (d, old, tx) => upgradeSchema(d, old, tx));
     expect([...db.objectStoreNames]).toContain('dirty');
     db.close();
   });
@@ -174,7 +174,7 @@ describe('LocalState', () => {
   it('closes its connection when another tab or a newer version wants the database', async () => {
     const factory = new IDBFactory();
     await open(factory, 'vc');
-    const newer = await within(rawOpen(factory, 'vc', 2), 1000, 'open version 2');
+    const newer = await within(rawOpen(factory, 'vc', DB_VERSION + 1), 1000, 'open a newer version');
     newer.close();
   });
 
@@ -186,6 +186,21 @@ describe('LocalState', () => {
     await new Promise((r) => setTimeout(r, 50));
     const later = await within(rawOpen(factory, 'blk', 3), 1000, 'open version 3');
     later.close();
+  });
+
+  it('knows the highest seq among its records, also in a database created before the seq index existed', async () => {
+    const factory = new IDBFactory();
+    const old = await rawOpen(factory, 'v1', 1, (d) => {
+      d.createObjectStore('files', { keyPath: 'fileId' }).createIndex('path', 'path', { unique: false });
+    });
+    old.close();
+    const st = await open(factory, 'v1'); // upgrades 1 → 2
+    expect(await st.maxFileSeq()).toBe(0);
+    await st.putFile(rec({ fileId: 'a1', seq: 7 }));
+    await st.putFile(rec({ fileId: 'a2', path: 'b.md', seq: 12 }));
+    await st.putFile(rec({ fileId: 'a3', path: 'c.md', seq: 3 }));
+    expect(await st.maxFileSeq()).toBe(12);
+    st.close();
   });
 });
 
