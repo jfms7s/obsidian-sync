@@ -39,8 +39,8 @@ export async function remoteHeads(ctx: SyncContext, pageSize = HEADS_PAGE_SIZE):
 /**
  * Whether the server lost history this device saw. Heads never move
  * backwards and are never removed (tombstones stay), so a file this device
- * synced at seq s whose head is now missing or older than s means the
- * server was restored from a backup. Independent of the vault's seq, which
+ * synced at seq s whose head is now missing, older than s, or another
+ * version at s means the server was restored from a backup. Independent of the vault's seq, which
  * other devices may have pushed past the lost range again.
  */
 export async function serverLostHistory(ctx: SyncContext, heads?: RemoteHead[]): Promise<boolean> {
@@ -48,7 +48,8 @@ export async function serverLostHistory(ctx: SyncContext, heads?: RemoteHead[]):
   for (const rec of await ctx.state.allFiles()) {
     if (rec.versionId === null || !rec.seq) continue;
     const head = byFile.get(rec.fileId);
-    if (!head || head.seq < rec.seq) return true;
+    // The same seq with another version: the server was restored and its new commits reused the seq.
+    if (!head || head.seq < rec.seq || (head.seq === rec.seq && toHex(head.versionId) !== rec.versionId)) return true;
   }
   return false;
 }
@@ -68,7 +69,9 @@ export async function pull(ctx: SyncContext, pageSize = CHANGES_PAGE_SIZE): Prom
   for (;;) {
     const since = checkAnchor ? cursor - 1 : cursor;
     const page = await ctx.api.changes(ctx.ring.vaultId, since, pageSize);
-    if (page.vaultSeq < cursor) throw new ServerRollbackError(cursor, page.vaultSeq);
+    // A synced version above the server's seq cannot exist on a server that
+    // kept its history: the cursor alone misses this after a crash left it behind its records.
+    if (page.vaultSeq < cursor || (await state.maxFileSeq()) > page.vaultSeq) throw new ServerRollbackError(cursor, page.vaultSeq);
     let versions = page.versions;
     if (checkAnchor) {
       checkAnchor = false;

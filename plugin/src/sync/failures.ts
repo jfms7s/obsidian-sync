@@ -71,6 +71,9 @@ export async function recordFailure(ctx: SyncContext, key: string, path: string,
 
 /** The earliest time a failed file (of one kind, with keyPrefix 'push:' or 'apply:') is due again, or null. */
 export async function nextRetryAt(ctx: SyncContext, keyPrefix = ''): Promise<number | null> {
-  const all = (await ctx.state.allFailures()).filter((f) => f.key.startsWith(keyPrefix));
-  return all.length === 0 ? null : Math.min(...all.map((f) => f.nextAt));
+  let earliest: number | null = null;
+  for (const f of await ctx.state.allFailures()) {
+    if (f.key.startsWith(keyPrefix) && (earliest === null || f.nextAt < earliest)) earliest = f.nextAt;
+  }
+  return earliest;
 }

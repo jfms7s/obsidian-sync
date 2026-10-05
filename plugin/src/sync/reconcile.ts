@@ -27,7 +27,10 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
   // 0. A server restored from a backup (whatever its seq says now).
   const heads = await remoteHeads(ctx);
   if (await serverLostHistory(ctx, heads)) {
-    throw new ServerRollbackError(await state.getCursor(), Math.max(0, ...heads.map((h) => h.seq)));
+    // A loop, not Math.max(...): spreading 125,000+ heads overflows the call stack.
+    let top = 0;
+    for (const h of heads) if (h.seq > top) top = h.seq;
+    throw new ServerRollbackError(await state.getCursor(), top);
   }
 
   // 1. Remote heads this device has not applied (failed files after their backoff).
