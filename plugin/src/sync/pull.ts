@@ -4,7 +4,7 @@
 import { CHANGES_PAGE_SIZE, HEADS_PAGE_SIZE } from '../api/limits';
 import type { RemoteHead, RemoteVersion } from '../api/types';
 import { equalBytes, toHex } from '../util/bytes';
-import { alreadyApplied, applyVersion } from './apply';
+import { alreadyApplied, applyHead } from './apply';
 import { ServerRollbackError, type SyncContext } from './context';
 
 export interface PullResult {
@@ -82,7 +82,7 @@ export async function pull(ctx: SyncContext, pageSize = CHANGES_PAGE_SIZE): Prom
       }
     }
     for (const v of newestPerFile(versions)) {
-      await applyVersion(ctx, v);
+      await applyHead(ctx, v, versions);
       applied++;
     }
     const last = versions.at(-1);
@@ -100,7 +100,9 @@ export async function pull(ctx: SyncContext, pageSize = CHANGES_PAGE_SIZE): Prom
 
 /**
  * After a commit got CONFLICT: make sure the server's head for the file
- * has been applied locally, so the next push merges against it.
+ * has been applied locally, so the next push merges against it. The
+ * history also reveals a landed pending commit of this device's that the
+ * head overtook (applyHead).
  */
 export async function resolveConflict(ctx: SyncContext, fileId: Uint8Array, head: Uint8Array): Promise<void> {
   const hex = toHex(fileId);
@@ -113,5 +115,5 @@ export async function resolveConflict(ctx: SyncContext, fileId: Uint8Array, head
   if (alreadyApplied(rec, toHex(head), ctx)) return;
   const versions = await ctx.api.history(ctx.ring.vaultId, fileId);
   const v = versions.find((x) => equalBytes(x.versionId, head));
-  if (v) await applyVersion(ctx, v);
+  if (v) await applyHead(ctx, v, versions);
 }

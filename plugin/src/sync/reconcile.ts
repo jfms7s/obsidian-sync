@@ -3,7 +3,7 @@
 import { fileIdFor } from '../crypto/objects';
 import { equalBytes, toHex } from '../util/bytes';
 import { normalizePath } from '../util/path';
-import { alreadyApplied, applyVersion, isSyncedHere } from './apply';
+import { alreadyApplied, applyHead, isSyncedHere } from './apply';
 import { hashHex } from './content';
 import { ServerRollbackError, type SyncContext } from './context';
 import { applyKey, isCycleError, isDeferred } from './failures';
@@ -31,9 +31,11 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
     const fileId = toHex(head.fileId);
     const rec = await state.getFile(fileId);
     if (alreadyApplied(rec, toHex(head.versionId), ctx) || (await isDeferred(ctx, applyKey(fileId)))) continue;
-    const v = (await ctx.api.history(ctx.ring.vaultId, head.fileId)).find((x) => equalBytes(x.versionId, head.versionId));
+    const history = await ctx.api.history(ctx.ring.vaultId, head.fileId);
+    const v = history.find((x) => equalBytes(x.versionId, head.versionId));
     if (v) {
-      await applyVersion(ctx, v);
+      // The history also reveals a landed pending commit the head overtook (applyHead).
+      await applyHead(ctx, v, history);
       fetched++;
     }
   }

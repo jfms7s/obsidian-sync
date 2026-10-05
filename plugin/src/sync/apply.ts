@@ -4,7 +4,7 @@ import { decryptMeta, type FileMeta } from '../crypto/objects';
 import { CryptoError } from '../crypto/primitives';
 import { merge3 } from '../merge/merge3';
 import type { FileRecord, PendingCommit } from '../state/store';
-import { toHex, utf8 } from '../util/bytes';
+import { equalBytes, toHex, utf8 } from '../util/bytes';
 import { caseFold, conflictCopyName } from '../util/path';
 import { expectFor, type FileStat } from '../vault/adapter';
 import { decodeText, downloadContent, hashHex } from './content';
@@ -67,13 +67,15 @@ function checkConsistent(v: RemoteVersion, meta: FileMeta): void {
 
 /**
  * Applies v following the table in spec §5.5. Per-file problems (see
- * failures.ts) are recorded and skipped; only cycle errors are thrown.
+ * failures.ts) are recorded and skipped (the result is then false); only
+ * cycle errors are thrown.
  */
-export async function applyVersion(ctx: SyncContext, v: RemoteVersion): Promise<void> {
+export async function applyVersion(ctx: SyncContext, v: RemoteVersion): Promise<boolean> {
   const fileId = toHex(v.fileId);
   try {
     await applyOne(ctx, v, fileId);
     await clearFailure(ctx, applyKey(fileId));
+    return true;
   } catch (err) {
     if (isCycleError(err)) throw err;
     let path = fileId;
@@ -83,7 +85,27 @@ export async function applyVersion(ctx: SyncContext, v: RemoteVersion): Promise<
       // keep the id
     }
     await recordFailure(ctx, applyKey(fileId), path, err);
+    return false;
   }
+}
+
+/**
+ * Applies head, a file's newest version, after first applying this
+ * device's own pending commit if it is among known (other versions the
+ * caller fetched: a change-log page or the file's history). That pending
+ * commit landed although its response was lost, and newer versions built
+ * on it overtook it; applying only the head would merge it against the
+ * record from before the commit and turn this device's own edit into a
+ * conflict. When adopting the commit fails, the head is left for the
+ * retry of that failure. Returns whether everything was applied.
+ */
+export async function applyHead(ctx: SyncContext, head: RemoteVersion, known: readonly RemoteVersion[]): Promise<boolean> {
+  const pending = await ctx.state.getPending(toHex(head.fileId));
+  if (pending && pending.versionId !== toHex(head.versionId)) {
+    const own = known.find((v) => toHex(v.versionId) === pending.versionId && equalBytes(v.fileId, head.fileId) && v.seq < head.seq);
+    if (own && !(await applyVersion(ctx, own))) return false;
+  }
+  return applyVersion(ctx, head);
 }
 
 async function applyOne(ctx: SyncContext, v: RemoteVersion, fileId: string): Promise<void> {

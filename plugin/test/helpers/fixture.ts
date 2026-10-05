@@ -10,6 +10,8 @@ import { LocalState, type Session } from '../../src/state/store';
 import { prepareContent } from '../../src/sync/content';
 import { DEFAULT_MAX_FILE_BYTES, type SyncContext } from '../../src/sync/context';
 import type { EngineEvent } from '../../src/sync/events';
+import { pull } from '../../src/sync/pull';
+import { PushMemory, pushRound } from '../../src/sync/push';
 import { equalBytes } from '../../src/util/bytes';
 import { ManualClock, type Clock } from '../../src/util/clock';
 import { seededRandom, type Random } from '../../src/util/random';
@@ -138,4 +140,34 @@ export function text(s: string): Uint8Array {
 
 export function files(adapter: MemoryAdapter): Record<string, string> {
   return Object.fromEntries([...adapter.snapshot().entries()].map(([p, d]) => [p, new TextDecoder().decode(d)]));
+}
+
+/**
+ * Device A's commit of a.md lands but its response is lost (a pending
+ * commit P stays on A), and device B then commits twice on top of it
+ * (P → X → Y). A has not pulled since; its a.md still holds P's text.
+ */
+export async function landedPendingOvertakenTwice(srv: TestServer): Promise<{ a: Device; b: Device; p: string; y: string }> {
+  const user = await newUser(srv);
+  const a = await newDevice(srv, user, { name: 'A', vault: 'create' });
+  const b = await newDevice(srv, user, { name: 'B', vault: a.vaultId });
+  await a.adapter.write('a.md', text('base\n'));
+  await a.state.markDirty('a.md');
+  await pushRound(a.ctx, new PushMemory());
+  await pull(b.ctx);
+  await a.adapter.write('a.md', text('base\nmine\n'));
+  await a.state.markDirty('a.md');
+  a.net.loseNextResponse('POST', '/commit');
+  await pushRound(a.ctx, new PushMemory()).catch(() => undefined);
+  const [pending] = await a.state.allPending();
+  if (!pending) throw new Error('expected a pending commit');
+  await pull(b.ctx);
+  await b.adapter.write('a.md', text('base\nmine\ntheirs\n'));
+  await b.state.markDirty('a.md');
+  await pushRound(b.ctx, new PushMemory());
+  await b.adapter.write('a.md', text('base\nmine\ntheirs\nmore\n'));
+  await b.state.markDirty('a.md');
+  await pushRound(b.ctx, new PushMemory());
+  const y = (await b.state.filesByPath('a.md'))[0]!.versionId!;
+  return { a, b, p: pending.versionId, y };
 }

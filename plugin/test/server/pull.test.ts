@@ -2,11 +2,13 @@
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
-import { toHex } from '../../src/util/bytes';
+import { fileIdFor } from '../../src/crypto/objects';
+import { fromHex, toHex } from '../../src/util/bytes';
 import { ServerRollbackError } from '../../src/sync/context';
-import { newestPerFile, pull } from '../../src/sync/pull';
+import { newestPerFile, pull, resolveConflict } from '../../src/sync/pull';
+import { PushMemory, pushRound } from '../../src/sync/push';
 import type { RemoteVersion } from '../../src/api/types';
-import { files, newDevice, newUser, remoteCommit, text, type Device } from '../helpers/fixture';
+import { files, landedPendingOvertakenTwice, newDevice, newUser, remoteCommit, text, type Device } from '../helpers/fixture';
 import { startServer, type TestServer } from '../helpers/server';
 
 let srv: TestServer;
@@ -17,6 +19,17 @@ afterAll(() => srv?.stop());
 
 async function device(o: { caseInsensitive?: boolean; ignoreGlobs?: string[]; maxFileBytes?: number } = {}): Promise<Device> {
   return newDevice(srv, await newUser(srv), { name: 'Here', vault: 'create', ...o });
+}
+
+/** a.md is at y with the other device's edits, without a conflict, and pushing does not revert them. */
+async function expectAdoptedThenAdvanced(a: Device, y: string): Promise<void> {
+  expect(a.events.filter((e) => e.type === 'conflict')).toEqual([]);
+  expect(files(a.adapter)).toEqual({ 'a.md': 'base\nmine\ntheirs\nmore\n' });
+  expect(await a.state.allPending()).toEqual([]);
+  expect((await a.state.filesByPath('a.md'))[0]?.versionId).toBe(y);
+  await pushRound(a.ctx, new PushMemory());
+  const heads = (await a.api.heads(a.vaultId, null)).heads;
+  expect(heads.map((h) => toHex(h.versionId))).toEqual([y]);
 }
 
 const dirtyPaths = async (d: Device) => (await d.state.dirtyEntries()).map((e) => e.path).sort();
@@ -197,6 +210,18 @@ describe('pull', () => {
     expect(await d.state.allPending()).toEqual([]);
     expect((await d.state.filesByPath('a.md'))[0]).toMatchObject({ versionId: toHex(v.versionId), seq: v.seq });
     expect(d.events.some((e) => e.type === 'conflict')).toBe(false);
+  });
+
+  it('adopts its own landed commit before newer versions built on it in the same page', async () => {
+    const { a, y } = await landedPendingOvertakenTwice(srv);
+    await pull(a.ctx);
+    await expectAdoptedThenAdvanced(a, y);
+  });
+
+  it('adopts its own landed commit from the history when resolving a conflict', async () => {
+    const { a, y } = await landedPendingOvertakenTwice(srv);
+    await resolveConflict(a.ctx, await fileIdFor(a.ring.namingKey, 'a.md'), fromHex(y));
+    await expectAdoptedThenAdvanced(a, y);
   });
 
   it('pages through the change log', async () => {

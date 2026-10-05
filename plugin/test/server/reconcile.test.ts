@@ -1,9 +1,10 @@
 // Reconcile (spec §5.6): catching what events missed.
 import { afterAll, beforeAll, expect, inject, it } from 'vitest';
+import { toHex } from '../../src/util/bytes';
 import { pull } from '../../src/sync/pull';
 import { PushMemory, pushRound } from '../../src/sync/push';
 import { reconcile } from '../../src/sync/reconcile';
-import { files, newDevice, newUser, remoteCommit, text } from '../helpers/fixture';
+import { files, landedPendingOvertakenTwice, newDevice, newUser, remoteCommit, text } from '../helpers/fixture';
 import { startServer, type TestServer } from '../helpers/server';
 
 let srv: TestServer;
@@ -63,4 +64,16 @@ it('queues a file it cannot stat instead of failing, and push reports it for tha
   expect(await reconcile(d.ctx)).toEqual({ fetched: 0, markedDirty: 2 });
   expect(await pushRound(d.ctx, new PushMemory())).toMatchObject({ committed: 1 });
   expect(d.events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'FILE_FAILED', path: 'bad.md' }));
+});
+
+it('adopts its own landed commit from the history before applying a newer head', async () => {
+  const { a, y } = await landedPendingOvertakenTwice(srv);
+  // The change log was read but the versions were not applied (e.g. the file failed then).
+  await a.state.setCursorAndAnchor((await a.api.changes(a.vaultId, 0)).vaultSeq, null);
+  await reconcile(a.ctx);
+  expect(a.events.filter((e) => e.type === 'conflict')).toEqual([]);
+  expect(files(a.adapter)).toEqual({ 'a.md': 'base\nmine\ntheirs\nmore\n' });
+  expect(await a.state.allPending()).toEqual([]);
+  await pushRound(a.ctx, new PushMemory());
+  expect((await a.api.heads(a.vaultId, null)).heads.map((h) => toHex(h.versionId))).toEqual([y]);
 });
