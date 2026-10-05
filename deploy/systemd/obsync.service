@@ -17,9 +17,11 @@ Environment=OBSYNC_LISTEN=127.0.0.1:8080
 Environment=OBSYNC_DATA_DIR=/var/lib/obsync
 EnvironmentFile=-/etc/obsync/obsync.env
 
-# A transient, unprivileged user; its only writable path is /var/lib/obsync
-# (StateDirectory, private to the service).
-DynamicUser=yes
+# An unprivileged user (created by obsync.sysusers, see README), so that
+# `sudo -u obsync obsync admin ...` works on the same data. Its only writable
+# path is /var/lib/obsync (StateDirectory).
+User=obsync
+Group=obsync
 StateDirectory=obsync
 StateDirectoryMode=0700
 UMask=0077
