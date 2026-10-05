@@ -73,7 +73,9 @@ export async function pull(ctx: SyncContext, pageSize = CHANGES_PAGE_SIZE): Prom
       checkAnchor = false;
       const first = versions[0];
       const same = first !== undefined && first.seq === cursor && toHex(first.versionId) === anchor!.versionId;
-      if (first !== undefined && first.seq === cursor) versions = versions.slice(1);
+      // Only the anchor itself was applied already; another version at
+      // that seq (heads agreeing, below) has not been, so it stays.
+      if (same) versions = versions.slice(1);
       if (!same) {
         if (await serverLostHistory(ctx)) throw new ServerRollbackError(cursor, page.vaultSeq);
         // Only pruned: stop checking until the cursor moves to a new anchor.

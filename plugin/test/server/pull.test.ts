@@ -281,6 +281,18 @@ describe('pull', () => {
     await pull(d.ctx);
     expect(await d.state.getCursorAnchor()).toMatchObject({ seq: 2 });
   });
+
+  it('applies the version at its cursor when it is not the anchor and the heads agree', async () => {
+    const d = await device();
+    await remoteCommit(d, 'a.md', text('one\n'));
+    await pull(d.ctx);
+    await remoteCommit(d, 'b.md', text('two\n'));
+    // The cursor already points at seq 2, but at a version other than b.md's.
+    await d.state.setCursorAndAnchor(2, { seq: 2, versionId: '00'.repeat(16) });
+    await pull(d.ctx);
+    expect(files(d.adapter)).toEqual({ 'a.md': 'one\n', 'b.md': 'two\n' });
+    expect(await d.state.getCursor()).toBe(2);
+  });
 });
 
 describe('newestPerFile', () => {
