@@ -558,7 +558,7 @@ export class Outside {
 // ---------- the rest of the module surface used by the shell ----------
 
 export function normalizePath(path: string): string {
-  return path.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/^\/+|\/+$/g, '').replace(/ /g, ' ');
+  return path.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/^\/+|\/+$/g, '').replace(/ /g, ' ');
 }
 
 export const Platform = { isMobile: false, isDesktop: true, isIosApp: false, isAndroidApp: false, isMacOS: false, isWin: false, isLinux: true };
