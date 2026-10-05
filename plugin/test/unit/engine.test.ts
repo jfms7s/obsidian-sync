@@ -13,6 +13,7 @@ import type { EngineEvent } from '../../src/sync/events';
 import { toHex } from '../../src/util/bytes';
 import { ManualClock } from '../../src/util/clock';
 import { seededRandom } from '../../src/util/random';
+import { IgnoreRules } from '../../src/vault/ignore';
 import { MemoryAdapter } from '../../src/vault/memory';
 
 type Step = ChangesPage | Error;
@@ -435,4 +436,28 @@ describe('engine scheduling', () => {
     expect(chunkChecks).toBe(0);
   });
 
+  it('waits until local events pause (500 ms), but no more than 5 s, before syncing them', async () => {
+    const { engine, server, adapter, settle, tick } = await scripted({ engine: { ignore: new IgnoreRules(['*.md']) } });
+    await engine.start();
+    await settle();
+    expect(server.changes).toBe(1);
+    // Typing: one change every 300 ms for 3 s.
+    for (let i = 0; i < 10; i++) {
+      await adapter.write('a.md', new TextEncoder().encode(`${i}`));
+      await tick(300);
+    }
+    expect(server.changes).toBe(1);
+    await tick(200); // 500 ms after the last change
+    expect(server.changes).toBe(2);
+    // Steady typing (every 400 ms for 8 s) still syncs 5 s after the first change.
+    for (let i = 0; i < 20; i++) {
+      if (i === 12) expect(server.changes).toBe(2); // 4.8 s in
+      await adapter.write('a.md', new TextEncoder().encode(`${i}`));
+      await tick(400);
+    }
+    expect(server.changes).toBe(3); // at 5 s; the next batch began at 5.2 s
+    await tick(100); // 500 ms after the last change
+    expect(server.changes).toBe(4);
+    await engine.stop();
+  });
 });

@@ -22,7 +22,10 @@ import { PushMemory, pushRound } from './push';
 import { reconcile } from './reconcile';
 
 export const RECONCILE_INTERVAL_MS = 15 * 60_000;
+/** Local changes are synced once they pause this long... */
 export const DEBOUNCE_MS = 500;
+/** ...or at the latest this long after the first of them, so steady typing still syncs. */
+export const DEBOUNCE_MAX_WAIT_MS = 5000;
 const MAX_PUSH_ROUNDS_PER_CYCLE = 20;
 
 export interface EngineOptions {
@@ -45,6 +48,7 @@ export interface EngineOptions {
   backoff?: BackoffPolicy;
   reconcileIntervalMs?: number;
   debounceMs?: number;
+  debounceMaxWaitMs?: number;
   /** Default 256 MiB (DEFAULT_MAX_FILE_BYTES): larger files are neither uploaded nor downloaded. */
   maxFileBytes?: number;
   /**
@@ -73,6 +77,9 @@ export class SyncEngine {
   private attempt = 0;
   private timer: TimerHandle | null = null;
   private timerAt = Infinity;
+  private timerIsDebounce = false;
+  /** When the first local event since the last cycle began arrived (null: none). */
+  private debounceStart: number | null = null;
   private reconcileTimer: TimerHandle | null = null;
   private applyRetryTimer: TimerHandle | null = null;
   private applyRetryAt = Infinity;
@@ -231,20 +238,39 @@ export class SyncEngine {
         }
       })
       .catch(() => undefined);
-    this.schedule(this.opts.debounceMs ?? DEBOUNCE_MS);
+    this.debounce();
+  }
+
+  /**
+   * A cycle once local events pause for debounceMs, but no later than
+   * debounceMaxWaitMs after the first event since the last cycle began.
+   * An earlier cycle that is already scheduled (not a debounce) stays.
+   */
+  private debounce(): void {
+    if (!this.autoRun || this.stopped) return;
+    const now = this.clock.now();
+    this.debounceStart ??= now;
+    const at = Math.min(now + (this.opts.debounceMs ?? DEBOUNCE_MS), this.debounceStart + (this.opts.debounceMaxWaitMs ?? DEBOUNCE_MAX_WAIT_MS));
+    if (this.timer && !this.timerIsDebounce && this.timerAt <= at) return;
+    this.setTimer(at, true);
   }
 
   private schedule(delayMs: number): void {
     if (!this.autoRun || this.stopped) return;
     const at = this.clock.now() + delayMs;
     if (this.timer && this.timerAt <= at) return;
+    this.setTimer(at, false);
+  }
+
+  private setTimer(at: number, debounce: boolean): void {
     if (this.timer) this.clock.clearTimeout(this.timer);
     this.timerAt = at;
+    this.timerIsDebounce = debounce;
     this.timer = this.clock.setTimeout(() => {
       this.timer = null;
       this.timerAt = Infinity;
       void this.runCycle();
-    }, delayMs);
+    }, Math.max(0, at - this.clock.now()));
   }
 
   /** A reconcile at time at, when failed remote versions are due again. */
@@ -300,6 +326,7 @@ export class SyncEngine {
 
   private async cycle(): Promise<void> {
     if (this.halted) return;
+    this.debounceStart = null; // this cycle takes every event so far
     await this.eventWrites;
     this.setStatus('syncing');
     try {
