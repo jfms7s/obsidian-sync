@@ -1,7 +1,7 @@
 // The engine's loop with a scripted API and a manual clock: status events,
 // backoff with jitter, Retry-After, and the errors that stop sync.
 import { IDBFactory } from 'fake-indexeddb';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ApiClient } from '../../src/api/client';
 import { ApiError, ErrorCode, NetworkError } from '../../src/api/errors';
 import type { ChangesPage, HeadsPage, RemoteVersion } from '../../src/api/types';
@@ -398,4 +398,41 @@ describe('engine scheduling', () => {
     expect(heads).toBe(2);
     await engine.stop();
   });
+
+  it('backs off instead of rejecting when handling a cycle error fails', async () => {
+    const { engine, state, server } = await scripted({ engine: { autoRun: false } });
+    await state.setCursor(10); // the server (seq 0) looks rolled back
+    const forget = vi.spyOn(state, 'forgetSyncedVersions').mockRejectedValueOnce(new Error('disk full'));
+    await expect(engine.runCycle()).resolves.toBeUndefined();
+    expect(forget).toHaveBeenCalledTimes(1);
+    expect(engine.status).toBe('error');
+    await engine.runCycle(); // the handling works this time
+    await engine.runCycle();
+    expect(await state.getCursor()).toBe(0);
+    expect(server.changes).toBeGreaterThanOrEqual(2);
+  });
+
+  it('stops between push rounds when stopped', async () => {
+    let chunkChecks = 0;
+    const holder: { engine?: SyncEngine } = {};
+    const { engine, state, adapter, settle } = await scripted({
+      api: {
+        changes: async (): Promise<ChangesPage> => {
+          void holder.engine!.stop(); // stop() is called while the cycle runs
+          return { versions: [], vaultSeq: 0, more: false };
+        },
+        chunksExist: async () => {
+          chunkChecks++;
+          throw new NetworkError('down');
+        },
+      },
+    });
+    holder.engine = engine;
+    adapter.writeSilently('a.md', new TextEncoder().encode('a'));
+    await state.markDirty('a.md');
+    await engine.start();
+    await settle();
+    expect(chunkChecks).toBe(0);
+  });
+
 });

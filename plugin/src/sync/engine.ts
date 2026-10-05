@@ -325,6 +325,7 @@ export class SyncEngine {
         this.knownSeq = Math.max((await pull(this.ctx)).vaultSeq, this.notifiedSeq);
       }
       for (let round = 0; round < MAX_PUSH_ROUNDS_PER_CYCLE; round++) {
+        if (this.stopped) break; // stop() waits for this cycle: do not start more rounds
         await this.eventWrites;
         const r = await pushRound(this.ctx, this.mem);
         if (r.staleEpoch) await this.refreshKeyring();
@@ -351,7 +352,14 @@ export class SyncEngine {
       const applyRetryAt = await nextRetryAt(this.ctx, 'apply:');
       if (applyRetryAt !== null) this.scheduleApplyRetry(applyRetryAt);
     } catch (err) {
-      await this.onCycleError(err);
+      try {
+        await this.onCycleError(err);
+      } catch (handlingErr) {
+        // Handling failed too (e.g. IndexedDB while forgetting synced
+        // versions): back off and try the whole cycle again.
+        this.setStatus('error', String((handlingErr as Error)?.message ?? handlingErr));
+        this.schedule(backoffDelay(this.attempt++, this.random, this.opts.backoff ?? DEFAULT_BACKOFF));
+      }
     }
   }
 
