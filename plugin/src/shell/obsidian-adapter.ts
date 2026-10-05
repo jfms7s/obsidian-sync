@@ -279,7 +279,7 @@ export class ObsidianAdapter implements VaultAdapter {
     if (!cur || !this.holds(cur, expect)) return false;
     const target = await this.resolve(newPath);
     // The same file under another case (or normalization) is a rename in place; any other file in the way refuses it.
-    const sameFile = target !== null && (target.disk === cur.disk || fold(target.disk) === fold(cur.disk));
+    const sameFile = target !== null && (target.disk === cur.disk || (this.caseInsensitive ? fold(target.disk) === fold(cur.disk) : target.disk.normalize('NFC') === cur.disk.normalize('NFC')));
     if (target && !sameFile) return false;
     if (!sameFile) await this.clearFolderAt(newPath);
     const to = sameFile ? this.sameFileTarget(cur.disk, newPath) : await this.prepareParent(newPath);
