@@ -166,4 +166,27 @@ describe('history and trash', () => {
     expect(err).toMatchObject({ path: 'n.md' });
     expect(files(a.adapter)).toEqual({ 'n.md': 'brand new\n' });
   });
+
+  it('refuses with PathOccupiedError when the path is a folder here now, or a file stands where its folder must be', async () => {
+    const user = await newUser(srv);
+    const a = await makeClient(srv, user, { name: 'A', vault: 'create' });
+    const ring = await keyringFromStored((await a.state.getVault())!);
+    await a.adapter.write('docs', text('a file\n'));
+    await a.adapter.write('deep/x.md', text('x\n'));
+    await settle([a]);
+    await a.adapter.remove('docs');
+    await a.adapter.remove('deep/x.md');
+    await settle([a]);
+    const trash = await listTrash(a.api, ring);
+    const entry = (p: string) => trash.find((t) => t.meta?.path === p)!;
+    await a.adapter.write('docs/inside.md', text('inside\n')); // docs is a folder now
+    await a.adapter.write('deep', text('now a file\n')); // deep/ is a file now
+    const folderErr = await restore(a.api, ring, a.adapter, a.state, entry('docs')).catch((e: unknown) => e);
+    expect(folderErr).toBeInstanceOf(PathOccupiedError);
+    expect(folderErr).toMatchObject({ path: 'docs', occupiedBy: 'docs/' });
+    const fileErr = await restore(a.api, ring, a.adapter, a.state, entry('deep/x.md')).catch((e: unknown) => e);
+    expect(fileErr).toBeInstanceOf(PathOccupiedError);
+    expect(fileErr).toMatchObject({ path: 'deep/x.md', occupiedBy: 'deep' });
+    expect(files(a.adapter)).toEqual({ 'docs/inside.md': 'inside\n', deep: 'now a file\n' });
+  });
 });
