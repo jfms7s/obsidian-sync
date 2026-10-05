@@ -63,11 +63,13 @@ vectors:
 	cd server && go run ./cmd/vectorgen -out ../plugin/test/vectors
 
 # CONVERGENCE_SEEDS=1000 make convergence (the nightly and release runs); default 20.
-# CONVERGENCE_SEED=123 replays one seed; CONVERGENCE_REPORT=file.json keeps what each seed did.
+# CONVERGENCE_SEED=123 replays one seed; CONVERGENCE_FIRST_SEED=501 starts at another seed;
+# CONVERGENCE_REPORT=file.json keeps what each seed did.
 CONVERGENCE_SEEDS ?= 20
 convergence: plugin/node_modules
 	cd plugin && OBSYNC_CONVERGENCE_SEEDS=$(CONVERGENCE_SEEDS) \
 		$(if $(CONVERGENCE_SEED),OBSYNC_CONVERGENCE_SEED=$(CONVERGENCE_SEED)) \
+		$(if $(CONVERGENCE_FIRST_SEED),OBSYNC_CONVERGENCE_FIRST_SEED=$(CONVERGENCE_FIRST_SEED)) \
 		$(if $(CONVERGENCE_REPORT),OBSYNC_CONVERGENCE_REPORT=$(abspath $(CONVERGENCE_REPORT))) \
 		npx vitest run --project convergence
 

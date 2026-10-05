@@ -1,0 +1,64 @@
+name: Convergence
+
+# Random operations on simulated devices against the real server (see
+# plugin/test/convergence). Nightly with 1,000 seeds, on demand, on every
+# push with 100 (ci.yml), and before every release with 1,000, where a
+# failure stops the publishing (release.yml).
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: How many seeds to run, split over four runners
+        default: "1000"
+  workflow_call:
+    inputs:
+      seeds:
+        type: string
+        default: "1000"
+
+permissions:
+  contents: read
+
+jobs:
+  convergence:
+    name: seeds shard ${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    env:
+      SEEDS: ${{ inputs.seeds || '1000' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: plugin/package-lock.json
+      - name: Run this shard's seeds
+        run: |
+          per=$(( (SEEDS + 3) / 4 ))
+          first=$(( 1 + ${{ matrix.shard }} * per ))
+          count=$(( SEEDS - ${{ matrix.shard }} * per ))
+          if [ "$count" -gt "$per" ]; then count=$per; fi
+          if [ "$count" -le 0 ]; then echo "nothing to run in this shard"; exit 0; fi
+          echo "seeds $first to $((first + count - 1))"
+          make convergence CONVERGENCE_SEEDS="$count" CONVERGENCE_FIRST_SEED="$first" CONVERGENCE_REPORT="$RUNNER_TEMP/report.json"
+      - name: Keep what every seed did
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # Not a release-* name: the release workflow merges every release-* artifact into the release.
+          name: convergence-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/report.json
+          if-no-files-found: ignore
