@@ -17,6 +17,10 @@ export function normalizePath(path: string): string {
     if (seg === '' || seg === '.' || seg === '..') throw new InvalidPathError(path, `bad segment ${JSON.stringify(seg)}`);
   }
   if (/[\u0000-\u001f]/.test(p)) throw new InvalidPathError(path, 'contains a control character');
+  // UTF-8 encoding would turn a lone surrogate into U+FFFD, so two different
+  // names could share a file_id. (String.prototype.isWellFormed is ES2024,
+  // newer than this package's lib target.)
+  if (/\p{Cs}/u.test(p)) throw new InvalidPathError(path, 'contains an unpaired surrogate');
   return p;
 }
 
@@ -49,10 +53,15 @@ export function conflictStamp(ms: number): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}${pad2(d.getMinutes())}`;
 }
 
-/** Characters that are not allowed in file names on some platform. */
+/**
+ * A device name made safe for a file name: characters some platform forbids
+ * become '-', at most 60 code points (never half a surrogate pair), and no
+ * trailing dots or spaces (Windows drops them).
+ */
 export function sanitizeName(s: string): string {
   const cleaned = s.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').trim();
-  return cleaned === '' ? 'unknown device' : cleaned.slice(0, 60);
+  const cut = Array.from(cleaned).slice(0, 60).join('').replace(/[ .]+$/, '');
+  return cut === '' ? 'unknown device' : cut;
 }
 
 /**

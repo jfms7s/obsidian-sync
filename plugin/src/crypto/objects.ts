@@ -12,8 +12,8 @@ import { aesGcmOpen, aesGcmSeal, CryptoError, hmacSha256, NONCE_LEN } from './pr
 import type { EpochKeys, VaultKeyring } from './vaultkeys';
 import { epochKeys } from './vaultkeys';
 
-/** file_id = HMAC-SHA256(naming_key, UTF-8(normalized path)). */
-export function fileIdFor(namingKey: Uint8Array, path: string): Promise<Uint8Array> {
+/** file_id = HMAC-SHA256(naming_key, UTF-8(normalized path)). An invalid path rejects with InvalidPathError. */
+export async function fileIdFor(namingKey: Uint8Array, path: string): Promise<Uint8Array> {
   return hmacSha256(namingKey, utf8(normalizePath(path)));
 }
 
