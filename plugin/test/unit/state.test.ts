@@ -205,4 +205,3 @@ describe('LocalState', () => {
     st.close();
   });
 });
-

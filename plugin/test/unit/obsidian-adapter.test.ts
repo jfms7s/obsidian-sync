@@ -53,6 +53,18 @@ describe('ObsidianAdapter', () => {
     expect(vault.getFileByPath('Notes/n.md')).toBeNull();
   });
 
+  it('indexes what was written outside after a rescan, as after a restart of Obsidian', async () => {
+    const { vault, outside } = await build({ index: 'none' });
+    outside.write('top.md', bytes('1'));
+    outside.write('Notes/deep/n.md', bytes('2'));
+    outside.write('.config/hidden.json', bytes('{}'));
+    expect(vault.getFileByPath('top.md')).toBeNull();
+    vault.rescan();
+    expect(vault.getFileByPath('top.md')).not.toBeNull();
+    expect(vault.getFileByPath('Notes/deep/n.md')).not.toBeNull();
+    expect(vault.getFileByPath('.config/hidden.json')).toBeNull();
+  });
+
   it('writes hidden files through the disk and keeps them out of the index', async () => {
     const { vault, adapter } = await build();
     await adapter.write('.config/x.json', bytes('{}'));

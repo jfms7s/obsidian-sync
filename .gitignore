@@ -5,3 +5,4 @@
 /server/obsync
 node_modules/
 /plugin/dist/
+/plugin/.vitest/

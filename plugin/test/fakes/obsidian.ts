@@ -133,6 +133,8 @@ export class FakeFs {
   subtree(path: string): FsEntry[] {
     const root = this.get(path);
     if (!root) return [];
+    // Every entry is below the root, which is stored under the empty key.
+    if (root.path === '') return [root, ...[...this.entries].filter(([k]) => k !== '').map(([, e]) => e)];
     const prefix = this.key(`${root.path}/`);
     return [root, ...[...this.entries].filter(([k]) => k.startsWith(prefix)).map(([, e]) => e)];
   }
