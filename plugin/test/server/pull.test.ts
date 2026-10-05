@@ -209,6 +209,22 @@ describe('pull', () => {
     expect(await dirtyPaths(d)).toEqual([]);
   });
 
+  it('tells the user that a local edit of a file too large to download here is not synced', async () => {
+    const d = await device({ maxFileBytes: 10 });
+    await remoteCommit(d, 'a.md', text('one\n'));
+    await pull(d.ctx);
+    await remoteCommit(d, 'a.md', text('far too large\n'));
+    await pull(d.ctx);
+    const notices = () => d.events.filter((e) => e.type === 'notice' && e.code === 'TOO_LARGE' && e.path === 'a.md');
+    expect(notices()).toHaveLength(1);
+    await d.adapter.write('a.md', text('mine\n'));
+    await d.state.markDirty('a.md');
+    await pushRound(d.ctx, new PushMemory());
+    expect(notices()).toHaveLength(2);
+    expect(notices()[1]).toMatchObject({ message: expect.stringContaining('not synced') });
+    expect(await dirtyPaths(d)).toEqual([]);
+  });
+
   it('renames instead of copying when a case-only rename arrives before its delete', async () => {
     const d = await device({ caseInsensitive: true });
     await remoteCommit(d, 'todo.md', text('- milk\n'));
