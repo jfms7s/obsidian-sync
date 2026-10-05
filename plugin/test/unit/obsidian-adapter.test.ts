@@ -138,6 +138,22 @@ describe('ObsidianAdapter', () => {
     });
   });
 
+  it('refuses a rename onto another file that differs only in case on a case-sensitive disk', async () => {
+    for (const o of [{}, { index: 'lagging' as const }]) {
+      const { adapter, outside } = await build(o);
+      outside.write('Readme.md', bytes('mine'));
+      outside.write('README.md', bytes('theirs'));
+      if (!o.index) {
+        await adapter.write('Readme.md', bytes('mine'));
+        await adapter.write('README.md', bytes('theirs'));
+      }
+      expect(await adapter.rename('Readme.md', 'README.md')).toBe(false);
+      expect((await adapter.list()).sort()).toEqual(['README.md', 'Readme.md']);
+      expect(new TextDecoder().decode((await adapter.read('Readme.md'))!)).toBe('mine');
+      expect(new TextDecoder().decode((await adapter.read('README.md'))!)).toBe('theirs');
+    }
+  });
+
   describe('events for folders', () => {
     for (const childEvents of [true, false]) {
       it(`give one event per file when a folder is renamed or deleted (Obsidian ${childEvents ? 'reports' : 'does not report'} the files in it)`, async () => {
