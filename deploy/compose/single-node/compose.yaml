@@ -1,0 +1,87 @@
+# Single-node obsync behind Caddy (automatic HTTPS).
+#
+#   cp .env.example .env     # set OBSYNC_DOMAIN
+#   docker compose up -d
+#
+# Only Caddy publishes ports (80, 443, 443/udp for HTTP/3). obsync is reachable
+# solely over the private network below.
+
+name: obsync
+
+services:
+  obsync:
+    image: ghcr.io/jfms7s/obsync:${OBSYNC_VERSION:-latest}
+    # Fallback for building from a checkout: `docker compose build`.
+    build:
+      context: ../../..
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${OBSYNC_VERSION:-dev}
+    restart: unless-stopped
+    environment:
+      # Believe X-Forwarded-For only from Caddy's fixed address (see the
+      # network below); everyone else's TCP peer address is the client.
+      OBSYNC_TRUSTED_PROXIES: 10.241.0.2
+    volumes:
+      - obsync-data:/data # the only writable path
+    # The image's own HEALTHCHECK (obsync health) is what Caddy waits for.
+    read_only: true
+    tmpfs:
+      # SQLite spills large sorts and index builds to a temp file, and /tmp is
+      # the first writable place it looks, so give it one that is not the
+      # read-only root. Memory-backed and only used when SQLite needs it.
+      - /tmp:size=256m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      obsync: {}
+
+  caddy:
+    # caddy 2.11.6, index digest as of 2026-10-05.
+    image: docker.io/library/caddy:2.11.6@sha256:3422ce6de165df66534f9b9ba50efaf457114ec961763cc52f5dbdaac2972d73
+    restart: unless-stopped
+    depends_on:
+      obsync:
+        condition: service_healthy
+    environment:
+      OBSYNC_DOMAIN: ${OBSYNC_DOMAIN:?set OBSYNC_DOMAIN in .env to the public host name}
+    ports:
+      - "80:80" # ACME HTTP challenge and redirect to HTTPS
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      # z: relabel for SELinux hosts (Fedora, RHEL); a no-op elsewhere.
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro,z
+      - caddy-data:/data # certificates and ACME account: keep it
+      - caddy-config:/config
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      obsync:
+        # Fixed so obsync can trust exactly this address as its proxy.
+        ipv4_address: 10.241.0.2
+
+networks:
+  obsync:
+    driver: bridge
+    ipam:
+      config:
+        # An explicit subnet, chosen to stay clear of Docker's default pools
+        # (172.17.0.0/16 to 172.31.0.0/16, 192.168.0.0/20), of Podman's (10.88.0.0/16
+        # and the 10.89.0.0/16 pool its networks are carved from) and of the
+        # ranges home routers and VPN clients usually hand out (192.168.x.0/24,
+        # 10.0.0.0/24, 10.8.0.0/24), so the stack never collides with an
+        # address already routed on the host.
+        - subnet: 10.241.0.0/24
+          gateway: 10.241.0.1
+          # Containers without a fixed address are numbered from the upper
+          # half only, so they can never take Caddy's reserved 10.241.0.2.
+          ip_range: 10.241.0.128/25
+
+volumes:
+  obsync-data:
+  caddy-data:
+  caddy-config:
