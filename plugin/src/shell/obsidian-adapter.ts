@@ -305,7 +305,7 @@ export class ObsidianAdapter implements VaultAdapter {
   }
 
   /**
-   * old -> old.obsync.tmp -> new, two renames so that neither is a case-only
+   * old → old.obsync.tmp → new, two renames so that neither is a case-only
    * change. A crash in between leaves the file at the temp name, where
    * list() (and so the next reconcile) renames it to its final name.
    */
