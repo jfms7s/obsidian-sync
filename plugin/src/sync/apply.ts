@@ -147,8 +147,16 @@ async function applyOne(ctx: SyncContext, v: RemoteVersion, fileId: string): Pro
     return;
   }
   if (!v.deleted && v.size > ctx.maxFileBytes) {
+    const kept = await keepLocalEditBeside(ctx, path, rec);
+    if (kept === false) {
+      // The local file changed while it was being moved: leave the record
+      // as it is; reconcile retries this version.
+      await ctx.state.markDirty(path);
+      throw new Error(`${path} changed while it was being saved as a conflict copy`);
+    }
     await ctx.state.recordSynced(record(fileId, path, versionId, v, contentHash, -1, { tooLarge: true }), null);
-    ctx.emit({ type: 'notice', code: 'TOO_LARGE', persistent: true, path, message: `${path} (${v.size} bytes) is larger than this device syncs and was not downloaded` });
+    const also = kept ? `; the local changes were saved as ${kept}` : '';
+    ctx.emit({ type: 'notice', code: 'TOO_LARGE', persistent: true, path, message: `${path} (${v.size} bytes) is larger than this device syncs and was not downloaded${also}` });
     return;
   }
 
@@ -162,6 +170,23 @@ async function applyOne(ctx: SyncContext, v: RemoteVersion, fileId: string): Pro
   // Leave the record as it was; the push of that edit will conflict and
   // bring this version back.
   await ctx.state.markDirty(path);
+}
+
+/**
+ * Before a too large remote version takes over path (it is then never
+ * pushed from here again): a local file that differs from what was last
+ * synced would be stranded, so it moves to a conflict copy, which is
+ * pushed as a file of its own. Returns the copy's path, null when nothing
+ * had to move, or false when the local file changed meanwhile.
+ */
+async function keepLocalEditBeside(ctx: SyncContext, path: string, rec: FileRecord | undefined): Promise<string | null | false> {
+  const local = await readLocal(ctx, path);
+  if (!local) return null;
+  if (isSyncedHere(rec) && !rec.deleted && (await hashHex(local.data)) === rec.contentHash) return null;
+  const copy = await freeConflictPath(ctx, path, ctx.deviceName);
+  if (!(await ctx.adapter.rename(path, copy, expectFor(local.stat)))) return false;
+  await ctx.state.markDirty(copy);
+  return copy;
 }
 
 async function adoptLanded(ctx: SyncContext, p: PendingCommit, v: RemoteVersion): Promise<void> {

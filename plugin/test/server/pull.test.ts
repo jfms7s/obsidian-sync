@@ -179,6 +179,36 @@ describe('pull', () => {
     expect(d.events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'TOO_LARGE', persistent: true, path: 'big.bin' }));
   });
 
+  it('keeps a local edit as a conflict copy when the remote version is over the device size limit', async () => {
+    const d = await device({ maxFileBytes: 10 });
+    await remoteCommit(d, 'a.md', text('one\n'));
+    await pull(d.ctx);
+    await d.adapter.write('a.md', text('mine\n'));
+    await d.state.markDirty('a.md');
+    await remoteCommit(d, 'a.md', text('far too large\n'));
+    await pull(d.ctx);
+    const local = files(d.adapter);
+    expect(Object.values(local)).toEqual(['mine\n']);
+    const [copy] = Object.keys(local);
+    expect(copy).toMatch(/^a \(conflict Here .+\)\.md$/);
+    expect((await d.state.filesByPath('a.md'))[0]).toMatchObject({ tooLarge: true });
+    expect(d.events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'TOO_LARGE', path: 'a.md' }));
+    await pushRound(d.ctx, new PushMemory());
+    const pushed = (await d.api.heads(d.vaultId, null)).heads;
+    expect(pushed).toHaveLength(2); // a.md (too large here) and the copy of the local edit
+    expect(await dirtyPaths(d)).toEqual([]);
+  });
+
+  it('leaves an unchanged local file alone when the remote version is over the device size limit', async () => {
+    const d = await device({ maxFileBytes: 10 });
+    await remoteCommit(d, 'a.md', text('one\n'));
+    await pull(d.ctx);
+    await remoteCommit(d, 'a.md', text('far too large\n'));
+    await pull(d.ctx);
+    expect(files(d.adapter)).toEqual({ 'a.md': 'one\n' });
+    expect(await dirtyPaths(d)).toEqual([]);
+  });
+
   it('renames instead of copying when a case-only rename arrives before its delete', async () => {
     const d = await device({ caseInsensitive: true });
     await remoteCommit(d, 'todo.md', text('- milk\n'));
