@@ -7,8 +7,12 @@ import type { TestServer } from './server';
 
 export interface SimClient extends Device {
   engine: SyncEngine;
+  /** The device's ignore globs; setIgnore changes them. */
+  ignoreGlobs: string[];
   /** A fresh engine over the same state and adapter, as after an app restart. */
   restart(): Promise<void>;
+  /** Changes the ignore globs and restarts the engine, as the settings tab does. */
+  setIgnore(globs: string[]): Promise<void>;
 }
 
 export interface ClientOptions extends DeviceOptions {
@@ -20,10 +24,11 @@ export interface ClientOptions extends DeviceOptions {
 
 export async function makeClient(srv: TestServer, user: User, o: ClientOptions): Promise<SimClient> {
   const dev = await newDevice(srv, user, o);
+  let ignoreGlobs = [...(o.ignoreGlobs ?? [])];
   const build = () => {
     const engine = new SyncEngine({
       api: dev.api, state: dev.state, adapter: dev.adapter, ring: dev.ring, deviceName: dev.name, clock: dev.clock,
-      random: dev.random, ignore: new IgnoreRules(o.ignoreGlobs ?? [], { caseInsensitive: dev.adapter.caseInsensitive }), webSocket: o.webSocket ? dev.net.webSocket : null,
+      random: dev.random, ignore: new IgnoreRules(ignoreGlobs, { caseInsensitive: dev.adapter.caseInsensitive }), webSocket: o.webSocket ? dev.net.webSocket : null,
       autoRun: o.autoRun ?? false, backoff: { baseMs: 20, maxMs: 200 }, maxFileBytes: dev.ctx.maxFileBytes,
     });
     engine.on((e) => dev.events.push(e));
@@ -32,6 +37,16 @@ export async function makeClient(srv: TestServer, user: User, o: ClientOptions):
   const client: SimClient = {
     ...dev,
     engine: build(),
+    get ignoreGlobs() {
+      return ignoreGlobs;
+    },
+    set ignoreGlobs(globs: string[]) {
+      ignoreGlobs = globs;
+    },
+    setIgnore: async (globs) => {
+      ignoreGlobs = [...globs];
+      await client.restart();
+    },
     restart: async () => {
       await client.engine.stop();
       client.engine = build();
