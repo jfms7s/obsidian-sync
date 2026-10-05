@@ -32,11 +32,18 @@ commands:
   serve     run the sync server
   migrate   apply database migrations and exit
   admin     manage users: obsync admin user create|list|delete|set-password
+  version   print the build version
   health    probe GET /readyz on the server's own listen address; exit 0 only on 200
 
 Global flags such as --config go before the command (they are also accepted
 right after it, before the command's own arguments).
 --config defaults to $OBSYNC_CONFIG; OBSYNC_* environment variables override the file.`
+
+// version is set at build time: -ldflags "-X main.version=v1.2.3".
+var version = "dev"
+
+// stdout is where commands print results; tests replace it.
+var stdout io.Writer = os.Stdout
 
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
@@ -62,6 +69,13 @@ func run(ctx context.Context, args []string) error {
 	}
 	rest := fs.Args()
 	switch cmd {
+	case "version":
+		// Needs no configuration, so a broken config cannot hide it.
+		if len(rest) > 0 {
+			return fmt.Errorf("%s: unexpected argument %q\n%s", cmd, rest[0], usage)
+		}
+		_, err := fmt.Fprintln(stdout, "obsync", version)
+		return err
 	case "serve", "migrate", "health":
 		if len(rest) > 0 {
 			return fmt.Errorf("%s: unexpected argument %q\n%s", cmd, rest[0], usage)
