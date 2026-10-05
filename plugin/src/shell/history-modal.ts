@@ -17,7 +17,7 @@ export class ConfirmModal extends Modal {
     new Setting(this.contentEl)
       .addButton((b) => b.setButtonText(this.confirmText).setCta().onClick(() => {
         this.close();
-        void this.onConfirm();
+        void this.onConfirm().catch((err: unknown) => new Notice(`Obsync: ${describeError(err).message}`, 10000));
       }))
       .addButton((b) => b.setButtonText('Cancel').onClick(() => this.close()));
   }

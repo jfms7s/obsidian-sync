@@ -8,6 +8,7 @@ import { toHex } from './util/bytes';
 import { cryptoRandom } from './util/random';
 import { ShellController } from './shell/controller';
 import { createEngineLock } from './shell/engine-lock';
+import { describeError } from './shell/errors';
 import { HistoryModal, TrashModal } from './shell/history-modal';
 import { noticeFor } from './shell/notices';
 import { ObsidianAdapter } from './shell/obsidian-adapter';
@@ -51,6 +52,7 @@ export default class ObsyncPlugin extends Plugin {
     shell.on((e) => {
       if (e.type === 'status') {
         statusEl.setAttr('aria-label', e.detail ?? '');
+        setupNeeded = false; // an engine reports only while it runs, so the setup is done
         showStatus();
       }
       const n = noticeFor(e);
@@ -87,9 +89,12 @@ export default class ObsyncPlugin extends Plugin {
 
     // Not before the layout is ready: until then Obsidian reports every file in the vault as created.
     this.app.workspace.onLayoutReady(() => {
+      if (this.shell !== shell) return; // unloaded before the layout was ready
       void shell.start().then((r) => {
         setupNeeded = !r.ok && r.reason !== 'stopped';
         showStatus();
+      }).catch((err: unknown) => {
+        new Notice(`Obsync: ${describeError(err).message}`, 10000);
       });
     });
   }
@@ -99,6 +104,7 @@ export default class ObsyncPlugin extends Plugin {
     this.shell = null;
     this.state = null;
     // Obsidian does not wait for this: the engine lock makes a new instance wait for the old engine instead.
-    void shell?.stop().then(() => state?.close());
+    // A failed stop is swallowed: an unloading plugin has nobody left to tell, and the state must close anyway.
+    void shell?.stop().catch(() => undefined).then(() => state?.close());
   }
 }

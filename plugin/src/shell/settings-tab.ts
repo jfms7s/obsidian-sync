@@ -69,13 +69,18 @@ export class ObsyncSettingTab extends PluginSettingTab {
     }
     if (token !== this.renderToken) return;
     containerEl.empty();
-    switch (step.kind) {
-      case 'login': this.renderLogin(); break;
-      case 'setup-keys': this.renderSetupKeys(step.reupload); break;
-      case 'confirm-recovery': this.renderRecovery(step.words); break;
-      case 'unlock': this.renderUnlock(); break;
-      case 'choose-vault': await this.renderChooseVault(); break;
-      case 'ready': await this.renderReady(); break;
+    try {
+      switch (step.kind) {
+        case 'login': this.renderLogin(); break;
+        case 'setup-keys': this.renderSetupKeys(step.reupload); break;
+        case 'confirm-recovery': this.renderRecovery(step.words); break;
+        case 'unlock': this.renderUnlock(); break;
+        case 'choose-vault': await this.renderChooseVault(); break;
+        case 'ready': await this.renderReady(); break;
+      }
+    } catch (err) {
+      if (token !== this.renderToken) return;
+      containerEl.createEl('p', { text: describeError(err).message });
     }
     if (token !== this.renderToken) return;
     this.errorEl = containerEl.createDiv({ cls: 'obsync-error' });
