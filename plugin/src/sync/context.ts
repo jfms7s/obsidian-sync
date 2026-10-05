@@ -19,6 +19,12 @@ export interface SyncContext {
   ignore: IgnoreRules;
   /** Files larger than this are neither uploaded nor downloaded by this device. */
   maxFileBytes: number;
+  /**
+   * Epochs a keyring refresh did not provide a key for: versions that use
+   * them fail per file (failures.ts) instead of failing the cycle, so the
+   * rest of the vault keeps syncing. Kept by the engine.
+   */
+  unavailableEpochs?: ReadonlySet<number>;
   emit(e: EngineEvent): void;
 }
 

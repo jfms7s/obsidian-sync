@@ -179,6 +179,68 @@ describe('engine errors outside the plan table', () => {
     await engine.stop();
   });
 
+  it('fails only the file whose epoch key a keyring refresh did not provide', async () => {
+    const clock = new ManualClock(0);
+    const r = seededRandom(5);
+    const vaultId = '0123456789abcdef0123456789abcdef';
+    const namingKey = r.bytes(32);
+    const k1 = r.bytes(32);
+    const ring1 = await buildKeyring(vaultId, namingKey, new Map([[1, k1]]), 1);
+    const ring2 = await buildKeyring(vaultId, namingKey, new Map([[1, k1], [2, r.bytes(32)]]), 2);
+    const deletion = async (ring: typeof ring1, epoch: number, path: string, seq: number): Promise<RemoteVersion> => {
+      const fileId = await fileIdFor(namingKey, path);
+      const versionId = r.bytes(16);
+      const encMeta = await encryptMeta(r, vaultId, epochKeys(ring, epoch), fileId, versionId, {
+        path, mtimeMs: 1, size: 0, contentHash: new Uint8Array(0), renamedFrom: '', deviceName: 'other',
+      });
+      return { fileId, versionId, baseVersionId: new Uint8Array(0), epoch, encMeta, chunkIds: [], size: 0, deleted: true, deviceId: 'dev', createdAtMs: 1, seq };
+    };
+    const unreadable = await deletion(ring2, 2, 'unreadable.md', 1);
+    const fine = await deletion(ring1, 1, 'fine.md', 2);
+    const api = {
+      token: undefined,
+      baseUrl: 'http://localhost',
+      changes: async (_v: string, since: number): Promise<ChangesPage> =>
+        since === 0 ? { versions: [unreadable, fine], vaultSeq: 2, more: false } : { versions: [], vaultSeq: 2, more: false },
+      heads: async (): Promise<HeadsPage> => ({
+        heads: [unreadable, fine].map((v) => ({ fileId: v.fileId, versionId: v.versionId, seq: v.seq, deleted: true })), more: false,
+      }),
+      history: async (_v: string, fileId: Uint8Array): Promise<RemoteVersion[]> => [unreadable, fine].filter((v) => toHex(v.fileId) === toHex(fileId)),
+    } as unknown as ApiClient;
+    const state = await LocalState.open(new IDBFactory(), 'engine-epoch-missing');
+    let refreshes = 0;
+    const events: EngineEvent[] = [];
+    const engine = new SyncEngine({
+      api, state, adapter: new MemoryAdapter(false, clock), ring: ring1, deviceName: 'd', clock, random: r, webSocket: null,
+      backoff: { baseMs: 1000, maxMs: 60_000 },
+      refreshKeyring: async () => {
+        refreshes++;
+        return ring1; // the server has no epoch 2 key for this account
+      },
+    });
+    engine.on((e) => events.push(e));
+    await engine.start();
+    clock.advance(0);
+    await engine.whenIdle();
+    expect(refreshes).toBe(1);
+    clock.advance(1000);
+    await engine.whenIdle();
+    expect(engine.status).toBe('synced');
+    expect(await state.getFile(toHex(fine.fileId))).toMatchObject({ versionId: toHex(fine.versionId), deleted: true });
+    expect(await state.getFile(toHex(unreadable.fileId))).toBeUndefined();
+    expect((await state.allFailures()).map((f) => f.key)).toEqual([`apply:${toHex(unreadable.fileId)}`]);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'DECRYPT_FAILED' }));
+    expect(await state.getCursor()).toBe(2);
+    // The file's retry (after its 1 min backoff) fails on its own again,
+    // without another refresh or a failed cycle.
+    clock.advance(60_000);
+    await engine.whenIdle();
+    expect(refreshes).toBe(1);
+    expect(engine.status).toBe('synced');
+    expect((await state.allFailures())[0]?.attempts).toBe(2);
+    await engine.stop();
+  });
+
   it('backs off when the keyring cannot be refreshed', async () => {
     const r = seededRandom(4);
     const ring = await buildKeyring('0123456789abcdef0123456789abcdef', r.bytes(32), new Map([[1, r.bytes(32)]]), 1);

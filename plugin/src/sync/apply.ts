@@ -9,7 +9,7 @@ import { caseFold, conflictCopyName } from '../util/path';
 import { expectFor, type FileStat } from '../vault/adapter';
 import { decodeText, downloadContent, hashHex } from './content';
 import type { SyncContext } from './context';
-import { applyKey, clearFailure, isCycleError, recordFailure } from './failures';
+import { applyKey, clearFailure, isFileError, recordFailure } from './failures';
 
 export interface LocalFile {
   data: Uint8Array;
@@ -77,7 +77,7 @@ export async function applyVersion(ctx: SyncContext, v: RemoteVersion): Promise<
     await clearFailure(ctx, applyKey(fileId));
     return true;
   } catch (err) {
-    if (isCycleError(err)) throw err;
+    if (!isFileError(ctx, err)) throw err;
     let path = fileId;
     try {
       path = (await decryptMeta(ctx.ring, v.epoch, v.fileId, v.versionId, v.encMeta)).path;

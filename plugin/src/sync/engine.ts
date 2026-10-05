@@ -78,6 +78,8 @@ export class SyncEngine {
   private reconcileDue = true;
   private knownSeq = 0;
   private eventWrites: Promise<unknown> = Promise.resolve();
+  /** Epochs the last keyring refresh lacked (SyncContext.unavailableEpochs); checked again with each reconcile interval. */
+  private readonly unavailableEpochs = new Set<number>();
 
   constructor(private readonly opts: EngineOptions) {
     this.clock = opts.clock ?? systemClock;
@@ -93,6 +95,7 @@ export class SyncEngine {
       random: this.random,
       ignore: opts.ignore ?? new IgnoreRules([], { caseInsensitive: opts.adapter.caseInsensitive }),
       maxFileBytes: opts.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES,
+      unavailableEpochs: this.unavailableEpochs,
       emit: (e) => this.emit(e),
     };
   }
@@ -239,6 +242,7 @@ export class SyncEngine {
   private scheduleReconcile(): void {
     this.reconcileTimer = this.clock.setTimeout(() => {
       this.reconcileDue = true;
+      this.unavailableEpochs.clear(); // the next version that needs one refreshes the keyring again
       this.schedule(0);
       this.scheduleReconcile();
     }, this.opts.reconcileIntervalMs ?? RECONCILE_INTERVAL_MS);
@@ -315,13 +319,16 @@ export class SyncEngine {
   private async refreshKeyring(): Promise<void> {
     if (!this.opts.refreshKeyring) throw new ApiError(ErrorCode.STALE_EPOCH, 'the vault key changed and this device cannot fetch it yet', 409);
     this.ctx.ring = await this.opts.refreshKeyring();
+    for (const e of [...this.unavailableEpochs]) if (this.ctx.ring.epochs.has(e)) this.unavailableEpochs.delete(e);
   }
 
   private async onCycleError(err: unknown): Promise<void> {
-    if (err instanceof MissingEpochKeyError && this.opts.refreshKeyring) {
+    if (err instanceof MissingEpochKeyError && this.opts.refreshKeyring && !this.unavailableEpochs.has(err.epoch)) {
       // The vault was re-keyed since this keyring was loaded: fetch the keys
-      // and go again at once. If the new keyring still lacks the epoch (or
-      // the refresh fails), back off like any other failed cycle.
+      // and go again at once. If the new keyring still lacks the epoch, the
+      // versions that use it fail per file from now on (failures.ts) and
+      // this cycle backs off like any other failed one; so does a failed
+      // refresh.
       const epoch = err.epoch;
       try {
         await this.refreshKeyring();
@@ -329,6 +336,7 @@ export class SyncEngine {
           this.schedule(0);
           return;
         }
+        this.unavailableEpochs.add(epoch);
       } catch (refreshErr) {
         err = refreshErr;
       }

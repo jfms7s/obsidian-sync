@@ -9,7 +9,9 @@
 // Errors that concern the connection or the account (ApiError,
 // NetworkError, a server rollback), the device's own state (an IndexedDB
 // error, a keyring without the version's epoch key) or a bug (TypeError,
-// RangeError) are not per-file: they fail the cycle.
+// RangeError) are not per-file: they fail the cycle. A missing epoch key
+// that a keyring refresh did not provide either is per-file after all
+// (isFileError), so one unreadable version cannot block the vault.
 import { ApiError, NetworkError } from '../api/errors';
 import { CryptoError } from '../crypto/primitives';
 import { MissingEpochKeyError } from '../crypto/vaultkeys';
@@ -35,6 +37,11 @@ export function isCycleError(err: unknown): boolean {
     // IndexedDB reports failures as DOMException; the vault adapter never does.
     (typeof DOMException !== 'undefined' && err instanceof DOMException)
   );
+}
+
+/** Whether err, although a cycle error in general, concerns only one file in ctx (see the header). */
+export function isFileError(ctx: SyncContext, err: unknown): boolean {
+  return !isCycleError(err) || (err instanceof MissingEpochKeyError && !!ctx.unavailableEpochs?.has(err.epoch));
 }
 
 export { pushFailureKey as pushKey } from '../state/store';
