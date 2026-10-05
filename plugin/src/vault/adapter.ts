@@ -31,8 +31,12 @@ export type AdapterEvent =
 export interface VaultAdapter {
   /** Two paths that differ only in letter case name the same file. */
   readonly caseInsensitive: boolean;
-  /** Every file in the vault (not folders), including ignored ones. */
-  list(): Promise<string[]>;
+  /**
+   * Every file in the vault (not folders), hidden ones included. A folder
+   * for which skip returns true (it is given the folder's path, top-down) is
+   * not entered, so a huge ignored tree such as .git is never walked.
+   */
+  list(skip?: (folder: string) => boolean): Promise<string[]>;
   /** null means no file is at path (a folder is not a file); any other problem (permissions, I/O) must throw. */
   stat(path: string): Promise<FileStat | null>;
   /**

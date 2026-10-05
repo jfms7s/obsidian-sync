@@ -51,7 +51,8 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
   const records = new Map((await state.allFiles()).map((r) => [r.fileId, r]));
   const present = new Set<string>();
   let shadowed = 0;
-  for (const raw of await adapter.list()) {
+  // A folder the ignore rules match is skipped whole (so is everything in it).
+  for (const raw of await adapter.list((folder) => ctx.ignore.matches(`${folder}/`))) {
     let path: string;
     try {
       path = normalizePath(raw);

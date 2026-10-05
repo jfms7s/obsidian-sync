@@ -64,8 +64,16 @@ export class MemoryAdapter implements VaultAdapter {
     return this.folderHoldsFiles(path);
   }
 
-  async list(): Promise<string[]> {
-    return [...this.files.values()].map((e) => e.path).sort();
+  async list(skip?: (folder: string) => boolean): Promise<string[]> {
+    const paths = [...this.files.values()].map((e) => e.path);
+    return (skip ? paths.filter((p) => !this.insideSkipped(p, skip)) : paths).sort();
+  }
+
+  /** Whether a folder above path is skipped; folders are asked top-down and a skipped one is not entered. */
+  private insideSkipped(path: string, skip: (folder: string) => boolean): boolean {
+    const parts = path.split('/');
+    for (let i = 1; i < parts.length; i++) if (skip(parts.slice(0, i).join('/'))) return true;
+    return false;
   }
 
   async stat(path: string): Promise<FileStat | null> {
