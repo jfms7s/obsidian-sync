@@ -2051,6 +2051,91 @@ func (*ServerFrame_Pong) isServerFrame_Frame() {}
 
 func (*ServerFrame_Error) isServerFrame_Frame() {}
 
+// FileMeta is the plaintext of Commit.enc_meta and Version.enc_meta.
+type FileMeta struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`                                  // vault-relative, NFC, '/' separators
+	MtimeMs       int64                  `protobuf:"varint,2,opt,name=mtime_ms,json=mtimeMs,proto3" json:"mtime_ms,omitempty"`            // local modification time when committed
+	Size          uint64                 `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`                                 // plaintext size in bytes; 0 for a deletion
+	ContentHash   []byte                 `protobuf:"bytes,4,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"` // SHA-256 of the plaintext; empty for a deletion
+	RenamedFrom   string                 `protobuf:"bytes,5,opt,name=renamed_from,json=renamedFrom,proto3" json:"renamed_from,omitempty"` // the old path, on the create half of a rename
+	DeviceName    string                 `protobuf:"bytes,6,opt,name=device_name,json=deviceName,proto3" json:"device_name,omitempty"`    // the committing device's name, for conflict copies
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileMeta) Reset() {
+	*x = FileMeta{}
+	mi := &file_obsync_v1_obsync_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileMeta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileMeta) ProtoMessage() {}
+
+func (x *FileMeta) ProtoReflect() protoreflect.Message {
+	mi := &file_obsync_v1_obsync_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileMeta.ProtoReflect.Descriptor instead.
+func (*FileMeta) Descriptor() ([]byte, []int) {
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *FileMeta) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FileMeta) GetMtimeMs() int64 {
+	if x != nil {
+		return x.MtimeMs
+	}
+	return 0
+}
+
+func (x *FileMeta) GetSize() uint64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *FileMeta) GetContentHash() []byte {
+	if x != nil {
+		return x.ContentHash
+	}
+	return nil
+}
+
+func (x *FileMeta) GetRenamedFrom() string {
+	if x != nil {
+		return x.RenamedFrom
+	}
+	return ""
+}
+
+func (x *FileMeta) GetDeviceName() string {
+	if x != nil {
+		return x.DeviceName
+	}
+	return ""
+}
+
 var File_obsync_v1_obsync_proto protoreflect.FileDescriptor
 
 const file_obsync_v1_obsync_proto_rawDesc = "" +
@@ -2191,7 +2276,15 @@ const file_obsync_v1_obsync_proto_rawDesc = "" +
 	"\x06notify\x18\x02 \x01(\v2\x11.obsync.v1.NotifyH\x00R\x06notify\x12%\n" +
 	"\x04pong\x18\x03 \x01(\v2\x0f.obsync.v1.PongH\x00R\x04pong\x12(\n" +
 	"\x05error\x18\x04 \x01(\v2\x10.obsync.v1.ErrorH\x00R\x05errorB\a\n" +
-	"\x05frame*\xf6\x02\n" +
+	"\x05frame\"\xb4\x01\n" +
+	"\bFileMeta\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x19\n" +
+	"\bmtime_ms\x18\x02 \x01(\x03R\amtimeMs\x12\x12\n" +
+	"\x04size\x18\x03 \x01(\x04R\x04size\x12!\n" +
+	"\fcontent_hash\x18\x04 \x01(\fR\vcontentHash\x12!\n" +
+	"\frenamed_from\x18\x05 \x01(\tR\vrenamedFrom\x12\x1f\n" +
+	"\vdevice_name\x18\x06 \x01(\tR\n" +
+	"deviceName*\xf6\x02\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13ERROR_CODE_CONFLICT\x10\x01\x12\x1d\n" +
@@ -2221,7 +2314,7 @@ func file_obsync_v1_obsync_proto_rawDescGZIP() []byte {
 }
 
 var file_obsync_v1_obsync_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_obsync_v1_obsync_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
+var file_obsync_v1_obsync_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_obsync_v1_obsync_proto_goTypes = []any{
 	(ErrorCode)(0),              // 0: obsync.v1.ErrorCode
 	(*Error)(nil),               // 1: obsync.v1.Error
@@ -2255,6 +2348,7 @@ var file_obsync_v1_obsync_proto_goTypes = []any{
 	(*Notify)(nil),              // 29: obsync.v1.Notify
 	(*Pong)(nil),                // 30: obsync.v1.Pong
 	(*ServerFrame)(nil),         // 31: obsync.v1.ServerFrame
+	(*FileMeta)(nil),            // 32: obsync.v1.FileMeta
 }
 var file_obsync_v1_obsync_proto_depIdxs = []int32{
 	0,  // 0: obsync.v1.Error.code:type_name -> obsync.v1.ErrorCode
@@ -2305,7 +2399,7 @@ func file_obsync_v1_obsync_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_obsync_v1_obsync_proto_rawDesc), len(file_obsync_v1_obsync_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   31,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -1,0 +1,23 @@
+{
+  "generated_by": "server/cmd/vectorgen (do not edit; run make vectors)",
+  "vectors": {
+    "cases": [
+      {
+        "entropy": "0000000000000000000000000000000000000000000000000000000000000000",
+        "words": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art"
+      },
+      {
+        "entropy": "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
+        "words": "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title"
+      },
+      {
+        "entropy": "8080808080808080808080808080808080808080808080808080808080808080",
+        "words": "letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic bless"
+      },
+      {
+        "entropy": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "words": "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote"
+      }
+    ]
+  }
+}

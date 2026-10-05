@@ -1,0 +1,43 @@
+{
+  "generated_by": "server/cmd/vectorgen (do not edit; run make vectors)",
+  "vectors": {
+    "cases": [
+      {
+        "input": "Welcome.md",
+        "path": "Welcome.md",
+        "file_id": "1a1bf9df7056e76315b271888bcc2a5eed0c8612f08900fd8762da7ad8355025"
+      },
+      {
+        "input": "Notes/2026/Daily note.md",
+        "path": "Notes/2026/Daily note.md",
+        "file_id": "625fbffd05ecc1a4f87c0b0422e11fc5119c8674597597f8e088b5328f0e558c"
+      },
+      {
+        "input": "Café.md",
+        "path": "Café.md",
+        "file_id": "6c8457024d6847c496586a4bd42f63baa1d3091b1f03ecddffe0f1a13b0b7233"
+      },
+      {
+        "input": "Café.md",
+        "path": "Café.md",
+        "file_id": "6c8457024d6847c496586a4bd42f63baa1d3091b1f03ecddffe0f1a13b0b7233"
+      },
+      {
+        "input": "Folder\\Sub\\x.md",
+        "path": "Folder/Sub/x.md",
+        "file_id": "eecfc871ea1b2ffa8313bd86be948b67fbf1d5263fac8e75f8253582c2d451fc"
+      },
+      {
+        "input": "日本語/ノート.md",
+        "path": "日本語/ノート.md",
+        "file_id": "0f3e11dec09b0b7c1031e9a714cc6ac4e06dbda97a6c0c100eb0969691112fab"
+      },
+      {
+        "input": "Attachments/image (1).png",
+        "path": "Attachments/image (1).png",
+        "file_id": "4216affbd66bb36bbb349920091c697d2035461cec9c9601c9a3e64c6f395cc1"
+      }
+    ],
+    "naming_key": "86203ed3e594af12d22c14afa962cbbe4d0ca322877ca8fd5962512b8d0c6932"
+  }
+}
