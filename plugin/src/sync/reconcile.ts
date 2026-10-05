@@ -3,6 +3,7 @@
 import { fileIdFor } from '../crypto/objects';
 import { equalBytes, toHex } from '../util/bytes';
 import { normalizePath } from '../util/path';
+import { isCoarseMtime } from '../vault/adapter';
 import { alreadyApplied, applyHead, isSyncedHere } from './apply';
 import { hashHex } from './content';
 import { ServerRollbackError, type SyncContext } from './context';
@@ -79,7 +80,8 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
       markedDirty++;
       continue;
     }
-    if (!st || (st.mtime === rec.localMtime && st.size === rec.size)) continue;
+    // Equal size and mtime mean unchanged, unless mtimes are whole seconds (then the content is compared).
+    if (!st || (st.mtime === rec.localMtime && st.size === rec.size && !isCoarseMtime(st.mtime))) continue;
     if (st.size !== rec.size) {
       // Changed for sure: push reads it (or refuses it when too large).
       await state.markDirty(path);

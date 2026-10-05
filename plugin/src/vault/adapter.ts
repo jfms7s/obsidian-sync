@@ -25,8 +25,9 @@ export type AdapterEvent =
  *
  * mtime may be coarse (whole seconds on some file systems and in Obsidian's
  * mobile adapter), so two writes can share an mtime; the engine never
- * relies on mtime alone to tell versions apart (plan 3's adapter must keep
- * that in mind for expect preconditions). A rename keeps the file's mtime.
+ * relies on mtime alone to tell versions apart (see isCoarseMtime; an
+ * `expect` precondition is only as exact as the mtime). A rename keeps the
+ * file's mtime.
  */
 export interface VaultAdapter {
   /** Two paths that differ only in letter case name the same file. */
@@ -63,6 +64,15 @@ export interface VaultAdapter {
   /** Subscribes to changes, including those the engine itself makes. */
   watch(listener: (ev: AdapterEvent) => void): () => void;
 }
+
+/**
+ * Whether an mtime has no sub-second part. A file system that keeps whole
+ * seconds (FAT, some Android storage) gives an edit made within the same
+ * second the same mtime, so equal size and mtime prove nothing there. One
+ * with millisecond precision hits a whole second 1 time in 1,000, which only
+ * costs a read.
+ */
+export const isCoarseMtime = (mtime: number): boolean => mtime % 1000 === 0;
 
 export function expectFor(stat: FileStat | null): Expect {
   return stat ? { mtime: stat.mtime, size: stat.size } : { absent: true };
