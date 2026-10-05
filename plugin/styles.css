@@ -1,0 +1,38 @@
+/* Obsync */
+.obsync-recovery-words {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9em, 1fr));
+  gap: var(--size-4-2);
+  padding: var(--size-4-3);
+  margin-bottom: var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  font-family: var(--font-monospace);
+  user-select: text;
+}
+
+.obsync-error {
+  color: var(--text-error);
+  margin: var(--size-4-2) 0;
+}
+
+.obsync-footnote {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.obsync-diff pre {
+  max-height: 40vh;
+  overflow: auto;
+  padding: var(--size-4-2);
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+}
+
+.obsync-diff-add {
+  background: rgba(var(--color-green-rgb), 0.2);
+}
+
+.obsync-diff-del {
+  background: rgba(var(--color-red-rgb), 0.2);
+}
