@@ -26,7 +26,7 @@ export function noticeFor(e: EngineEvent): NoticeView | null {
       return shown('the vault was deleted or you no longer have access to it. Syncing has stopped.');
     case 'CASE_COLLISION':
     case 'PATH_COLLISION':
-      return shown(e.conflictPath ? `${e.path ?? 'a file'} could not keep its name here. The other file was saved as ${e.conflictPath}` : e.message);
+      return shown(e.conflictPath ? `${e.path ?? 'a file'} could not keep its name here, so it was saved as ${e.conflictPath}.` : e.message);
     default:
       return shown(e.message);
   }
