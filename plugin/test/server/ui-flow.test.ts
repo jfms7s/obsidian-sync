@@ -3,7 +3,7 @@
 // setup, then a second device, then the day-to-day settings.
 import { IDBFactory } from 'fake-indexeddb';
 import type { App as RealApp } from 'obsidian';
-import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, inject, it, vi } from 'vitest';
 import { createEngineLock } from '../../src/shell/engine-lock';
 import { ShellController } from '../../src/shell/controller';
 import { ObsyncSettingTab } from '../../src/shell/settings-tab';
@@ -202,6 +202,28 @@ describe('the settings tab', () => {
 
     await first.shell.stop();
     await second.shell.stop();
+  }, 120_000);
+
+  it('does not say that sync has started when the engine could not start', async () => {
+    const user = await newUser(srv);
+    const s = await screen('laptop');
+    await s.render();
+    s.type('Server address', srv.url);
+    s.type('Username', user.username);
+    s.type('Password', user.password);
+    await s.press('Sign in');
+    s.type('Passphrase', 'a long enough passphrase');
+    s.type('Repeat the passphrase', 'a long enough passphrase');
+    await s.press('Create keys');
+    await s.press('I have saved them');
+
+    const start = vi.spyOn(s.shell, 'start').mockResolvedValueOnce({ ok: false, reason: 'locked' });
+    await s.press('Create vault');
+    expect(Notice.shown.some((n) => n.message.includes('sync has started'))).toBe(false);
+    expect(Notice.shown.some((n) => n.message.includes('could not start'))).toBe(true);
+    expect(s.text()).toMatch(/could not start/);
+    start.mockRestore();
+    await s.shell.stop();
   }, 120_000);
 
   it('saves ignore rules, reports bad lines by their line number, and signs out after a confirmation', async () => {
