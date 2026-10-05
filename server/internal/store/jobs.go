@@ -120,15 +120,18 @@ func (s *Store) Prune(ctx context.Context, p PrunePolicy) (PruneStats, error) {
 }
 
 // deleteVersions deletes the versions matching where (a predicate over the
-// versions table) and their chunk references, in one transaction.
+// versions table) and their chunk references, in one transaction. where must
+// be built only from the package's SQL fragment constants, never from input.
 func (s *Store) deleteVersions(ctx context.Context, where string, args ...any) (int, error) {
 	var deleted int64
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		//nolint:gosec // G202: where is composed of this file's constant SQL fragments only
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM version_chunks WHERE (vault_id, version_id) IN (SELECT vault_id, version_id FROM versions WHERE `+where+`)`,
 			args...); err != nil {
 			return fmt.Errorf("delete chunk refs: %w", err)
 		}
+		//nolint:gosec // G202: where is composed of this file's constant SQL fragments only
 		res, err := tx.ExecContext(ctx, `DELETE FROM versions WHERE `+where, args...)
 		if err != nil {
 			return fmt.Errorf("delete versions: %w", err)
