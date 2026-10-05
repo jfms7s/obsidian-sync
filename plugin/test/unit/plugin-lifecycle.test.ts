@@ -50,6 +50,21 @@ describe('the plugin entry point', () => {
     await tick();
   });
 
+  it('tells the user that "Sync now" does nothing while no engine runs', async () => {
+    const plugin = newPlugin(new fakeObsidian.App(new fakeObsidian.Vault()));
+    await plugin.onload();
+    await tick();
+    const command = plugin.commands.find((c) => c.id === 'sync-now')!;
+    const expected = { message: 'Obsync: sync is not running. Finish the setup in the plugin settings.' };
+
+    fakeObsidian.Notice.shown.length = 0;
+    await command.callback!();
+    plugin.ribbon[0]!.click();
+    expect(fakeObsidian.Notice.shown).toEqual([expected, expected]);
+    plugin.onunload();
+    await tick();
+  });
+
   it('does not start the engine when the plugin was unloaded before the layout was ready', async () => {
     const start = vi.spyOn(ShellController.prototype, 'start');
     const app = new fakeObsidian.App(new fakeObsidian.Vault());
