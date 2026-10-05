@@ -72,7 +72,14 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
       markedDirty++;
       continue;
     }
-    if (!st ||(st.mtime === rec.localMtime && st.size === rec.size)) continue;
+    if (!st || (st.mtime === rec.localMtime && st.size === rec.size)) continue;
+    if (st.size !== rec.size) {
+      // Changed for sure: push reads it (or refuses it when too large).
+      await state.markDirty(path);
+      markedDirty++;
+      continue;
+    }
+    // Same size, new mtime: read and compare (a touch, or a sync tool that rewrote it).
     let data: Uint8Array | null;
     try {
       data = await adapter.read(path);

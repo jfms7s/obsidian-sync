@@ -1,5 +1,5 @@
 // Reconcile (spec §5.6): catching what events missed.
-import { afterAll, beforeAll, expect, inject, it } from 'vitest';
+import { afterAll, beforeAll, expect, inject, it, vi } from 'vitest';
 import { toHex } from '../../src/util/bytes';
 import { pull } from '../../src/sync/pull';
 import { PushMemory, pushRound } from '../../src/sync/push';
@@ -76,4 +76,17 @@ it('adopts its own landed commit from the history before applying a newer head',
   expect(await a.state.allPending()).toEqual([]);
   await pushRound(a.ctx, new PushMemory());
   expect((await a.api.heads(a.vaultId, null)).heads.map((h) => toHex(h.versionId))).toEqual([y]);
+});
+
+it('queues a file whose size changed without reading it, and reads only same-size files to compare', async () => {
+  const d = await newDevice(srv, await newUser(srv), { name: 'D', vault: 'create' });
+  await remoteCommit(d, 'grown.md', text('small\n'));
+  await remoteCommit(d, 'touched.md', text('same\n'));
+  await pull(d.ctx);
+  d.adapter.writeSilently('grown.md', text('much larger now\n'));
+  d.adapter.writeSilently('touched.md', text('same\n')); // same content, new mtime
+  const read = vi.spyOn(d.adapter, 'read');
+  expect(await reconcile(d.ctx)).toMatchObject({ markedDirty: 1 });
+  expect(read.mock.calls.map((c) => c[0])).toEqual(['touched.md']);
+  expect((await d.state.dirtyEntries()).map((e) => e.path)).toEqual(['grown.md']);
 });
