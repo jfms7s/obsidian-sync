@@ -445,6 +445,7 @@ var files = []struct {
 	{"user-keys.json", userKeys},
 	{"bip39.json", bip39},
 	{"padding.json", padding},
+	{"rejects.json", rejects},
 }
 
 // render returns every vector file's exact contents.

@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +13,9 @@ import (
 // a change to either side cannot drift silently. Fix with `make vectors`.
 func TestVectorsUpToDate(t *testing.T) {
 	dir := filepath.Join("..", "..", "..", "plugin", "test", "vectors")
+	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+		t.Skipf("%s does not exist (a server-only checkout); nothing to compare the vectors with", dir)
+	}
 	for name, want := range render() {
 		got, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
