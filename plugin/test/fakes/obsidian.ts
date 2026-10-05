@@ -578,3 +578,7 @@ export function normalizePath(path: string): string {
 }
 
 export const Platform = { isMobile: false, isDesktop: true, isIosApp: false, isAndroidApp: false, isMacOS: false, isWin: false, isLinux: true };
+
+export function requestUrl(): never {
+  throw new Error('requestUrl is not available in tests: pass a request function to the transport');
+}
