@@ -31,10 +31,18 @@ export class Net {
 
   readonly webSocket: WebSocketFactory = (url) => {
     if (!this.online) throw new Error('network is down');
-    const ws = new WebSocket(url) as unknown as WebSocketLike;
+    const raw = new WebSocket(url);
+    const ws = raw as unknown as WebSocketLike;
     this.sockets.add(ws);
+    // addEventListener: the hub client owns the on* properties.
+    raw.addEventListener('close', () => this.sockets.delete(ws));
     return ws;
   };
+
+  /** Sockets opened through this network that have not closed yet. */
+  get openSockets(): number {
+    return this.sockets.size;
+  }
 
   /** The next request matching method and a path suffix reaches the server, but its response is lost. */
   loseNextResponse(method: string, pathSuffix: string): void {

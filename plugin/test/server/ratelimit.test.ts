@@ -24,6 +24,6 @@ it('gets 429 with Retry-After, sends nothing until it has passed, then succeeds'
   const sent = net.count('GET', '/v1/vaults');
   await expect(api.listVaults()).rejects.toMatchObject({ code: ErrorCode.RATE_LIMITED });
   expect(net.count('GET', '/v1/vaults')).toBe(sent); // held back by the gate, never sent
-  await new Promise((r) => setTimeout(r, wait));
+  await new Promise((r) => setTimeout(r, wait + 100)); // margin: timers may fire a little early relative to the server's clock
   expect(await api.listVaults()).toEqual([]);
 });
