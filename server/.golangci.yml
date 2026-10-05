@@ -1,0 +1,85 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck and unused are on by default.
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - nolintlint
+    - revive
+    - unconvert
+  settings:
+    errcheck:
+      exclude-functions:
+        # Best-effort teardown of an already-failed or finished WebSocket.
+        - (*github.com/coder/websocket.Conn).CloseNow
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    revive:
+      # Minimal on purpose: correctness-adjacent rules, no doc-comment policing.
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: var-declaration
+        - name: var-naming
+  exclusions:
+    # internal/gen is protobuf-generated (buf generate); never lint it.
+    generated: lax
+    # std-error-handling restores the pre-v2 default of not flagging unchecked
+    # Close/Flush/Remove and fmt.Fprint* results; common-false-positives drops
+    # gosec G103, G204 and G304 (file paths come from the operator's own
+    # config, flags and data directory, not from request input).
+    presets:
+      - std-error-handling
+      - common-false-positives
+    paths:
+      - internal/gen
+    rules:
+      # G104 (unhandled errors) duplicates errcheck, which is already enabled
+      # with the presets above deciding which calls are exempt.
+      - linters: [gosec]
+        text: "G104:"
+      # G115 (integer conversion overflow): the conversions are between the
+      # database's non-negative int/int64 columns (seq, size, epoch) and the
+      # protobuf schema's unsigned fields, and argon2 parameters whose bit
+      # width parseHash checks first. Wrapping would need a corrupt database.
+      - linters: [gosec]
+        text: "G115:"
+      # Test fixtures hold made-up credentials and print URLs on purpose.
+      - path: _test\.go
+        linters: [gosec]
+        text: "G101:|G705:"
+      # Test helpers close response bodies themselves, which bodyclose cannot
+      # follow across function boundaries.
+      - path: _test\.go
+        linters: [bodyclose]
+      # vectorgen is an offline developer tool that writes public test
+      # vectors; its file modes, fixtures and casts are not a security surface.
+      - path: cmd/vectorgen/
+        linters: [gosec]
+      # usage is multi-line help text that happens to end in a full stop, not
+      # an error message in the staticcheck ST1005 sense.
+      - path: cmd/obsync/main\.go
+        linters: [staticcheck]
+        text: "ST1005:"
+      # redactConn wraps a driver and must implement database/sql/driver's
+      # deprecated non-context methods to satisfy driver.Stmt and driver.Conn.
+      - path: internal/store/remote\.go
+        linters: [staticcheck]
+        text: "SA1019:"

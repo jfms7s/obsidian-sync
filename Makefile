@@ -5,11 +5,12 @@ export PATH := $(BIN):$(PATH)
 export GOTOOLCHAIN := auto
 export CGO_ENABLED := 1
 
-.PHONY: tools proto proto-lint test vet plugin-test vectors convergence
+.PHONY: tools proto proto-lint test vet lint-go plugin-test vectors convergence
 
 tools: plugin/node_modules
 	GOBIN=$(BIN) go install github.com/bufbuild/buf/cmd/buf@v1.47.2
 	GOBIN=$(BIN) go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+	GOBIN=$(BIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 
 # protoc-gen-es comes from the plugin's pinned devDependencies.
 plugin/node_modules: plugin/package.json plugin/package-lock.json
@@ -27,6 +28,9 @@ test:
 
 vet:
 	cd server && go vet ./...
+
+lint-go:
+	cd server && golangci-lint run ./...
 
 plugin-test: plugin/node_modules
 	cd plugin && npm run typecheck && npm test
