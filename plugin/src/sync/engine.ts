@@ -85,6 +85,8 @@ export class SyncEngine {
   private applyRetryAt = Infinity;
 
   private reconcileDue = true;
+  /** Some file is not written locally because another file or a folder holds its name; freeing that name must re-check it. */
+  private hasShadowed = false;
   /** The newest vault seq known: from the last pull, raised by hub notifications. */
   private knownSeq = 0;
   /** The highest seq notified since the last pull began. */
@@ -122,6 +124,7 @@ export class SyncEngine {
   }
 
   private emit(e: EngineEvent): void {
+    if (e.type === 'notice' && (e.code === 'CASE_COLLISION' || e.code === 'PATH_COLLISION')) this.hasShadowed = true;
     for (const l of [...this.listeners]) {
       try {
         l(e);
@@ -227,6 +230,8 @@ export class SyncEngine {
 
   private onAdapterEvent(ev: AdapterEvent): void {
     const st = this.ctx.state;
+    // A name was freed: a shadowed file may be able to take it now.
+    if (this.hasShadowed && (ev.type === 'delete' || ev.type === 'rename')) this.reconcileDue = true;
     // Recorded strictly in event order, so a later event's gen wins.
     this.eventWrites = this.eventWrites
       .then(async () => {
@@ -346,6 +351,7 @@ export class SyncEngine {
           throw err;
         }
         this.knownSeq = Math.max(r.vaultSeq, this.notifiedSeq);
+        this.hasShadowed = r.shadowed > 0;
       } else {
         // Every cycle pulls first: it is one request when nothing changed,
         // and pushing on top of the newest heads avoids needless conflicts.

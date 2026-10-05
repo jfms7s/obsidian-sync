@@ -27,7 +27,7 @@ export interface FileRecord {
   localMtime: number;
   /** A base text for 3-way merges is stored in `bases`. */
   hasBase: boolean;
-  /** Not written locally: another file differs from it only in letter case (case-insensitive file systems). */
+  /** Not written locally: another file differs from it only in letter case (case-insensitive file systems), or a folder holds its name. */
   shadowed?: boolean;
   /** Not written locally: the path matches this device's ignore rules. */
   ignored?: boolean;

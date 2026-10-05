@@ -47,9 +47,10 @@ function pad2(n: number): string {
   return String(n).padStart(2, '0');
 }
 
-/** "YYYY-MM-DD HHmm" in local time. */
-export function conflictStamp(ms: number): string {
+/** "YYYY-MM-DD HHmm" in local time, or in UTC with utc = true (a name every device must derive alike). */
+export function conflictStamp(ms: number, utc = false): string {
   const d = new Date(ms);
+  if (utc) return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}${pad2(d.getUTCMinutes())}`;
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}${pad2(d.getMinutes())}`;
 }
 
@@ -67,11 +68,11 @@ export function sanitizeName(s: string): string {
 /**
  * The n-th candidate (n ≥ 1) for a conflict copy of path:
  * `name (conflict <device> <YYYY-MM-DD HHmm>).ext`, with " 2", " 3", …
- * added inside the parentheses for n > 1.
+ * added inside the parentheses for n > 1. The time is local unless utc.
  */
-export function conflictCopyName(path: string, device: string, ms: number, n = 1): string {
+export function conflictCopyName(path: string, device: string, ms: number, n = 1, utc = false): string {
   const { dir, stem, ext } = splitPath(path);
-  return `${dir}${stem} (conflict ${sanitizeName(device)} ${conflictStamp(ms)}${n === 1 ? '' : ` ${n}`})${ext}`;
+  return `${dir}${stem} (conflict ${sanitizeName(device)} ${conflictStamp(ms, utc)}${n === 1 ? '' : ` ${n}`})${ext}`;
 }
 
 export const CONFLICT_COPY_PATTERN = / \(conflict .+ \d{4}-\d{2}-\d{2} \d{4}( \d+)?\)(\.[^./]*)?$/;

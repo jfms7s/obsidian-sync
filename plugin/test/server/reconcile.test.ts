@@ -23,7 +23,7 @@ it('queues files created, changed or deleted without events', async () => {
   d.adapter.removeSilently('gone.md');
   d.adapter.writeSilently('new.md', text('new\n'));
   d.adapter.writeSilently('.obsidian/workspace.json', text('{}'));
-  expect(await reconcile(d.ctx)).toEqual({ fetched: 0, markedDirty: 3, vaultSeq: 3 });
+  expect(await reconcile(d.ctx)).toEqual({ fetched: 0, markedDirty: 3, vaultSeq: 3, shadowed: 0 });
   expect((await d.state.dirtyEntries()).map((e) => e.path).sort()).toEqual(['changed.md', 'gone.md', 'new.md']);
   await pushRound(d.ctx, new PushMemory());
   const heads = (await d.api.heads(d.vaultId, null)).heads;
@@ -61,7 +61,7 @@ it('queues a file it cannot stat instead of failing, and push reports it for tha
   await pull(d.ctx);
   d.adapter.writeSilently('ok.md', text('ok 2\n'));
   d.adapter.failReads('bad.md', true, { stat: true });
-  expect(await reconcile(d.ctx)).toEqual({ fetched: 0, markedDirty: 2, vaultSeq: 2 });
+  expect(await reconcile(d.ctx)).toEqual({ fetched: 0, markedDirty: 2, vaultSeq: 2, shadowed: 0 });
   expect(await pushRound(d.ctx, new PushMemory())).toMatchObject({ committed: 1 });
   expect(d.events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'FILE_FAILED', path: 'bad.md' }));
 });

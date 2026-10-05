@@ -6,32 +6,14 @@ import { merge3 } from '../merge/merge3';
 import type { FileRecord, PendingCommit } from '../state/store';
 import { equalBytes, toHex, utf8 } from '../util/bytes';
 import { caseFold, conflictCopyName } from '../util/path';
-import { expectFor, type FileStat } from '../vault/adapter';
+import { expectFor } from '../vault/adapter';
+import { evictBlockingFile, saveBesideFolder } from './collisions';
 import { decodeText, downloadContent, hashHex } from './content';
 import type { SyncContext } from './context';
 import { applyKey, clearFailure, isFileError, recordFailure } from './failures';
+import { isSyncedHere, readLocal, type LocalFile } from './local';
 
-export interface LocalFile {
-  data: Uint8Array;
-  stat: FileStat;
-}
-
-/**
- * The local file at exactly path, or null. On a case-insensitive file
- * system a file stored under another case is not "at" path: it is a
- * different file that happens to collide.
- */
-export async function readLocal(ctx: SyncContext, path: string): Promise<LocalFile | null> {
-  const stat = await ctx.adapter.stat(path);
-  if (!stat || stat.path !== path) return null;
-  const data = await ctx.adapter.read(path);
-  return data ? { data, stat } : null;
-}
-
-/** A record only counts as "this device has version X here" when the file is really written locally. */
-export function isSyncedHere(rec: FileRecord | undefined): rec is FileRecord & { versionId: string } {
-  return !!rec && rec.versionId !== null && !rec.shadowed && !rec.ignored && !rec.tooLarge;
-}
+export { isSyncedHere, readLocal, type LocalFile } from './local';
 
 /** Whether applying versionId to rec has nothing left to do. */
 export function alreadyApplied(rec: FileRecord | undefined, versionId: string, ctx: SyncContext): boolean {
@@ -208,6 +190,20 @@ async function tryApply(
 ): Promise<boolean> {
   const path = meta.path;
   const { adapter, state } = ctx;
+
+  // A file and a folder cannot share a path; the folder wins (collisions.ts).
+  if (!v.deleted) {
+    if (await adapter.hasFolder(path)) {
+      if (!rec?.shadowed) {
+        const copy = await saveBesideFolder(ctx, meta, contentHash!, await remote());
+        if (copy === null) return false;
+        ctx.emit({ type: 'notice', code: 'PATH_COLLISION', persistent: false, path, conflictPath: copy, message: `${path} is a folder on this device; the file was saved as ${copy}` });
+      }
+      await state.recordSynced(record(fileId, path, versionId, v, contentHash, -1, { shadowed: true }), null);
+      return true;
+    }
+    if (!(await evictBlockingFile(ctx, path))) return false;
+  }
 
   // Case-insensitive file systems: a different file already holds this
   // name in another case (spec §5.1).

@@ -14,6 +14,8 @@ export interface ReconcileResult {
   markedDirty: number;
   /** The vault seq its pull saw. */
   vaultSeq: number;
+  /** Files not written locally because another file or a folder holds their name. */
+  shadowed: number;
 }
 
 export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
@@ -45,6 +47,7 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
   // 2. Local files that are new or changed without an event.
   const records = new Map((await state.allFiles()).map((r) => [r.fileId, r]));
   const present = new Set<string>();
+  let shadowed = 0;
   for (const raw of await adapter.list()) {
     let path: string;
     try {
@@ -111,5 +114,6 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
       markedDirty++;
     }
   }
-  return { fetched, markedDirty, vaultSeq };
+  for (const rec of records.values()) if (rec.shadowed) shadowed++;
+  return { fetched, markedDirty, vaultSeq, shadowed };
 }

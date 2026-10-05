@@ -45,6 +45,25 @@ export class MemoryAdapter implements VaultAdapter {
     return e !== undefined && e.mtime === expect.mtime && e.data.length === expect.size;
   }
 
+  private folderHoldsFiles(path: string): boolean {
+    const prefix = this.key(path) + '/';
+    for (const k of this.files.keys()) if (k.startsWith(prefix)) return true;
+    return false;
+  }
+
+  /** What a real file system answers: no file over a folder with files, none below a file. */
+  private checkPlace(path: string): void {
+    if (this.folderHoldsFiles(path)) throw new Error(`EISDIR: ${path} is a folder`);
+    const parts = path.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      if (this.files.has(this.key(parts.slice(0, i).join('/')))) throw new Error(`ENOTDIR: a file is in the way of ${path}`);
+    }
+  }
+
+  async hasFolder(path: string): Promise<boolean> {
+    return this.folderHoldsFiles(path);
+  }
+
   async list(): Promise<string[]> {
     return [...this.files.values()].map((e) => e.path).sort();
   }
@@ -65,6 +84,7 @@ export class MemoryAdapter implements VaultAdapter {
     const k = this.key(path);
     const prev = this.files.get(k);
     if (!this.holds(prev, expect)) return false;
+    if (!prev) this.checkPlace(path);
     // Like macOS and Windows: writing over a file keeps its existing name.
     this.files.set(k, { path: prev?.path ?? path, data: data.slice(), mtime: this.nextMtime() });
     this.emit({ type: prev ? 'modify' : 'create', path: prev?.path ?? path });
@@ -84,7 +104,10 @@ export class MemoryAdapter implements VaultAdapter {
   async rename(oldPath: string, newPath: string, expect?: Expect): Promise<boolean> {
     const e = this.files.get(this.key(oldPath));
     if (!e || !this.holds(e, expect)) return false;
-    if (this.key(oldPath) !== this.key(newPath) && this.files.has(this.key(newPath))) return false;
+    if (this.key(oldPath) !== this.key(newPath)) {
+      if (this.files.has(this.key(newPath))) return false;
+      this.checkPlace(newPath);
+    }
     this.files.delete(this.key(oldPath));
     // A rename keeps the mtime, as on real file systems.
     this.files.set(this.key(newPath), { path: newPath, data: e.data, mtime: e.mtime });

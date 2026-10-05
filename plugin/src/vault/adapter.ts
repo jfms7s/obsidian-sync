@@ -33,8 +33,15 @@ export interface VaultAdapter {
   readonly caseInsensitive: boolean;
   /** Every file in the vault (not folders), including ignored ones. */
   list(): Promise<string[]>;
-  /** null means the file does not exist; any other problem (permissions, I/O) must throw. */
+  /** null means no file is at path (a folder is not a file); any other problem (permissions, I/O) must throw. */
   stat(path: string): Promise<FileStat | null>;
+  /**
+   * A folder at path holds at least one file. An empty folder does not
+   * count: writing a file there replaces it. A file cannot be written where
+   * this is true, nor below a file; write and rename throw in both cases
+   * (what a real file system does), so the engine checks first.
+   */
+  hasFolder(path: string): Promise<boolean>;
   /** The file's bytes, or null if it does not exist. An I/O error must throw, never return null. */
   read(path: string): Promise<Uint8Array | null>;
   /**
