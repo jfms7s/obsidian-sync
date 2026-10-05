@@ -224,6 +224,27 @@ describe('pull', () => {
     await expectAdoptedThenAdvanced(a, y);
   });
 
+  it('does not re-apply versions older than the one its record holds', async () => {
+    const d = await device();
+    await remoteCommit(d, 'a.md', text('a\nb\nc\n'));
+    await remoteCommit(d, 'a.md', null);
+    const v3 = await remoteCommit(d, 'a.md', text('A\nb\nc\n'));
+    // A conflict resolution applies the head before the change log is read.
+    await resolveConflict(d.ctx, await fileIdFor(d.ring.namingKey, 'a.md'), v3);
+    await d.adapter.write('a.md', text('A\nb\nC\n'));
+    await pull(d.ctx, 1); // one version per page: v1 and v2 arrive on their own
+    expect(files(d.adapter)).toEqual({ 'a.md': 'A\nb\nC\n' });
+    expect((await d.state.filesByPath('a.md'))[0]).toMatchObject({ versionId: toHex(v3), seq: 3 });
+    expect(d.events.filter((e) => e.type === 'conflict' || e.type === 'merged')).toEqual([]);
+    // Forgetting synced versions (a server rollback) resets the seq, so everything applies again.
+    await d.state.forgetSyncedVersions();
+    expect((await d.state.filesByPath('a.md'))[0]).toMatchObject({ versionId: null, seq: 0 });
+    await d.adapter.write('a.md', text('A\nb\nc\n'));
+    await pull(d.ctx);
+    expect((await d.state.filesByPath('a.md'))[0]).toMatchObject({ versionId: toHex(v3), seq: 3 });
+    expect(files(d.adapter)).toEqual({ 'a.md': 'A\nb\nc\n' });
+  });
+
   it('pages through the change log', async () => {
     const d = await device();
     for (const p of ['a.md', 'b.md', 'c.md', 'd.md', 'e.md']) await remoteCommit(d, p, text(p));

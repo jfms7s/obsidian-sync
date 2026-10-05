@@ -112,6 +112,12 @@ async function applyOne(ctx: SyncContext, v: RemoteVersion, fileId: string): Pro
   const versionId = toHex(v.versionId);
   const stored = await ctx.state.getFile(fileId);
   if (alreadyApplied(stored, versionId, ctx)) return;
+  // An older version than the one already recorded (a conflict resolution
+  // applied the head before the change log reached it): applying it would
+  // roll the file back. A record whose seq is unknown (0) has no such
+  // guard; every path that resets a record for re-application (a server
+  // rollback, a head the server no longer has) also resets its seq.
+  if (stored?.versionId != null && stored.seq > v.seq) return;
   const pending = await ctx.state.getPending(fileId);
 
   // This device's own pending commit, which landed although its response
