@@ -293,8 +293,11 @@ export class SyncEngine {
         await this.eventWrites;
         const r = await pushRound(this.ctx, this.mem);
         if (r.staleEpoch) await this.refreshKeyring();
-        if (!r.worked) break;
-        if (round === MAX_PUSH_ROUNDS_PER_CYCLE - 1) this.schedule(0);
+        // Nothing left, or only entries waiting out a failure's backoff
+        // (their retry is scheduled below): another round would spin.
+        if (!r.worked || r.attempted === 0) break;
+        // Out of rounds while still committing: go on in a fresh cycle.
+        if (round === MAX_PUSH_ROUNDS_PER_CYCLE - 1 && r.committed > 0) this.schedule(0);
       }
       this.attempt = 0;
       // Paths waiting out a per-file failure do not keep the status at

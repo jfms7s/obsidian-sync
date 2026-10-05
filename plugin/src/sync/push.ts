@@ -13,7 +13,7 @@ import { InvalidPathError, normalizePath } from '../util/path';
 import { isSyncedHere, readLocal } from './apply';
 import { decodeText, hashHex, prepareContent, splitChunks } from './content';
 import type { SyncContext } from './context';
-import { clearFailure, isCycleError, isDeferred, pushKey, recordFailure } from './failures';
+import { applyKey, clearFailure, isCycleError, isDeferred, pushKey, recordFailure } from './failures';
 import { pull, resolveConflict } from './pull';
 
 /** Bounds one push round so memory stays small; the engine runs rounds until nothing is left. */
@@ -29,6 +29,13 @@ export class PushMemory {
 export interface PushResult {
   /** Dirty entries were looked at (false: nothing to do). */
   worked: boolean;
+  /**
+   * Dirty entries actually worked on: not waiting out a failure's backoff
+   * (their own push failure, or an apply failure of the file's remote
+   * version, which a push could only conflict with). 0 means another
+   * round now would do nothing.
+   */
+  attempted: number;
   committed: number;
   conflicts: number;
   /** A STALE_EPOCH result: the keyring must be refreshed before pushing again. */
@@ -71,8 +78,12 @@ function toCommit(p: PendingCommit): CommitInput {
   };
 }
 
-/** Builds the op for one dirty entry, or null when there is nothing to commit (the entry is then cleared). */
-async function buildOp(ctx: SyncContext, entry: DirtyEntry): Promise<Op | null> {
+/**
+ * Builds the op for one dirty entry, or null when there is nothing to
+ * commit (the entry is then cleared), or 'wait' when the entry must wait
+ * (it stays dirty and is not worked on this round).
+ */
+async function buildOp(ctx: SyncContext, entry: DirtyEntry): Promise<Op | null | 'wait'> {
   const { state, ring } = ctx;
   let path: string;
   try {
@@ -89,6 +100,9 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry): Promise<Op | null> 
   }
   const fileIdBytes = await fileIdFor(ring.namingKey, path);
   const fileId = toHex(fileIdBytes);
+  // The file's remote version failed to apply and waits out its backoff: a
+  // commit could only conflict with that version, so wait for it too.
+  if (await isDeferred(ctx, applyKey(fileId))) return 'wait';
   const rec = await state.getFile(fileId);
   const synced = isSyncedHere(rec);
   const base = synced ? rec.versionId : '';
@@ -216,7 +230,7 @@ async function uploadChunks(ctx: SyncContext, ops: Op[]): Promise<Op[]> {
 
 /** One push round over up to MAX_FILES_PER_ROUND dirty paths. */
 export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<PushResult> {
-  const result: PushResult = { worked: false, committed: 0, conflicts: 0, staleEpoch: false };
+  const result: PushResult = { worked: false, attempted: 0, committed: 0, conflicts: 0, staleEpoch: false };
   const entries = (await ctx.state.dirtyEntries()).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   if (entries.length === 0) return result;
   result.worked = true;
@@ -227,15 +241,18 @@ export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<Push
   for (const entry of entries) {
     if (ops.length >= MAX_FILES_PER_ROUND || bytes >= MAX_BYTES_PER_ROUND) break;
     if (await isDeferred(ctx, pushKey(entry.path))) continue;
-    let op: Op | null;
+    let op: Op | null | 'wait';
     try {
       op = await buildOp(ctx, entry);
     } catch (err) {
       // One unreadable file must not stop the others (failures.ts).
       if (isCycleError(err)) throw err;
+      result.attempted++;
       await recordFailure(ctx, pushKey(entry.path), entry.path, err);
       continue;
     }
+    if (op === 'wait') continue;
+    result.attempted++;
     await clearFailure(ctx, pushKey(entry.path));
     if (!op || fileIds.has(op.pending.fileId)) continue;
     fileIds.add(op.pending.fileId);

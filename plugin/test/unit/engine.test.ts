@@ -271,3 +271,61 @@ describe('engine errors outside the plan table', () => {
     await engine.stop();
   });
 });
+
+/** An engine on a scripted API whose vault seq the test sets; counts /changes and /heads calls. */
+async function scripted(o: { api?: Record<string, unknown>; engine?: Partial<ConstructorParameters<typeof SyncEngine>[0]> } = {}) {
+  const clock = new ManualClock(0);
+  const server = { vaultSeq: 0, changes: 0, heads: 0, headsError: null as Error | null };
+  const api = {
+    token: undefined,
+    baseUrl: 'http://localhost',
+    changes: async (): Promise<ChangesPage> => {
+      server.changes++;
+      return { versions: [], vaultSeq: server.vaultSeq, more: false };
+    },
+    heads: async (): Promise<HeadsPage> => {
+      server.heads++;
+      if (server.headsError) throw server.headsError;
+      return { heads: [], more: false };
+    },
+    ...o.api,
+  } as unknown as ApiClient;
+  const r = seededRandom(9);
+  const ring = await buildKeyring('0123456789abcdef0123456789abcdef', r.bytes(32), new Map([[1, r.bytes(32)]]), 1);
+  const state = await LocalState.open(new IDBFactory(), `scripted-${Math.random()}`);
+  const adapter = new MemoryAdapter(false, clock);
+  const events: EngineEvent[] = [];
+  const engine = new SyncEngine({
+    api, state, adapter, ring, deviceName: 'd', clock, random: r, webSocket: null, backoff: { baseMs: 1000, maxMs: 60_000 }, ...o.engine,
+  });
+  engine.on((e) => events.push(e));
+  /** Runs every cycle due now (a zero-delay loop would never settle; bounded to tell). */
+  const settle = async () => {
+    for (let i = 0; i < 30; i++) {
+      clock.advance(0);
+      await engine.whenIdle();
+    }
+  };
+  const tick = async (ms: number) => {
+    clock.advance(ms);
+    await engine.whenIdle();
+  };
+  return { engine, server, clock, state, adapter, events, settle, tick };
+}
+
+describe('engine scheduling', () => {
+  it('does not spin while a dirty file waits out its per-file failure', async () => {
+    const { engine, server, adapter, state, settle, tick } = await scripted();
+    await adapter.write('broken.md', new TextEncoder().encode('x'));
+    adapter.failReads('broken.md');
+    await state.markDirty('broken.md');
+    await engine.start();
+    await settle();
+    expect(server.changes).toBe(1);
+    const failure = (await state.allFailures())[0]!;
+    await tick(failure.nextAt); // the retry
+    await settle();
+    expect(server.changes).toBe(2);
+    await engine.stop();
+  });
+});
