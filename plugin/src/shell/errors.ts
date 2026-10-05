@@ -52,6 +52,6 @@ export function describeError(err: unknown): UserError {
     return { kind: 'fix-input', message: err.message[0]!.toUpperCase() + err.message.slice(1) + (err.message.endsWith('.') ? '' : '.') };
   }
   if (err instanceof UnsyncedChangesError) return { kind: 'retry', message: `${err.path} has changes that are not synced yet. Wait for the sync to finish, then restore.` };
-  if (err instanceof PathOccupiedError || err instanceof NotInTrashError) return { kind: 'none', message: err.message[0]!.toUpperCase() + err.message.slice(1) };
+  if (err instanceof PathOccupiedError || err instanceof NotInTrashError) return { kind: 'none', message: `${err.message}.` }; // they begin with a file name: keep its case
   return { kind: 'none', message: `Something went wrong: ${err instanceof Error ? err.message : String(err)}` };
 }
