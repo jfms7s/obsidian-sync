@@ -452,6 +452,8 @@ export class Vault {
   }
 
   async rename(file: TAbstractFile, newPath: string): Promise<void> {
+    // Obsidian checks for the destination without regard to case, so even a case-only change is refused.
+    if (this.fs.get(newPath)) throw new Error('Destination file already exists!');
     const folder = file instanceof TFolder;
     const oldPath = file.path;
     const kids = folder ? this.fs.subtree(oldPath).slice(1).map((e) => e.path) : [];
