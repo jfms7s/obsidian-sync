@@ -1,4 +1,7 @@
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
+import { fileIdFor } from '../../src/crypto/objects';
+import { keyringFromStored } from '../../src/services/vaults';
+import { toHex } from '../../src/util/bytes';
 import { ManualClock } from '../../src/util/clock';
 import { CONFLICT_COPY_PATTERN } from '../../src/util/path';
 import { makeClient, settle, type SimClient } from '../helpers/client';
@@ -70,5 +73,36 @@ describe('names that differ only in letter case', () => {
     await settle([a, b]);
     expect(files(b.adapter)).toEqual({ 'TODO.md': '- milk\n' });
     expect(b.events.some((e) => e.type === 'notice' && e.code === 'CASE_COLLISION')).toBe(false);
+  });
+
+  it('lets the name with the lower file id keep a collision on every case-insensitive device, whoever wrote it first', async () => {
+    // File ids depend on the vault's naming key, so across fresh vaults the
+    // lower one is sometimes the name the second device wrote and sometimes
+    // the one the first device wrote: both ways must end the same.
+    const wonBy = new Set<string>();
+    for (let round = 0; round < 8; round++) {
+      const user = await newUser(srv);
+      const a = await makeClient(srv, user, { name: 'Laptop', vault: 'create', caseInsensitive: true });
+      const b = await makeClient(srv, user, { name: 'Phone', vault: a.vaultId, caseInsensitive: true });
+      const c = await makeClient(srv, user, { name: 'Tablet', vault: a.vaultId, caseInsensitive: true });
+      const ring = await keyringFromStored((await a.state.getVault())!);
+      const ids = new Map<string, string>();
+      for (const p of ['Readme.md', 'README.md']) ids.set(p, toHex(await fileIdFor(ring.namingKey, p)));
+      const winner = ids.get('Readme.md')! < ids.get('README.md')! ? 'Readme.md' : 'README.md';
+      const loser = winner === 'Readme.md' ? 'README.md' : 'Readme.md';
+      wonBy.add(winner === 'Readme.md' ? 'laptop' : 'phone');
+      await b.adapter.write('README.md', text('phone wrote this\n')); // unsynced when the laptop's file arrives
+      await a.adapter.write('Readme.md', text('laptop wrote this\n'));
+      await a.engine.runCycle();
+      await b.engine.runCycle();
+      await settle([a, b, c]);
+      for (const d of [b, c]) expect(files(d.adapter)).toEqual(files(a.adapter));
+      const names = Object.keys(files(a.adapter));
+      expect(names).toHaveLength(2);
+      expect(names).toContain(winner);
+      expect(names).not.toContain(loser);
+      expect(Object.values(files(a.adapter)).sort()).toEqual(['laptop wrote this\n', 'phone wrote this\n']);
+    }
+    expect([...wonBy].sort()).toEqual(['laptop', 'phone']);
   });
 });
