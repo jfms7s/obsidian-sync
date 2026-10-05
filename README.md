@@ -99,7 +99,7 @@ Settings come from environment variables (or a YAML file named by `OBSYNC_CONFIG
 
 ## Install the plugin
 
-The plugin is not in Obsidian's community list yet. Until it is, install a release by hand:
+The plugin needs Obsidian 1.8.7 or newer. It is not in Obsidian's community list yet. Until it is, install a release by hand:
 
 1. Download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/jfms7s/obsidian-sync/releases/latest).
 2. Put them in `<your vault>/.obsidian/plugins/obsync/` (the folder is hidden; create it if needed). On a phone, use your file manager or a sync tool to put the folder in the vault's `.obsidian/plugins/`.
@@ -122,7 +122,7 @@ Sign in with the same account, **unlock** with the passphrase (or the recovery w
 
 ### Using it
 
-- The status bar shows *synced*, *syncing*, *offline* or *sync error*. On a phone there is no status bar: the ribbon button **Sync now** and the settings tab show the state.
+- The status bar shows *synced*, *syncing*, *offline*, *sync error*, *sync stopped* or, before the setup is finished, *not set up*. On a phone there is no status bar: the settings tab and the notices show the state. The ribbon button only starts a sync (**Sync now**).
 - **Show history of the current file** (command palette, or the file's menu) lists the versions, compares one with the file as it is now, and restores it. **Restore a deleted file** lists what was deleted.
 - **Ignored files** in the settings are patterns of files and folders this device does not sync, one per line (`Private/`, `*.pdf`, `drafts/**/*.md`). `.trash/`, `.git/`, the vault's configuration folder and operating-system junk files are never synced.
 - Files deleted by another device are moved the way Obsidian's **Files and links → Deleted files** setting says (system trash by default). The server keeps the content for the history view either way.

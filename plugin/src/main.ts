@@ -41,7 +41,7 @@ export default class ObsyncPlugin extends Plugin {
     });
     this.shell = shell;
 
-    // A phone has no status bar: the ribbon icon and the settings tab show the state there.
+    // A phone has no status bar: the settings tab and the notices show the state there.
     const statusEl = this.addStatusBarItem();
     let setupNeeded = false;
     const showStatus = (): void => {
