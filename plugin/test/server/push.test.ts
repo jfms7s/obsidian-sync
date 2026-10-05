@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { decryptMeta } from '../../src/crypto/objects';
 import { pull } from '../../src/sync/pull';
-import { PushMemory, pushRound } from '../../src/sync/push';
+import { MAX_FILES_PER_ROUND, PushMemory, pushRound } from '../../src/sync/push';
 import { files, newDevice, newUser, text, trackChanges, type Device } from '../helpers/fixture';
 import { startServer, type TestServer } from '../helpers/server';
 
@@ -85,6 +85,19 @@ describe('push', () => {
     expect(await push(b, fb)).toMatchObject({ committed: 1 });
     await pull(a.ctx);
     expect(files(a.adapter)).toEqual({ 'n.md': 'one\n2\n3\nfour\n' });
+  });
+
+  it('commits the delete half of a rename no later than its create, even across rounds', async () => {
+    const [a, , fa] = await pair();
+    await a.adapter.write('b.md', text('moved\n'));
+    await push(a, fa);
+    // Enough new files that sort between the two halves to fill a whole round.
+    for (let i = 0; i < MAX_FILES_PER_ROUND - 1; i++) await a.adapter.write(`a${String(i).padStart(3, '0')}.md`, text(`${i}\n`));
+    await a.adapter.rename('b.md', 'a.md');
+    while ((await push(a, fa)).worked);
+    const log = await serverMeta(a);
+    const seqOf = (path: string, deleted: boolean) => log.find((x) => x.meta.path === path && x.v.deleted === deleted)!.v.seq;
+    expect(seqOf('b.md', true)).toBeLessThan(seqOf('a.md', false));
   });
 
   it('re-creates a deleted file on top of its tombstone', async () => {

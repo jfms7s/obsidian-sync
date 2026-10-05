@@ -232,10 +232,33 @@ async function uploadChunks(ctx: SyncContext, ops: Op[]): Promise<Op[]> {
   return ops.filter((op) => !dropped.has(op));
 }
 
+/**
+ * Moves the old path of each rename right before its new path, so the
+ * delete is committed in the same round as the create (where deletions go
+ * first) or an earlier one, never after it: a case-only rename (todo.md →
+ * TODO.md) must free the old name first for case-insensitive peers.
+ */
+function renamesTogether(sorted: DirtyEntry[]): DirtyEntry[] {
+  const byPath = new Map(sorted.map((e) => [e.path, e]));
+  const out: DirtyEntry[] = [];
+  const placed = new Set<string>();
+  for (const e of sorted) {
+    if (placed.has(e.path)) continue;
+    const old = e.renamedFrom !== undefined ? byPath.get(e.renamedFrom) : undefined;
+    if (old && !placed.has(old.path)) {
+      out.push(old);
+      placed.add(old.path);
+    }
+    out.push(e);
+    placed.add(e.path);
+  }
+  return out;
+}
+
 /** One push round over up to MAX_FILES_PER_ROUND dirty paths. */
 export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<PushResult> {
   const result: PushResult = { worked: false, attempted: 0, committed: 0, conflicts: 0, staleEpoch: false };
-  const entries = (await ctx.state.dirtyEntries()).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const entries = renamesTogether((await ctx.state.dirtyEntries()).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)));
   if (entries.length === 0) return result;
   result.worked = true;
 
