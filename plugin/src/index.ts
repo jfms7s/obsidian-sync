@@ -22,6 +22,6 @@ export { MemoryAdapter } from './vault/memory';
 export * as account from './services/account';
 export { SetupPassphraseMismatchError } from './services/account';
 export * as history from './services/history';
-export { PathOccupiedError, UnsyncedChangesError } from './services/history';
+export { NotInTrashError, PathOccupiedError, UnsyncedChangesError } from './services/history';
 export * as vaults from './services/vaults';
 export { openSyncSession, type SyncSessionOptions, type SyncSessionResult } from './services/session';
