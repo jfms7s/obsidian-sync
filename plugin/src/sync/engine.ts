@@ -74,6 +74,8 @@ export class SyncEngine {
   private timer: TimerHandle | null = null;
   private timerAt = Infinity;
   private reconcileTimer: TimerHandle | null = null;
+  private applyRetryTimer: TimerHandle | null = null;
+  private applyRetryAt = Infinity;
 
   private reconcileDue = true;
   /** The newest vault seq known: from the last pull, raised by hub notifications. */
@@ -175,7 +177,9 @@ export class SyncEngine {
     this.hub = null;
     if (this.timer) this.clock.clearTimeout(this.timer);
     if (this.reconcileTimer) this.clock.clearTimeout(this.reconcileTimer);
-    this.timer = this.reconcileTimer = null;
+    if (this.applyRetryTimer) this.clock.clearTimeout(this.applyRetryTimer);
+    this.timer = this.reconcileTimer = this.applyRetryTimer = null;
+    this.applyRetryAt = Infinity;
     this.timerAt = Infinity;
     await this.running;
     await this.eventWrites;
@@ -243,6 +247,20 @@ export class SyncEngine {
     }, delayMs);
   }
 
+  /** A reconcile at time at, when failed remote versions are due again. */
+  private scheduleApplyRetry(at: number): void {
+    if (!this.autoRun || this.stopped) return;
+    if (this.applyRetryTimer && this.applyRetryAt <= at) return;
+    if (this.applyRetryTimer) this.clock.clearTimeout(this.applyRetryTimer);
+    this.applyRetryAt = at;
+    this.applyRetryTimer = this.clock.setTimeout(() => {
+      this.applyRetryTimer = null;
+      this.applyRetryAt = Infinity;
+      this.reconcileDue = true;
+      this.schedule(0);
+    }, Math.max(0, at - this.clock.now()));
+  }
+
   private scheduleReconcile(): void {
     this.reconcileTimer = this.clock.setTimeout(() => {
       this.reconcileDue = true;
@@ -290,8 +308,17 @@ export class SyncEngine {
       // pull may be ahead of it.
       this.notifiedSeq = 0;
       if (this.reconcileDue) {
+        // Cleared first so a request during the reconcile is kept, and set
+        // again if it fails, so the retry reconciles too.
         this.reconcileDue = false;
-        this.knownSeq = Math.max((await reconcile(this.ctx)).vaultSeq, this.notifiedSeq);
+        let r: Awaited<ReturnType<typeof reconcile>>;
+        try {
+          r = await reconcile(this.ctx);
+        } catch (err) {
+          this.reconcileDue = true;
+          throw err;
+        }
+        this.knownSeq = Math.max(r.vaultSeq, this.notifiedSeq);
       } else {
         // Every cycle pulls first: it is one request when nothing changed,
         // and pushing on top of the newest heads avoids needless conflicts.
@@ -316,12 +343,13 @@ export class SyncEngine {
       const cursor = await this.ctx.state.getCursor();
       this.setStatus(dirty === 0 && cursor >= this.knownSeq ? 'synced' : 'syncing');
       if (cursor < this.knownSeq) this.schedule(0);
-      const retryAt = await nextRetryAt(this.ctx);
-      if (retryAt !== null) {
-        // Remote versions are retried by reconcile, local files by push.
-        if (failures.some((f) => f.key.startsWith('apply:'))) this.reconcileDue = true;
-        this.schedule(Math.max(0, retryAt - this.clock.now()));
-      }
+      // Local files are retried by push, remote versions by reconcile:
+      // that one is asked for only when the earliest retry is due, so
+      // cycles before then (local edits, notifications) stay cheap.
+      const pushRetryAt = await nextRetryAt(this.ctx, 'push:');
+      if (pushRetryAt !== null) this.schedule(Math.max(0, pushRetryAt - this.clock.now()));
+      const applyRetryAt = await nextRetryAt(this.ctx, 'apply:');
+      if (applyRetryAt !== null) this.scheduleApplyRetry(applyRetryAt);
     } catch (err) {
       await this.onCycleError(err);
     }

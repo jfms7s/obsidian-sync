@@ -346,4 +346,56 @@ describe('engine scheduling', () => {
     expect(engine.status).toBe('synced');
     await engine.stop();
   });
+
+  it('reconciles again after a reconcile that failed', async () => {
+    const { engine, server, settle, tick } = await scripted();
+    server.headsError = new NetworkError('down');
+    await engine.start();
+    await settle();
+    expect(server.heads).toBe(1);
+    expect(engine.status).toBe('offline');
+    server.headsError = null;
+    await tick(1000); // the backoff
+    expect(server.heads).toBe(2);
+    expect(engine.status).toBe('synced');
+    await engine.stop();
+  });
+
+  it('retries a failed remote version when its backoff ends, not on the next unrelated cycle', async () => {
+    const fileId = new Uint8Array(32).fill(7);
+    const bad: RemoteVersion = {
+      fileId, versionId: new Uint8Array(16).fill(8), baseVersionId: new Uint8Array(0), epoch: 1, encMeta: new Uint8Array(80),
+      chunkIds: [], size: 0, deleted: true, deviceId: 'dev', createdAtMs: 1, seq: 1,
+    };
+    let heads = 0;
+    const committed: Array<{ fileId: Uint8Array; versionId: Uint8Array; seq: number; deleted: boolean }> = [];
+    const { engine, state, adapter, settle, tick } = await scripted({
+      api: {
+        changes: async (_v: string, since: number): Promise<ChangesPage> => ({ versions: since === 0 ? [bad] : [], vaultSeq: 1, more: false }),
+        heads: async (): Promise<HeadsPage> => {
+          heads++;
+          return { heads: [{ fileId, versionId: bad.versionId, seq: 1, deleted: true }, ...committed], more: false };
+        },
+        history: async (): Promise<RemoteVersion[]> => [bad],
+        chunksExist: async (_v: string, ids: Uint8Array[]) => ids.map(() => true),
+        commit: async (_v: string, commits: Array<{ fileId: Uint8Array; versionId: Uint8Array }>) => {
+          for (const c of commits) committed.push({ fileId: c.fileId, versionId: c.versionId, seq: 2 + committed.length, deleted: false });
+          return { results: commits.map((c) => ({ fileId: c.fileId, ok: true, seq: committed.find((h) => h.fileId === c.fileId)!.seq, headVersionId: new Uint8Array(0) })), vaultSeq: 1 + committed.length };
+        },
+      },
+    });
+    await engine.start();
+    await settle();
+    expect(heads).toBe(1);
+    const failure = (await state.allFailures())[0]!;
+    expect(failure.key).toBe(`apply:${toHex(fileId)}`);
+    await adapter.write('note.md', new TextEncoder().encode('x')); // an unrelated local change starts a cycle
+    await tick(1000);
+    expect(engine.status).toBe('synced');
+    expect(heads).toBe(1);
+    await tick(failure.nextAt - 1000);
+    await settle();
+    expect(heads).toBe(2);
+    await engine.stop();
+  });
 });
