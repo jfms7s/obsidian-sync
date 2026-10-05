@@ -67,7 +67,7 @@ describe('noticeFor', () => {
 
   it('names the copy when two files collide or conflict', () => {
     const collision = noticeFor({ type: 'notice', code: 'PATH_COLLISION', persistent: false, path: 'docs', conflictPath: 'docs (conflict A 2026-01-01 0000)', message: 'x' })!;
-    expect(collision.message).toContain('docs (conflict A 2026-01-01 0000)');
+    expect(collision.message).toBe('Obsync: docs could not keep its name here, so it was saved as docs (conflict A 2026-01-01 0000).');
     const conflict = noticeFor({ type: 'conflict', path: 'a.md', conflictPath: 'a (conflict B 2026-01-01 0000).md' })!;
     expect(conflict.message).toContain('a.md');
     expect(conflict.message).toContain('a (conflict B 2026-01-01 0000).md');
