@@ -2,7 +2,7 @@
 // system two names that differ only in case are one path. When two versions
 // want the same name, one as a file and one as a folder, the folder wins and
 // the file's content is saved beside it as a conflict copy; for two files
-// that differ only in case, the one that arrived second is saved as a copy.
+// that differ only in case, the one with the lower file id keeps the path, the other is saved as a copy.
 //
 // Every device must end up with the same copy name, or each would push a
 // copy of its own. So the name comes from the file's version (its device

@@ -62,11 +62,19 @@ describe('names that differ only in letter case', () => {
     await a.engine.runCycle();
     await b.engine.runCycle();
     await settle([a, b]);
-    // The edit is not lost and the renamed file is not either; the case-insensitive device keeps the edit at the old name and the renamed content as a copy.
-    expect(files(b.adapter)['todo.md']).toBe('- milk\n- eggs\n');
-    expect(Object.entries(files(b.adapter)).filter(([p]) => CONFLICT_COPY_PATTERN.test(p)).map(([, t]) => t)).toEqual(['- milk\n']);
-    expect(files(a.adapter)['todo.md']).toBe('- milk\n- eggs\n');
-    expect(files(a.adapter)['TODO.md']).toBe('- milk\n');
+    // The edit is not lost and the renamed file is not either. Which name keeps the path depends on file ids.
+    const winner = await nameKeepingCollision(b, 'todo.md', 'TODO.md');
+    const filesOnB = files(b.adapter);
+    expect(Object.keys(filesOnB).sort()).toHaveLength(2);
+    expect(filesOnB[winner]).toBe('- milk\n- eggs\n'); // b's edit is at the winning name
+    const copies_b = Object.entries(filesOnB).filter(([p]) => CONFLICT_COPY_PATTERN.test(p));
+    expect(copies_b).toHaveLength(1);
+    expect(copies_b[0]![1]).toBe('- milk\n'); // the original content is in the copy
+    // Device a holds both texts.
+    const filesOnA = files(a.adapter);
+    expect(Object.values(filesOnA).sort()).toContain('- milk\n');
+    expect(Object.values(filesOnA).sort()).toContain('- milk\n- eggs\n');
+    // b noticed the collision and reported where it saved the other file.
     expect(b.events.some((e) => e.type === 'notice' && e.code === 'CASE_COLLISION' && e.conflictPath !== undefined)).toBe(true);
   });
 
