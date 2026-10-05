@@ -55,6 +55,11 @@ RUN CC="$(cat /cc)" go build -trimpath \
  # with its owner set, which also makes a fresh named volume writable.
  && mkdir /out/data
 
+# Just the binary, for the release workflow: `--target binary --output type=local,dest=out`
+# gives the same bookworm-built executable the image holds (checked against glibc 2.36).
+FROM scratch AS binary
+COPY --from=build /out/obsync /obsync
+
 # gcr.io/distroless/cc-debian12:nonroot, index digest as of 2026-10-05.
 # glibc 2.36, libgcc and libstdc++, CA certificates, tzdata; no shell.
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
