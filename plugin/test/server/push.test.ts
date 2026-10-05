@@ -122,6 +122,22 @@ describe('push', () => {
     expect(await a.state.getRefusal('video.mp4')).toMatchObject({ fingerprint: expect.stringMatching(/^stat:1001:/) });
   });
 
+  it('drops a resent pending commit without reading the file when the file changed size', async () => {
+    const [a, , fa] = await pair({ maxFileBytes: 10 });
+    await a.adapter.write('n.md', text('hi\n'));
+    a.net.setOnline(false); // the pending commit is stored, its chunk never uploaded
+    await expect(push(a, fa)).rejects.toThrow();
+    expect(await a.state.allPending()).toHaveLength(1);
+    await a.adapter.write('n.md', new Uint8Array(20)); // now over the device limit
+    a.adapter.failReads('n.md'); // proves it is never read
+    a.net.setOnline(true);
+    await push(a, fa);
+    expect(await a.state.allPending()).toEqual([]);
+    await push(a, fa);
+    expect(a.events.filter((e) => e.type === 'notice').map((e) => (e as { code: string }).code)).toEqual(['TOO_LARGE']);
+    expect(a.net.count('PUT', '/chunks/')).toBe(0);
+  });
+
   it('skips ignored and invalid paths', async () => {
     const [a, , fa] = await pair();
     await a.adapter.write('.obsidian/app.json', text('{}'));

@@ -204,10 +204,14 @@ async function uploadChunks(ctx: SyncContext, ops: Op[]): Promise<Op[]> {
       const w = batch[j]!;
       if (exists[j] || dropped.has(w.op)) continue;
       if (!w.op.data) {
-        // A pending commit from before a restart: its content must still be on disk.
+        // A pending commit from before a restart: its content must still be
+        // on disk. A file whose size changed is not even read (it may be
+        // huge now): the pending commit is stale either way.
+        const p = w.op.pending;
         let local: Awaited<ReturnType<typeof readLocal>>;
         try {
-          local = await readLocal(ctx, w.op.pending.path);
+          const st = await ctx.adapter.stat(p.path);
+          local = st && st.path === p.path && st.size === p.size && st.size <= ctx.maxFileBytes ? await readLocal(ctx, p.path) : null;
         } catch (err) {
           if (isCycleError(err)) throw err;
           await recordFailure(ctx, pushKey(w.op.pending.path), w.op.pending.path, err);
