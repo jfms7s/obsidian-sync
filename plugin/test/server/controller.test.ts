@@ -95,6 +95,35 @@ describe('ShellController', () => {
     expect(c.engine).toBeNull();
   });
 
+  it('keeps the engine when it is started again while a stop waits for the start in progress', async () => {
+    const user = await newUser(srv);
+    const dev = await newDevice(srv, user, { name: 'Laptop', vault: 'create' });
+    let open!: () => void;
+    const opened = new Promise<void>((r) => (open = r));
+    // Holds the start inside openSyncSession (after it took the lock) until the gate opens.
+    const state = new Proxy(dev.state, {
+      get(target, key) {
+        const value = Reflect.get(target, key, target) as unknown;
+        if (typeof value !== 'function') return value;
+        const fn = value as (...args: unknown[]) => unknown;
+        if (key === 'getSession') return async (...args: unknown[]) => { await opened; return fn.apply(target, args); };
+        return fn.bind(target);
+      },
+    });
+    const c = controllerFor(dev, { state });
+    const first = c.start();
+    await flush();
+    const stopping = c.stop();
+    const again = c.start();
+    open();
+    await stopping;
+    expect(await first).toEqual({ ok: true });
+    expect(await again).toEqual({ ok: true });
+    expect(c.engine).not.toBeNull();
+    await c.stop();
+    expect(c.engine).toBeNull();
+  });
+
   it('does not sync the configuration folder, whatever it is called, and applies the user\'s ignore rules', async () => {
     const user = await newUser(srv);
     const dev = await newDevice(srv, user, { name: 'Laptop', vault: 'create' });
