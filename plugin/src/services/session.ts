@@ -8,7 +8,7 @@ import { SyncEngine } from '../sync/engine';
 import type { Clock } from '../util/clock';
 import type { Random } from '../util/random';
 import type { VaultAdapter } from '../vault/adapter';
-import { DEFAULT_IGNORES, IgnoreRules } from '../vault/ignore';
+import { IgnoreRules } from '../vault/ignore';
 import { apiFor, loadUserKeys, type ClientDeps } from './account';
 import { keyringFromStored, refreshKeyring } from './vaults';
 
@@ -23,7 +23,7 @@ export interface SyncSessionOptions extends ClientDeps {
    * The vault's configuration folder (Vault.configDir). Users can move it
    * (.obsidian-mobile, say), and it is never synced under any name.
    */
-  configDir?: string;
+  configDir: string;
 }
 
 export type SyncSessionResult =
@@ -44,11 +44,9 @@ export async function openSyncSession(o: SyncSessionOptions): Promise<SyncSessio
   if (o.clock) deps.clock = o.clock;
   const api = apiFor(session, deps);
   const ring = await keyringFromStored(vault);
-  const configFolder = o.configDir ? `${o.configDir.replace(/^\/+|\/+$/g, '')}/` : null;
-  const defaults = configFolder && !DEFAULT_IGNORES.includes(configFolder) ? [...DEFAULT_IGNORES, configFolder] : DEFAULT_IGNORES;
   const engine = new SyncEngine({
     api, state: o.state, adapter: o.adapter, ring, deviceName: session.deviceName,
-    ignore: new IgnoreRules(await o.state.getSetting<string[]>('ignoreGlobs', []), { caseInsensitive: o.adapter.caseInsensitive, defaults }),
+    ignore: new IgnoreRules(await o.state.getSetting<string[]>('ignoreGlobs', []), { caseInsensitive: o.adapter.caseInsensitive, configDir: o.configDir }),
     webSocket: o.webSocket === undefined ? defaultWebSocketFactory : o.webSocket,
     refreshKeyring: () => refreshKeyring(o.state, api, session, keys),
     ...(o.random ? { random: o.random } : {}),

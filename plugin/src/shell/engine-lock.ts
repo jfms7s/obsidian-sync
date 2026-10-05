@@ -22,11 +22,13 @@ export interface LockDeps {
   registry?: Map<string, Promise<void>>;
 }
 
+const moduleRegistry = new Map<string, Promise<void>>();
+
 /** Survives a plugin reload, which evaluates this module again: it lives on the window, not in the module. */
 function sharedRegistry(): Map<string, Promise<void>> {
-  // eslint-disable-next-line obsidianmd/no-global-this -- the registry has to outlive this module's reload; the window is the same
-  const g = globalThis as { __obsyncEngineLocks?: Map<string, Promise<void>> };
-  return (g.__obsyncEngineLocks ??= new Map());
+  if (typeof window === 'undefined') return moduleRegistry; // not in Obsidian (tests, tools)
+  const w = window as unknown as { __obsyncEngineLocks?: Map<string, Promise<void>> };
+  return (w.__obsyncEngineLocks ??= new Map<string, Promise<void>>());
 }
 
 function once(fn: () => void): () => void {

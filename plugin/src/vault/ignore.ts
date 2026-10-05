@@ -1,9 +1,12 @@
 // Which paths are not synced (spec §9.1): a fixed default list plus the
 // user's own globs, stored per device.
 
-/** `.obsidian/` arrives as a personal layer in sub-project 4; the rest is never synced. */
+/**
+ * Never synced. The vault's configuration folder (Vault.configDir, usually
+ * `.obsidian`) is ignored too, under the name the vault gives it: it
+ * arrives as a personal layer in sub-project 4. Pass it as IgnoreOptions.configDir.
+ */
 export const DEFAULT_IGNORES: readonly string[] = [
-  '.obsidian/',
   '.trash/',
   '.git/',
   '.DS_Store',
@@ -71,6 +74,8 @@ export interface IgnoreOptions {
   /** Match regardless of letter case: set it from VaultAdapter.caseInsensitive. */
   caseInsensitive?: boolean;
   defaults?: readonly string[];
+  /** The vault's configuration folder (Vault.configDir), ignored in addition to the defaults. */
+  configDir?: string;
 }
 
 export class IgnoreRules {
@@ -80,7 +85,8 @@ export class IgnoreRules {
   constructor(readonly userGlobs: readonly string[] = [], opts: IgnoreOptions | readonly string[] = {}) {
     const o: IgnoreOptions = Array.isArray(opts) ? { defaults: opts as readonly string[] } : (opts as IgnoreOptions);
     const ci = o.caseInsensitive ?? false;
-    this.res = [...(o.defaults ?? DEFAULT_IGNORES), ...userGlobs]
+    const config = o.configDir?.replace(/^\/+|\/+$/g, '');
+    this.res = [...(o.defaults ?? DEFAULT_IGNORES), ...(config ? [`${config}/`] : []), ...userGlobs]
       .filter((g) => g.trim() !== '' && !g.trim().startsWith('#'))
       .map((g) => compileGlob(g, ci));
   }

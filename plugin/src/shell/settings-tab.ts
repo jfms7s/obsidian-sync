@@ -197,7 +197,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
       a.inputEl.setAttr('autocapitalize', 'off');
       a.inputEl.setAttr('autocorrect', 'off');
       a.inputEl.setAttr('autocomplete', 'off');
-      a.setPlaceholder('word1 word2 word3 …').onChange((v) => (f.recoveryWords = v));
+      a.setPlaceholder('Type or paste the 24 words').onChange((v) => (f.recoveryWords = v));
     }).addButton((b) => b.setButtonText('Unlock with recovery words').onClick(this.action(b, async () => {
       const session = await this.session();
       await account.unlockWithRecoveryService(this.state, account.apiFor(session, { fetch: this.fetch }), session, f.recoveryWords);
@@ -269,7 +269,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
       })));
     }
     this.renderIgnore();
-    new Setting(this.containerEl).setName('Deleted files').setDesc('Restore a file that was deleted. To see the earlier versions of a note, use the command "Show history of the current file".')
+    new Setting(this.containerEl).setName('Deleted files').setDesc('Restore a file that was deleted. To see the earlier versions of a note, use the history command or the note\'s menu.')
       .addButton((b) => b.setButtonText('Show deleted files').onClick(() => new TrashModal(this.app, this.shell).open()));
     await this.renderDevices(session);
     new Setting(this.containerEl).setName('Sign out').setDesc('Stops syncing and removes the account and its keys from this device. Your files stay.')

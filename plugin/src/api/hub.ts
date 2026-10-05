@@ -100,7 +100,7 @@ export class HubClient {
   }
 
   private send(frame: MessageInitShape<typeof ClientFrameSchema>['frame']): void {
-    this.ws?.send(toBinary(ClientFrameSchema, create(ClientFrameSchema, { frame })) as Uint8Array<ArrayBuffer>);
+    this.ws?.send(new Uint8Array(toBinary(ClientFrameSchema, create(ClientFrameSchema, { frame }))));
   }
 
   private connect(): void {

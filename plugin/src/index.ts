@@ -1,5 +1,5 @@
 // The plugin engine's public surface, used by the Obsidian integration (plan 3).
-export { ApiClient, fetchTransport, type FetchLike, type HttpRequest, type HttpResponse } from './api/client';
+export { ApiClient, setDefaultTransport, type FetchLike, type HttpRequest, type HttpResponse } from './api/client';
 export { ApiError, ErrorCode, NetworkError, TruncatedBodyError, errorCodeName, isAuthFailure, isTemporary } from './api/errors';
 export { defaultWebSocketFactory, type WebSocketFactory, type WebSocketLike } from './api/hub';
 export { InsecureServerUrlError, normalizeServerUrl } from './api/url';

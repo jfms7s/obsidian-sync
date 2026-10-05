@@ -40,14 +40,14 @@ function withTimeout<T>(call: Promise<T>, ms: number, clock: Clock, what: string
       },
       (e: unknown) => {
         clock.clearTimeout(timer);
-        reject(e);
+        reject(e instanceof Error ? e : new Error(String(e)));
       },
     );
   });
 }
 
 export function createRequestUrlTransport(o: TransportOptions = {}): FetchLike {
-  const request: RequestFn = o.request ?? ((p) => requestUrl(p) as unknown as Promise<RequestResult>);
+  const request: RequestFn = o.request ?? ((p) => requestUrl(p));
   const clock = o.clock ?? systemClock;
   const timeoutMs = o.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const longTimeoutMs = o.longTimeoutMs ?? DEFAULT_LONG_TIMEOUT_MS;

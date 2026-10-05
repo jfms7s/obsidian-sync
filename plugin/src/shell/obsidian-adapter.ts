@@ -16,7 +16,7 @@
 // first finds the file under its spelling on disk and reports the stored
 // path back (FileStat.path), and never creates a second file next to an NFD
 // one.
-import { TFile, TFolder, type EventRef, type Stat, type TAbstractFile, type Vault } from 'obsidian';
+import { TFile, TFolder, type EventRef, type FileManager, type Stat, type TAbstractFile, type Vault } from 'obsidian';
 import type { AdapterEvent, Expect, FileStat, VaultAdapter } from '../vault/adapter';
 
 /** A renamed file waits under this suffix between the two steps of a case-only rename; recover() finishes an interrupted one. */
@@ -24,7 +24,10 @@ export const TEMP_SUFFIX = '.obsync.tmp';
 
 const hidden = (path: string): boolean => path.split('/').some((s) => s.startsWith('.'));
 const fold = (s: string): string => s.normalize('NFC').toLowerCase();
-const isAscii = (s: string): boolean => /^[\x00-\x7f]*$/.test(s); // eslint-disable-line no-control-regex
+function isAscii(s: string): boolean {
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) > 0x7f) return false;
+  return true;
+}
 
 /** The spellings a name can have on disk: as asked (NFC) and NFD. */
 function spellings(path: string): string[] {
@@ -65,11 +68,15 @@ export async function probeCaseInsensitive(vault: Vault, probeDir: string): Prom
 }
 
 export class ObsidianAdapter implements VaultAdapter {
-  private constructor(private readonly vault: Vault, readonly caseInsensitive: boolean) {}
+  private constructor(private readonly vault: Vault, private readonly fileManager: Pick<FileManager, 'trashFile'>, readonly caseInsensitive: boolean) {}
 
-  /** probeDir: a folder this plugin owns, for detecting the disk's case sensitivity. */
-  static async create(vault: Vault, probeDir: string): Promise<ObsidianAdapter> {
-    return new ObsidianAdapter(vault, await probeCaseInsensitive(vault, probeDir));
+  /**
+   * probeDir: a folder this plugin owns, for detecting the disk's case
+   * sensitivity. fileManager (App.fileManager): deletes follow the user's
+   * "Deleted files" setting, as Obsidian's own do.
+   */
+  static async create(vault: Vault, probeDir: string, fileManager: Pick<FileManager, 'trashFile'>): Promise<ObsidianAdapter> {
+    return new ObsidianAdapter(vault, fileManager, await probeCaseInsensitive(vault, probeDir));
   }
 
   // ----- finding things on disk -----
@@ -235,7 +242,7 @@ export class ObsidianAdapter implements VaultAdapter {
     if (dir === null) return;
     if (await this.holdsFile(dir)) throw new Error(`EISDIR: ${path} is a folder`);
     const folder = hidden(dir) ? null : this.vault.getFolderByPath(dir);
-    if (folder) await this.vault.delete(folder, true);
+    if (folder) await this.fileManager.trashFile(folder);
     else await this.vault.adapter.rmdir(dir, true);
   }
 
@@ -268,8 +275,9 @@ export class ObsidianAdapter implements VaultAdapter {
     const cur = await this.resolve(path);
     if (!this.holds(cur, expect)) return false;
     if (!cur) return true;
-    // Never a permanent delete: the system trash, or Obsidian's .trash folder when there is none.
-    if (cur.file) await this.vault.trash(cur.file, true);
+    // An indexed file is deleted the way the user chose in Obsidian (system trash, .trash folder, or for good): the
+    // server keeps the content for the restore view either way. One the index does not know goes to a trash.
+    if (cur.file) await this.fileManager.trashFile(cur.file);
     else if (!(await this.vault.adapter.trashSystem(cur.disk))) await this.vault.adapter.trashLocal(cur.disk);
     return true;
   }

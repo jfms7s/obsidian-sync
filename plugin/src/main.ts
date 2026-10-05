@@ -34,7 +34,7 @@ export default class ObsyncPlugin extends Plugin {
     const state = await LocalState.open(indexedDB, `obsync-${key}`);
     this.state = state;
     const pluginDir = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
-    const adapter = await ObsidianAdapter.create(this.app.vault, pluginDir);
+    const adapter = await ObsidianAdapter.create(this.app.vault, pluginDir, this.app.fileManager);
     const fetch = createRequestUrlTransport();
     const shell = new ShellController({
       state, adapter, configDir: this.app.vault.configDir, fetch, webSocket: defaultWebSocketFactory, lock: createEngineLock(`obsync-engine:${key}`),
