@@ -1,5 +1,6 @@
 // A switchable, fault-injecting network in front of the real server.
-import { fetchTransport, type FetchLike } from '../../src/api/client';
+import type { FetchLike } from '../../src/api/client';
+import { fetchTransport } from './setup-transport';
 import type { WebSocketFactory, WebSocketLike } from '../../src/api/hub';
 
 export interface RequestLog {

@@ -9,10 +9,13 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/term"
 
@@ -29,10 +32,18 @@ commands:
   serve     run the sync server
   migrate   apply database migrations and exit
   admin     manage users: obsync admin user create|list|delete|set-password
+  version   print the build version
+  health    probe GET /readyz on the server's own listen address; exit 0 only on 200
 
 Global flags such as --config go before the command (they are also accepted
 right after it, before the command's own arguments).
 --config defaults to $OBSYNC_CONFIG; OBSYNC_* environment variables override the file.`
+
+// version is set at build time: -ldflags "-X main.version=v1.2.3".
+var version = "dev"
+
+// stdout is where commands print results; tests replace it.
+var stdout io.Writer = os.Stdout
 
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
@@ -58,7 +69,14 @@ func run(ctx context.Context, args []string) error {
 	}
 	rest := fs.Args()
 	switch cmd {
-	case "serve", "migrate":
+	case "version":
+		// Needs no configuration, so a broken config cannot hide it.
+		if len(rest) > 0 {
+			return fmt.Errorf("%s: unexpected argument %q\n%s", cmd, rest[0], usage)
+		}
+		_, err := fmt.Fprintln(stdout, "obsync", version)
+		return err
+	case "serve", "migrate", "health":
 		if len(rest) > 0 {
 			return fmt.Errorf("%s: unexpected argument %q\n%s", cmd, rest[0], usage)
 		}
@@ -77,6 +95,8 @@ func run(ctx context.Context, args []string) error {
 		return serve(ctx, cfg, log)
 	case "migrate":
 		return migrate(ctx, cfg)
+	case "health":
+		return health(ctx, cfg)
 	default:
 		return adminCmd(ctx, cfg, rest)
 	}
@@ -116,6 +136,59 @@ func migrate(ctx context.Context, cfg config.Config) error {
 	defer st.Close()
 	fmt.Println("migrations applied")
 	return nil
+}
+
+// healthTimeout (a variable only so tests can shorten it) bounds the whole probe; the container runtime's own timeout
+// is longer, so a hung server is reported by this command first.
+var healthTimeout = 3 * time.Second
+
+// health probes the running server for container HEALTHCHECKs, where the
+// image has no shell or curl. It succeeds only on a plain 200 from /readyz.
+func health(ctx context.Context, cfg config.Config) error {
+	target, err := healthTarget(cfg.Listen)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+target+"/readyz", http.NoBody)
+	if err != nil {
+		return fmt.Errorf("health: %w", err)
+	}
+	client := &http.Client{
+		// The probe talks to the local server directly: never via a proxy,
+		// and a redirect is a failure, not something to chase.
+		Transport:     &http.Transport{Proxy: nil},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("health: GET /readyz on %s: %w", target, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		reason := strings.Join(strings.Fields(string(snippet)), " ")
+		return fmt.Errorf("health: GET /readyz on %s returned %d %s", target, resp.StatusCode, reason)
+	}
+	return nil
+}
+
+// healthTarget turns the listen address into one a local client can dial: an
+// empty or unspecified host (":8080", "0.0.0.0:8080", "[::]:8080") means
+// every interface, so the loopback address is used.
+func healthTarget(listen string) (string, error) {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "", fmt.Errorf("health: listen address %q: %w", listen, err)
+	}
+	if port == "" {
+		return "", fmt.Errorf("health: listen address %q has no port", listen)
+	}
+	if addr, err := netip.ParseAddr(host); host == "" || (err == nil && addr.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port), nil
 }
 
 func adminCmd(ctx context.Context, cfg config.Config, args []string) error {

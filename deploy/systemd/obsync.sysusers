@@ -1,0 +1,4 @@
+# The unprivileged account obsync.service runs as.
+#   sudo install -m 0644 deploy/systemd/obsync.sysusers /usr/lib/sysusers.d/obsync.conf
+#   sudo systemd-sysusers
+u obsync - "obsync sync server" /var/lib/obsync /usr/sbin/nologin

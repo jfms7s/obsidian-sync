@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	// Registers the "libsql" database/sql driver.
 	_ "github.com/tursodatabase/go-libsql"
 )
 

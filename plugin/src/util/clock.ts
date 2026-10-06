@@ -10,14 +10,17 @@ export interface Clock {
 
 let nextId = 1;
 
+// Obsidian can run the plugin in a pop-out window: timers belong to the window. Outside Obsidian (tests, tools) there is none.
+const timers = typeof window !== 'undefined' ? window : { setTimeout, clearTimeout };
+
 export const systemClock: Clock = {
   now: () => Date.now(),
   setTimeout(fn, ms) {
-    const h = globalThis.setTimeout(fn, ms);
+    const h: unknown = timers.setTimeout(fn, ms);
     return { id: nextId++, h } as TimerHandle & { h: unknown };
   },
   clearTimeout(h) {
-    globalThis.clearTimeout((h as TimerHandle & { h: ReturnType<typeof globalThis.setTimeout> }).h);
+    timers.clearTimeout((h as TimerHandle & { h: number }).h);
   },
 };
 

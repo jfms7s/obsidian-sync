@@ -9,6 +9,7 @@ export type NoticeCode =
   | 'TOO_LARGE' // persistent: the file is not synced
   | 'VAULT_LOST' // persistent: the vault was deleted or access was removed
   | 'CASE_COLLISION' // a remote file differs only in case from a local one
+  | 'PATH_COLLISION' // a file and a folder want the same path; the folder wins and the file is saved as a conflict copy
   | 'DECRYPT_FAILED' // a version from the server did not authenticate
   | 'SERVER_ROLLBACK' // the server lost history (restored from a backup); everything is re-checked
   | 'COMMIT_REJECTED' // the server refused a commit as invalid
@@ -18,7 +19,7 @@ export type NoticeCode =
 
 export type EngineEvent =
   | { type: 'status'; status: SyncStatus; detail?: string }
-  | { type: 'notice'; code: NoticeCode; message: string; persistent: boolean; path?: string }
+  | { type: 'notice'; code: NoticeCode; message: string; persistent: boolean; path?: string; /** The file that was saved beside it, for collisions. */ conflictPath?: string }
   | { type: 'conflict'; path: string; conflictPath: string }
   | { type: 'merged'; path: string }
   | { type: 'remote-change'; path: string; action: 'write' | 'delete' };

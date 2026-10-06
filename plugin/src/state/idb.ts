@@ -23,11 +23,11 @@ export function done(t: IDBTransaction): Promise<void> {
  * A blocked open rejects at once, and if it goes through later anyway, that
  * late connection is closed instead of leaking.
  */
-export function openDb(factory: IDBFactory, name: string, version: number, upgrade: (db: IDBDatabase, oldVersion: number) => void): Promise<IDBDatabase> {
+export function openDb(factory: IDBFactory, name: string, version: number, upgrade: (db: IDBDatabase, oldVersion: number, tx: IDBTransaction) => void): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     let settled = false;
     const r = factory.open(name, version);
-    r.onupgradeneeded = (ev) => upgrade(r.result, ev.oldVersion);
+    r.onupgradeneeded = (ev) => upgrade(r.result, ev.oldVersion, r.transaction!);
     r.onsuccess = () => {
       const db = r.result;
       if (settled) {

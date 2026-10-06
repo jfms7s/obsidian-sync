@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { ManualClock } from '../../src/util/clock';
 import { CONFLICT_COPY_PATTERN } from '../../src/util/path';
 import { makeClient, settle, type SimClient } from '../helpers/client';
-import { files, newUser, text } from '../helpers/fixture';
+import { files, nameKeepingCollision, newUser, text } from '../helpers/fixture';
 import { startServer, type TestServer } from '../helpers/server';
 
 let srv: TestServer;
@@ -182,7 +182,12 @@ describe('sync engine against the real server', () => {
     await a.adapter.write('README.md', text('upper\n'));
     await b.engine.runCycle();
     await settle([a, b]);
-    expect(files(b.adapter)).toEqual({ 'readme.md': 'lower\n', 'README (conflict Laptop 2026-01-02 0304).md': 'upper\n' });
+    // The name with the lower file id keeps the path; the other file is saved beside it.
+    expect(files(b.adapter)).toEqual(
+      (await nameKeepingCollision(b, 'readme.md', 'README.md')) === 'readme.md'
+        ? { 'readme.md': 'lower\n', 'README (conflict Laptop 2026-01-02 0304).md': 'upper\n' }
+        : { 'README.md': 'upper\n', 'readme (conflict Phone 2026-01-02 0304).md': 'lower\n' },
+    );
     expect(b.events.some((e) => e.type === 'notice' && e.code === 'CASE_COLLISION')).toBe(true);
   });
 

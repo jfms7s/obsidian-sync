@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,7 +17,7 @@ func TestRecovererDoesNotWriteTwice(t *testing.T) {
 	rec := httptest.NewRecorder()
 	func() {
 		defer func() {
-			if p := recover(); p != http.ErrAbortHandler {
+			if p, _ := recover().(error); !errors.Is(p, http.ErrAbortHandler) {
 				t.Errorf("recovered %v, want http.ErrAbortHandler", p)
 			}
 		}()

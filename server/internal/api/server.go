@@ -186,6 +186,7 @@ func (h *handlers) recoverer(next http.Handler) http.Handler {
 		tw := &trackingWriter{ResponseWriter: w, log: h.log}
 		defer func() {
 			if rec := recover(); rec != nil {
+				//nolint:errorlint // net/http panics with, and checks for, the sentinel value itself
 				if rec == http.ErrAbortHandler {
 					panic(rec)
 				}

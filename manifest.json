@@ -1,0 +1,10 @@
+{
+  "id": "obsync",
+  "name": "Obsync",
+  "version": "0.1.0",
+  "minAppVersion": "1.8.7",
+  "description": "End-to-end encrypted sync of your vault through a server you run yourself.",
+  "author": "jfms7s",
+  "authorUrl": "https://github.com/jfms7s",
+  "isDesktopOnly": false
+}

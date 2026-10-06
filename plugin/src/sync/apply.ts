@@ -1,37 +1,19 @@
 // Applying one remote version to the local vault (spec §5.5).
 import type { RemoteVersion } from '../api/types';
-import { decryptMeta, type FileMeta } from '../crypto/objects';
+import { decryptMeta, fileIdFor, type FileMeta } from '../crypto/objects';
 import { CryptoError } from '../crypto/primitives';
 import { merge3 } from '../merge/merge3';
 import type { FileRecord, PendingCommit } from '../state/store';
 import { equalBytes, toHex, utf8 } from '../util/bytes';
 import { caseFold, conflictCopyName } from '../util/path';
-import { expectFor, type FileStat } from '../vault/adapter';
+import { expectFor } from '../vault/adapter';
+import { evictBlockingFile, moveToCopy, saveBeside } from './collisions';
 import { decodeText, downloadContent, hashHex } from './content';
 import type { SyncContext } from './context';
 import { applyKey, clearFailure, isFileError, recordFailure } from './failures';
+import { isSyncedHere, readLocal } from './local';
 
-export interface LocalFile {
-  data: Uint8Array;
-  stat: FileStat;
-}
-
-/**
- * The local file at exactly path, or null. On a case-insensitive file
- * system a file stored under another case is not "at" path: it is a
- * different file that happens to collide.
- */
-export async function readLocal(ctx: SyncContext, path: string): Promise<LocalFile | null> {
-  const stat = await ctx.adapter.stat(path);
-  if (!stat || stat.path !== path) return null;
-  const data = await ctx.adapter.read(path);
-  return data ? { data, stat } : null;
-}
-
-/** A record only counts as "this device has version X here" when the file is really written locally. */
-export function isSyncedHere(rec: FileRecord | undefined): rec is FileRecord & { versionId: string } {
-  return !!rec && rec.versionId !== null && !rec.shadowed && !rec.ignored && !rec.tooLarge;
-}
+export { isSyncedHere, readLocal, type LocalFile } from './local';
 
 /** Whether applying versionId to rec has nothing left to do. */
 export function alreadyApplied(rec: FileRecord | undefined, versionId: string, ctx: SyncContext): boolean {
@@ -209,6 +191,20 @@ async function tryApply(
   const path = meta.path;
   const { adapter, state } = ctx;
 
+  // A file and a folder cannot share a path; the folder wins (collisions.ts).
+  if (!v.deleted) {
+    if (await adapter.hasFolder(path)) {
+      if (!rec?.shadowed) {
+        const copy = await saveBeside(ctx, meta, contentHash!, await remote());
+        if (copy === null) return false;
+        ctx.emit({ type: 'notice', code: 'PATH_COLLISION', persistent: false, path, conflictPath: copy, message: `${path} is a folder on this device; the file was saved as ${copy}` });
+      }
+      await state.recordSynced(record(fileId, path, versionId, v, contentHash, -1, { shadowed: true }), null);
+      return true;
+    }
+    if (!(await evictBlockingFile(ctx, path))) return false;
+  }
+
   // Case-insensitive file systems: a different file already holds this
   // name in another case (spec §5.1).
   if (adapter.caseInsensitive && !v.deleted) {
@@ -230,16 +226,23 @@ async function tryApply(
           return true;
         }
       }
-      // Otherwise the incoming file is written once as a conflict copy and
-      // not tracked at its own path.
-      if (!rec?.shadowed) {
-        const copy = await freeConflictPath(ctx, path, meta.deviceName || 'unknown device');
-        if (!(await adapter.write(copy, await remote(), { absent: true }))) return false;
-        await state.markDirty(copy);
-        ctx.emit({ type: 'notice', code: 'CASE_COLLISION', persistent: false, path, message: `${path} differs only in letter case from ${st.path}; this device saved it as ${copy}` });
+      // Otherwise two files want names that are one path here, and every
+      // device must pick the same winner whatever arrived first: the name
+      // with the lower file id keeps the path. (Hex ids have equal length,
+      // so comparing them as strings compares the bytes.)
+      if (toHex(await fileIdFor(ctx.ring.namingKey, st.path)) > fileId) {
+        // The local file loses: it moves to a conflict copy and this one takes its place below.
+        if (!(await moveToCopy(ctx, st, 'CASE_COLLISION', `differs only in letter case from ${path}, which keeps the name`))) return false;
+      } else {
+        // The incoming file loses: it is written once as a conflict copy and not tracked at its own path.
+        if (!rec?.shadowed) {
+          const copy = await saveBeside(ctx, meta, contentHash!, await remote());
+          if (copy === null) return false;
+          ctx.emit({ type: 'notice', code: 'CASE_COLLISION', persistent: false, path, conflictPath: copy, message: `${path} differs only in letter case from ${st.path}; this device saved it as ${copy}` });
+        }
+        await state.recordSynced(record(fileId, path, versionId, v, contentHash, -1, { shadowed: true }), null);
+        return true;
       }
-      await state.recordSynced(record(fileId, path, versionId, v, contentHash, -1, { shadowed: true }), null);
-      return true;
     }
   }
 

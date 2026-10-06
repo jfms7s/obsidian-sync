@@ -19,7 +19,7 @@ afterAll(() => srv?.stop());
 it('reports the missing step, then starts an engine that syncs', async () => {
   const state = await LocalState.open(new IDBFactory(), 'session');
   const adapter = new MemoryAdapter();
-  const open = () => openSyncSession({ state, adapter, webSocket: null, autoRun: false });
+  const open = () => openSyncSession({ state, adapter, webSocket: null, autoRun: false, configDir: '.obsidian' });
   expect(await open()).toEqual({ ok: false, reason: 'not-logged-in' });
   const session = await login(state, srv.url, 'sam', 'sam-password', 'Laptop', 'linux');
   expect(await open()).toEqual({ ok: false, reason: 'locked' });
@@ -46,7 +46,7 @@ it('applies the stored ignore globs, case-insensitively on a case-insensitive ad
   const { keys } = await setupKeys(state, api, session, 'pp', seededRandom(3), { memoryKib: 8192, iterations: 1, parallelism: 1 });
   await createVault(state, api, session, keys, 'Notes', seededRandom(4));
   await state.setSetting('ignoreGlobs', ['private/']);
-  const opened = await openSyncSession({ state, adapter, webSocket: null, autoRun: false });
+  const opened = await openSyncSession({ state, adapter, webSocket: null, autoRun: false, configDir: '.obsidian' });
   if (!opened.ok) throw new Error(opened.reason);
   await opened.engine.start();
   await adapter.write('Private/secret.md', new TextEncoder().encode('no\n'));
@@ -67,5 +67,5 @@ it("does not start syncing another account's stored vault", async () => {
   // Bob logs in on the same device without Ann logging out first.
   const bob = await login(state, srv.url, 'bob', 'bob-password', 'Laptop', 'linux');
   await setupKeys(state, apiFor(bob), bob, 'pp', seededRandom(7), { memoryKib: 8192, iterations: 1, parallelism: 1 });
-  expect(await openSyncSession({ state, adapter, webSocket: null, autoRun: false })).toEqual({ ok: false, reason: 'no-vault' });
+  expect(await openSyncSession({ state, adapter, webSocket: null, autoRun: false, configDir: '.obsidian' })).toEqual({ ok: false, reason: 'no-vault' });
 });

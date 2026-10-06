@@ -323,7 +323,7 @@ export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<Push
         if (op.matchesLocal) await ctx.state.clearDirty(op.entry.path, op.entry.gen);
         continue;
       }
-      const code = r.error?.code ?? ErrorCode.INTERNAL;
+      const code: ErrorCode = r.error?.code ?? ErrorCode.INTERNAL;
       switch (code) {
         case ErrorCode.CONFLICT:
           result.conflicts++;

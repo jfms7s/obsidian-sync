@@ -3,6 +3,7 @@ package api_test
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -54,7 +55,8 @@ func slowRequest(t *testing.T, baseURL, method, path, token, contentType string,
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
-		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
 			t.Fatalf("%s %s: server still waiting for the body after %v", method, path, time.Since(start))
 		}
 		return 0, time.Since(start)

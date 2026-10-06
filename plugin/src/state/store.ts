@@ -3,7 +3,7 @@
 import type { KeyBundleFields } from '../crypto/userkeys';
 import { inTx, openDb, req } from './idb';
 
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 
 const KV = 'kv';
 const FILES = 'files';
@@ -27,7 +27,7 @@ export interface FileRecord {
   localMtime: number;
   /** A base text for 3-way merges is stored in `bases`. */
   hasBase: boolean;
-  /** Not written locally: another file differs from it only in letter case (case-insensitive file systems). */
+  /** Not written locally: another file differs from it only in letter case (case-insensitive file systems), or a folder holds its name. */
   shadowed?: boolean;
   /** Not written locally: the path matches this device's ignore rules. */
   ignored?: boolean;
@@ -132,7 +132,7 @@ export interface StoredVault {
 }
 
 /** Creates or migrates the stores; each step runs only for databases older than it. */
-export function upgradeSchema(d: IDBDatabase, oldVersion: number): void {
+export function upgradeSchema(d: IDBDatabase, oldVersion: number, tx: IDBTransaction): void {
   if (oldVersion < 1) {
     d.createObjectStore(KV);
     const files = d.createObjectStore(FILES, { keyPath: 'fileId' });
@@ -142,6 +142,10 @@ export function upgradeSchema(d: IDBDatabase, oldVersion: number): void {
     d.createObjectStore(PENDING, { keyPath: 'fileId' });
     d.createObjectStore(REFUSED, { keyPath: 'path' });
     d.createObjectStore(FAILURES, { keyPath: 'key' });
+  }
+  if (oldVersion < 2) {
+    // Finds the newest synced version quickly (maxFileSeq).
+    tx.objectStore(FILES).createIndex('seq', 'seq', { unique: false });
   }
 }
 
@@ -226,6 +230,23 @@ export class LocalState {
 
   allFiles(): Promise<FileRecord[]> {
     return inTx(this.db, [FILES], 'readonly', (t) => req(t.objectStore(FILES).getAll()) as Promise<FileRecord[]>);
+  }
+
+  /**
+   * The highest server seq among the versions this device has synced (0 if
+   * none). A server whose own seq is lower than this was restored from a
+   * backup, whatever this device's cursor says.
+   */
+  maxFileSeq(): Promise<number> {
+    return inTx(this.db, [FILES], 'readonly', async (t) => {
+      const c = await req(t.objectStore(FILES).index('seq').openCursor(null, 'prev'));
+      return c ? (c.value as FileRecord).seq : 0;
+    });
+  }
+
+  /** The records whose version sits at server seq `seq`: normally none or one (a seq names one version). */
+  filesAtSeq(seq: number): Promise<FileRecord[]> {
+    return inTx(this.db, [FILES], 'readonly', (t) => req(t.objectStore(FILES).index('seq').getAll(seq)) as Promise<FileRecord[]>);
   }
 
   getBase(fileId: string): Promise<string | undefined> {

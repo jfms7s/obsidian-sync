@@ -1,0 +1,18 @@
+# {$OBSYNC_DOMAIN} comes from the environment (see compose.yaml). A public
+# name gets a Let's Encrypt certificate automatically; "localhost" gets one
+# from Caddy's internal CA, which is handy for a local trial.
+{$OBSYNC_DOMAIN} {
+	reverse_proxy obsync:8080 {
+		# Caddy is the edge, so it discards any X-Forwarded-For the client
+		# sent and sets it to the connecting client's address. obsync reads
+		# the right-most untrusted entry (OBSYNC_TRUSTED_PROXIES is this
+		# container's fixed IP), which is exactly that address.
+		#
+		# Nothing else is tuned on purpose. Caddy streams request bodies
+		# (request_buffers is off) and has no body size limit unless
+		# request_body { max_size } is set, so 4 MiB+ chunk uploads and 8 MiB
+		# commits pass unchanged; its default timeouts are unbounded, which
+		# suits long chunk transfers. WebSocket upgrades (/v1/ws) are proxied
+		# automatically.
+	}
+}

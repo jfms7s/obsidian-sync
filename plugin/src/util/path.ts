@@ -7,6 +7,11 @@ export class InvalidPathError extends Error {
   }
 }
 
+function hasControlCharacter(s: string): boolean {
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) < 0x20) return true;
+  return false;
+}
+
 /** Normalizes a vault path to the form file_id is computed from, or throws. */
 export function normalizePath(path: string): string {
   const p = path.replace(/\\/g, '/').normalize('NFC');
@@ -16,7 +21,7 @@ export function normalizePath(path: string): string {
   for (const seg of p.split('/')) {
     if (seg === '' || seg === '.' || seg === '..') throw new InvalidPathError(path, `bad segment ${JSON.stringify(seg)}`);
   }
-  if (/[\u0000-\u001f]/.test(p)) throw new InvalidPathError(path, 'contains a control character');
+  if (hasControlCharacter(p)) throw new InvalidPathError(path, 'contains a control character');
   // UTF-8 encoding would turn a lone surrogate into U+FFFD, so two different
   // names could share a file_id. (String.prototype.isWellFormed is ES2024,
   // newer than this package's lib target.)
@@ -47,9 +52,10 @@ function pad2(n: number): string {
   return String(n).padStart(2, '0');
 }
 
-/** "YYYY-MM-DD HHmm" in local time. */
-export function conflictStamp(ms: number): string {
+/** "YYYY-MM-DD HHmm" in local time, or in UTC with utc = true (a name every device must derive alike). */
+export function conflictStamp(ms: number, utc = false): string {
   const d = new Date(ms);
+  if (utc) return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}${pad2(d.getUTCMinutes())}`;
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}${pad2(d.getMinutes())}`;
 }
 
@@ -59,7 +65,7 @@ export function conflictStamp(ms: number): string {
  * trailing dots or spaces (Windows drops them).
  */
 export function sanitizeName(s: string): string {
-  const cleaned = s.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').trim();
+  const cleaned = Array.from(s, (ch) => (ch.charCodeAt(0) < 0x20 || '\\/:*?"<>|'.includes(ch) ? '-' : ch)).join('').trim();
   const cut = Array.from(cleaned).slice(0, 60).join('').replace(/[ .]+$/, '');
   return cut === '' ? 'unknown device' : cut;
 }
@@ -67,11 +73,11 @@ export function sanitizeName(s: string): string {
 /**
  * The n-th candidate (n ≥ 1) for a conflict copy of path:
  * `name (conflict <device> <YYYY-MM-DD HHmm>).ext`, with " 2", " 3", …
- * added inside the parentheses for n > 1.
+ * added inside the parentheses for n > 1. The time is local unless utc.
  */
-export function conflictCopyName(path: string, device: string, ms: number, n = 1): string {
+export function conflictCopyName(path: string, device: string, ms: number, n = 1, utc = false): string {
   const { dir, stem, ext } = splitPath(path);
-  return `${dir}${stem} (conflict ${sanitizeName(device)} ${conflictStamp(ms)}${n === 1 ? '' : ` ${n}`})${ext}`;
+  return `${dir}${stem} (conflict ${sanitizeName(device)} ${conflictStamp(ms, utc)}${n === 1 ? '' : ` ${n}`})${ext}`;
 }
 
 export const CONFLICT_COPY_PATTERN = / \(conflict .+ \d{4}-\d{2}-\d{2} \d{4}( \d+)?\)(\.[^./]*)?$/;

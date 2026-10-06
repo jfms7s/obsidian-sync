@@ -3,6 +3,7 @@
 import { fileIdFor } from '../crypto/objects';
 import { equalBytes, toHex } from '../util/bytes';
 import { normalizePath } from '../util/path';
+import { isCoarseMtime } from '../vault/adapter';
 import { alreadyApplied, applyHead, isSyncedHere } from './apply';
 import { hashHex } from './content';
 import { ServerRollbackError, type SyncContext } from './context';
@@ -14,6 +15,8 @@ export interface ReconcileResult {
   markedDirty: number;
   /** The vault seq its pull saw. */
   vaultSeq: number;
+  /** Files not written locally because another file or a folder holds their name. */
+  shadowed: number;
 }
 
 export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
@@ -25,7 +28,10 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
   // 0. A server restored from a backup (whatever its seq says now).
   const heads = await remoteHeads(ctx);
   if (await serverLostHistory(ctx, heads)) {
-    throw new ServerRollbackError(await state.getCursor(), Math.max(0, ...heads.map((h) => h.seq)));
+    // A loop, not Math.max(...): spreading 125,000+ heads overflows the call stack.
+    let top = 0;
+    for (const h of heads) if (h.seq > top) top = h.seq;
+    throw new ServerRollbackError(await state.getCursor(), top);
   }
 
   // 1. Remote heads this device has not applied (failed files after their backoff).
@@ -45,7 +51,9 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
   // 2. Local files that are new or changed without an event.
   const records = new Map((await state.allFiles()).map((r) => [r.fileId, r]));
   const present = new Set<string>();
-  for (const raw of await adapter.list()) {
+  let shadowed = 0;
+  // A folder the ignore rules match is skipped whole (so is everything in it).
+  for (const raw of await adapter.list((folder) => ctx.ignore.matches(`${folder}/`))) {
     let path: string;
     try {
       path = normalizePath(raw);
@@ -72,7 +80,8 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
       markedDirty++;
       continue;
     }
-    if (!st || (st.mtime === rec.localMtime && st.size === rec.size)) continue;
+    // Equal size and mtime mean unchanged, unless mtimes are whole seconds (then the content is compared).
+    if (!st || (st.mtime === rec.localMtime && st.size === rec.size && !isCoarseMtime(st.mtime))) continue;
     if (st.size !== rec.size) {
       // Changed for sure: push reads it (or refuses it when too large).
       await state.markDirty(path);
@@ -111,5 +120,6 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
       markedDirty++;
     }
   }
-  return { fetched, markedDirty, vaultSeq };
+  for (const rec of records.values()) if (rec.shadowed) shadowed++;
+  return { fetched, markedDirty, vaultSeq, shadowed };
 }

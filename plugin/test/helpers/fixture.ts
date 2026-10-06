@@ -12,7 +12,7 @@ import { DEFAULT_MAX_FILE_BYTES, type SyncContext } from '../../src/sync/context
 import type { EngineEvent } from '../../src/sync/events';
 import { pull } from '../../src/sync/pull';
 import { PushMemory, pushRound } from '../../src/sync/push';
-import { equalBytes } from '../../src/util/bytes';
+import { equalBytes, toHex } from '../../src/util/bytes';
 import { ManualClock, type Clock } from '../../src/util/clock';
 import { seededRandom, type Random } from '../../src/util/random';
 import { IgnoreRules } from '../../src/vault/ignore';
@@ -81,7 +81,7 @@ export async function newDevice(srv: TestServer, user: User, o: DeviceOptions): 
   const events: EngineEvent[] = [];
   const ctx: SyncContext = {
     api, state, adapter, ring, deviceName: o.name, clock, random,
-    ignore: new IgnoreRules(o.ignoreGlobs ?? [], { caseInsensitive: adapter.caseInsensitive }), maxFileBytes: o.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES, emit: (e) => events.push(e),
+    ignore: new IgnoreRules(o.ignoreGlobs ?? [], { caseInsensitive: adapter.caseInsensitive, configDir: '.obsidian' }), maxFileBytes: o.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES, emit: (e) => events.push(e),
   };
   return { name: o.name, api, state, adapter, net, ring, session, vaultId: stored.vaultId, events, ctx, clock, random };
 }
@@ -132,6 +132,13 @@ export async function remoteCommit(
   }]);
   if (!reply.results[0]!.ok) throw new Error(`remote commit failed: ${reply.results[0]!.error?.message}`);
   return versionId;
+}
+
+/** Which of two names that differ only in letter case keeps the path on a case-insensitive device: the one with the lower file id. */
+export async function nameKeepingCollision(dev: Device, x: string, y: string): Promise<string> {
+  const idx = toHex(await fileIdFor(dev.ring.namingKey, x));
+  const idy = toHex(await fileIdFor(dev.ring.namingKey, y));
+  return idx < idy ? x : y;
 }
 
 export function text(s: string): Uint8Array {

@@ -8,6 +8,8 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "build": "node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs watch",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:server": "vitest run --project server",
@@ -23,7 +25,9 @@
   "devDependencies": {
     "@bufbuild/protoc-gen-es": "2.16.0",
     "@types/node": "22.19.1",
+    "esbuild": "0.28.2",
     "fake-indexeddb": "6.2.5",
+    "obsidian": "1.8.7",
     "typescript": "7.0.2",
     "vite": "8.3.2",
     "vitest": "5.0.3"

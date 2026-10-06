@@ -4,6 +4,7 @@ import { toHex } from '../../src/util/bytes';
 import { pull } from '../../src/sync/pull';
 import { PushMemory, pushRound } from '../../src/sync/push';
 import { reconcile } from '../../src/sync/reconcile';
+import { MemoryAdapter } from '../../src/vault/memory';
 import { files, landedPendingOvertakenTwice, newDevice, newUser, remoteCommit, text } from '../helpers/fixture';
 import { startServer, type TestServer } from '../helpers/server';
 
@@ -23,7 +24,7 @@ it('queues files created, changed or deleted without events', async () => {
   d.adapter.removeSilently('gone.md');
   d.adapter.writeSilently('new.md', text('new\n'));
   d.adapter.writeSilently('.obsidian/workspace.json', text('{}'));
-  expect(await reconcile(d.ctx)).toEqual({ fetched: 0, markedDirty: 3, vaultSeq: 3 });
+  expect(await reconcile(d.ctx)).toEqual({ fetched: 0, markedDirty: 3, vaultSeq: 3, shadowed: 0 });
   expect((await d.state.dirtyEntries()).map((e) => e.path).sort()).toEqual(['changed.md', 'gone.md', 'new.md']);
   await pushRound(d.ctx, new PushMemory());
   const heads = (await d.api.heads(d.vaultId, null)).heads;
@@ -61,7 +62,7 @@ it('queues a file it cannot stat instead of failing, and push reports it for tha
   await pull(d.ctx);
   d.adapter.writeSilently('ok.md', text('ok 2\n'));
   d.adapter.failReads('bad.md', true, { stat: true });
-  expect(await reconcile(d.ctx)).toEqual({ fetched: 0, markedDirty: 2, vaultSeq: 2 });
+  expect(await reconcile(d.ctx)).toEqual({ fetched: 0, markedDirty: 2, vaultSeq: 2, shadowed: 0 });
   expect(await pushRound(d.ctx, new PushMemory())).toMatchObject({ committed: 1 });
   expect(d.events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'FILE_FAILED', path: 'bad.md' }));
 });
@@ -89,4 +90,41 @@ it('queues a file whose size changed without reading it, and reads only same-siz
   expect(await reconcile(d.ctx)).toMatchObject({ markedDirty: 1 });
   expect(read.mock.calls.map((c) => c[0])).toEqual(['touched.md']);
   expect((await d.state.dirtyEntries()).map((e) => e.path)).toEqual(['grown.md']);
+});
+
+it('tells the adapter which folders its ignore rules skip, so ignored trees are not walked', async () => {
+  const d = await newDevice(srv, await newUser(srv), { name: 'D', vault: 'create', ignoreGlobs: ['Scratch/'] });
+  await d.adapter.write('Notes/a.md', text('a\n'));
+  await d.adapter.write('Scratch/b.md', text('b\n'));
+  await d.adapter.write('.git/objects/ab', text('g\n'));
+  let skip: ((folder: string) => boolean) | undefined;
+  const list = d.adapter.list.bind(d.adapter);
+  d.adapter.list = async (s) => {
+    skip = s;
+    return list(s);
+  };
+  await reconcile(d.ctx);
+  expect(skip).toBeDefined();
+  expect([skip!('Scratch'), skip!('.git'), skip!('Notes'), skip!('Notes/Deep')]).toEqual([true, true, false, false]);
+  expect((await d.state.dirtyEntries()).map((e) => e.path)).toEqual(['Notes/a.md']);
+});
+
+it('does not trust an unchanged size and mtime when mtimes are whole seconds: it compares the content', async () => {
+  const d = await newDevice(srv, await newUser(srv), { name: 'D', vault: 'create' });
+  // A file system that keeps whole seconds (FAT, some Android storage): an edit within the same second keeps the mtime.
+  class WholeSeconds extends MemoryAdapter {
+    override async stat(path: string) {
+      const s = await super.stat(path);
+      return s && { ...s, mtime: Math.floor(s.mtime / 1000) * 1000 };
+    }
+  }
+  const adapter = new WholeSeconds(false, d.clock);
+  d.adapter = adapter;
+  d.ctx.adapter = adapter;
+  await adapter.write('x.md', text('one\n'));
+  await d.state.markDirty('x.md');
+  await pushRound(d.ctx, new PushMemory());
+  expect(await reconcile(d.ctx)).toMatchObject({ markedDirty: 0 }); // nothing changed
+  adapter.writeSilently('x.md', text('two\n')); // same size, same whole second
+  expect(await reconcile(d.ctx)).toMatchObject({ markedDirty: 1 });
 });

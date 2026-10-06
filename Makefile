@@ -5,11 +5,12 @@ export PATH := $(BIN):$(PATH)
 export GOTOOLCHAIN := auto
 export CGO_ENABLED := 1
 
-.PHONY: tools proto proto-lint test vet plugin-test vectors convergence
+.PHONY: tools proto proto-lint test vet lint-go lint check docker-build plugin-test plugin-build plugin-lint plugin-install vectors convergence
 
 tools: plugin/node_modules
 	GOBIN=$(BIN) go install github.com/bufbuild/buf/cmd/buf@v1.47.2
 	GOBIN=$(BIN) go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+	GOBIN=$(BIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 
 # protoc-gen-es comes from the plugin's pinned devDependencies.
 plugin/node_modules: plugin/package.json plugin/package-lock.json
@@ -28,13 +29,52 @@ test:
 vet:
 	cd server && go vet ./...
 
+lint-go:
+	cd server && golangci-lint run ./...
+
 plugin-test: plugin/node_modules
 	cd plugin && npm run typecheck && npm test
+
+# plugin/dist/ is the folder to install: main.js, manifest.json, styles.css.
+plugin-build: plugin/node_modules
+	cd plugin && npm run build
+
+# Obsidian's plugin rules need TypeScript 5.9; the plugin itself builds with 7.
+plugin/lint/node_modules: plugin/lint/package.json plugin/lint/package-lock.json
+	cd plugin/lint && npm ci
+	@touch plugin/lint/node_modules
+
+plugin-lint: plugin/lint/node_modules
+	cd plugin/lint && npm run lint
+
+lint: lint-go plugin-lint proto-lint
+
+# What CI runs on every push except the slow suites (the convergence suite, the image build).
+check: test vet lint plugin-test plugin-build
+
+# make plugin-install VAULT=~/vaults/test
+plugin-install: plugin-build
+	@test -n "$(VAULT)" || { echo "usage: make plugin-install VAULT=/path/to/vault" >&2; exit 1; }
+	mkdir -p "$(VAULT)/.obsidian/plugins/obsync"
+	cp plugin/dist/main.js plugin/dist/manifest.json plugin/dist/styles.css "$(VAULT)/.obsidian/plugins/obsync/"
 
 # Known-answer vectors for the plugin, computed by the Go implementation.
 vectors:
 	cd server && go run ./cmd/vectorgen -out ../plugin/test/vectors
 
-# CONVERGENCE_SEEDS=1000 make convergence (plan 3's CI); default 20.
+# CONVERGENCE_SEEDS=1000 make convergence (the nightly and release runs); default 20.
+# CONVERGENCE_SEED=123 replays one seed; CONVERGENCE_FIRST_SEED=501 starts at another seed;
+# CONVERGENCE_REPORT=file.json keeps what each seed did.
+CONVERGENCE_SEEDS ?= 20
 convergence: plugin/node_modules
-	cd plugin && OBSYNC_CONVERGENCE_SEEDS=$${CONVERGENCE_SEEDS:-20} npx vitest run --project convergence
+	cd plugin && OBSYNC_CONVERGENCE_SEEDS=$(CONVERGENCE_SEEDS) \
+		$(if $(CONVERGENCE_SEED),OBSYNC_CONVERGENCE_SEED=$(CONVERGENCE_SEED)) \
+		$(if $(CONVERGENCE_FIRST_SEED),OBSYNC_CONVERGENCE_FIRST_SEED=$(CONVERGENCE_FIRST_SEED)) \
+		$(if $(CONVERGENCE_REPORT),OBSYNC_CONVERGENCE_REPORT=$(abspath $(CONVERGENCE_REPORT))) \
+		npx vitest run --project convergence
+
+# Single-arch image for the local machine; CI builds both platforms with buildx.
+# Podman users: DOCKER_BUILD_FLAGS=--format=docker keeps the HEALTHCHECK.
+VERSION ?= $(shell git describe --tags --always --dirty)
+docker-build:
+	docker build $(DOCKER_BUILD_FLAGS) --build-arg VERSION=$(VERSION) -t obsync:$(VERSION) .

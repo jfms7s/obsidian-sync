@@ -26,8 +26,9 @@ export const PROTO = 'application/x-protobuf';
 export const OCTETS = 'application/octet-stream';
 
 /**
- * The HTTP transport. Plan 3 supplies one over Obsidian's requestUrl (no
- * CORS preflight); tests and other hosts use fetchTransport. Only whole,
+ * The HTTP transport. The Obsidian plugin supplies one over requestUrl (no
+ * CORS preflight); a host without it registers one with setDefaultTransport
+ * (the test suite registers fetch). Only whole,
  * buffered bodies are used: no streaming, no AbortSignal, no cookies.
  */
 export interface HttpRequest {
@@ -54,11 +55,13 @@ export interface HttpResponse {
 /** Resolves for every HTTP status (errors included); rejects only when no response arrived. */
 export type FetchLike = (url: string, req: HttpRequest) => Promise<HttpResponse>;
 
-export const fetchTransport: FetchLike = (url, req) => {
-  const init: RequestInit = { method: req.method, headers: req.headers, cache: 'no-store' };
-  if (req.body) init.body = req.body;
-  return globalThis.fetch(url, init);
-};
+const noTransport: FetchLike = () => Promise.reject(new TypeError('no HTTP transport is configured'));
+let defaultTransport: FetchLike | null = null;
+
+/** The transport ApiClients use when not given one (null: none, and requests fail as if offline). */
+export function setDefaultTransport(transport: FetchLike | null): void {
+  defaultTransport = transport;
+}
 
 export interface ApiClientOptions {
   baseUrl: string; // normalized by normalizeServerUrl
@@ -138,7 +141,7 @@ export class ApiClient {
     this.token = opts.token;
     this.clock = opts.clock ?? systemClock;
     this.gate = opts.gate ?? new RateGate(this.clock);
-    this.fetchFn = opts.fetch ?? fetchTransport;
+    this.fetchFn = opts.fetch ?? defaultTransport ?? noTransport;
   }
 
   private async send(method: string, path: string, opts: CallOptions = {}): Promise<HttpResponse> {

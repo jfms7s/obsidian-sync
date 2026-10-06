@@ -4,7 +4,7 @@ import * as engine from '../../src/index';
 
 it('exports the engine, adapter contract, services and errors', () => {
   for (const name of [
-    'SyncEngine', 'LocalState', 'MemoryAdapter', 'IgnoreRules', 'ApiClient', 'ApiError', 'NetworkError', 'CryptoError', 'merge3', 'normalizeServerUrl', 'openSyncSession', 'defaultWebSocketFactory', 'fetchTransport', 'DEFAULT_MAX_FILE_BYTES',
+    'SyncEngine', 'LocalState', 'MemoryAdapter', 'IgnoreRules', 'ApiClient', 'ApiError', 'NetworkError', 'CryptoError', 'merge3', 'normalizeServerUrl', 'openSyncSession', 'defaultWebSocketFactory', 'setDefaultTransport', 'DEFAULT_MAX_FILE_BYTES',
     'Argon2TooCostlyError', 'MissingEpochKeyError', 'InvalidIgnorePatternError', 'validateIgnorePattern', 'TruncatedBodyError', 'SetupPassphraseMismatchError', 'DEBOUNCE_MAX_WAIT_MS',
     'UnsyncedChangesError', 'PathOccupiedError',
   ]) {

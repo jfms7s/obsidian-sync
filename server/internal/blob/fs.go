@@ -58,6 +58,7 @@ func (f *FS) SweepTemp(ctx context.Context, olderThan time.Duration) (removed in
 			return nil
 		}
 		if info, err := d.Info(); err == nil && info.ModTime().Before(cutoff) {
+			//nolint:gosec // G122: the blob tree is private to the server process (data dir mode 0700)
 			if os.Remove(p) == nil {
 				removed++
 			}

@@ -25,16 +25,28 @@ export type AdapterEvent =
  *
  * mtime may be coarse (whole seconds on some file systems and in Obsidian's
  * mobile adapter), so two writes can share an mtime; the engine never
- * relies on mtime alone to tell versions apart (plan 3's adapter must keep
- * that in mind for expect preconditions). A rename keeps the file's mtime.
+ * relies on mtime alone to tell versions apart (see isCoarseMtime; an
+ * `expect` precondition is only as exact as the mtime). A rename keeps the
+ * file's mtime.
  */
 export interface VaultAdapter {
   /** Two paths that differ only in letter case name the same file. */
   readonly caseInsensitive: boolean;
-  /** Every file in the vault (not folders), including ignored ones. */
-  list(): Promise<string[]>;
-  /** null means the file does not exist; any other problem (permissions, I/O) must throw. */
+  /**
+   * Every file in the vault (not folders), hidden ones included. A folder
+   * for which skip returns true (it is given the folder's path, top-down) is
+   * not entered, so a huge ignored tree such as .git is never walked.
+   */
+  list(skip?: (folder: string) => boolean): Promise<string[]>;
+  /** null means no file is at path (a folder is not a file); any other problem (permissions, I/O) must throw. */
   stat(path: string): Promise<FileStat | null>;
+  /**
+   * A folder at path holds at least one file. An empty folder does not
+   * count: writing a file there replaces it. A file cannot be written where
+   * this is true, nor below a file; write and rename throw in both cases
+   * (what a real file system does), so the engine checks first.
+   */
+  hasFolder(path: string): Promise<boolean>;
   /** The file's bytes, or null if it does not exist. An I/O error must throw, never return null. */
   read(path: string): Promise<Uint8Array | null>;
   /**
@@ -52,6 +64,15 @@ export interface VaultAdapter {
   /** Subscribes to changes, including those the engine itself makes. */
   watch(listener: (ev: AdapterEvent) => void): () => void;
 }
+
+/**
+ * Whether an mtime has no sub-second part. A file system that keeps whole
+ * seconds (FAT, some Android storage) gives an edit made within the same
+ * second the same mtime, so equal size and mtime prove nothing there. One
+ * with millisecond precision hits a whole second 1 time in 1,000, which only
+ * costs a read.
+ */
+export const isCoarseMtime = (mtime: number): boolean => mtime % 1000 === 0;
 
 export function expectFor(stat: FileStat | null): Expect {
   return stat ? { mtime: stat.mtime, size: stat.size } : { absent: true };

@@ -6,7 +6,7 @@ import type { RemoteVersion } from '../../src/api/types';
 import { encryptChunk } from '../../src/crypto/objects';
 import { CryptoError } from '../../src/crypto/primitives';
 import { buildKeyring } from '../../src/crypto/vaultkeys';
-import { toHex, utf8 } from '../../src/util/bytes';
+import { equalBytes, toHex, utf8 } from '../../src/util/bytes';
 import { seededRandom } from '../../src/util/random';
 import { decodeText, downloadContent, isTextPath, prepareContent, splitChunks } from '../../src/sync/content';
 
@@ -47,7 +47,8 @@ describe('content', () => {
       fileId: new Uint8Array(32), versionId: new Uint8Array(16), baseVersionId: new Uint8Array(0), epoch: 1, encMeta: new Uint8Array(1),
       chunkIds: prep.chunkIds, size: data.length, deleted: false, deviceId: 'd', createdAtMs: 0, seq: 1,
     };
-    expect(await downloadContent(api, ring, v, prep.contentHash)).toEqual(data);
+    // Compared byte by byte by hand: toEqual on a 4 MiB array takes ten seconds.
+    expect(equalBytes(await downloadContent(api, ring, v, prep.contentHash), data)).toBe(true);
     await expect(downloadContent(api, ring, v, new Uint8Array(32))).rejects.toBeInstanceOf(CryptoError);
     await expect(downloadContent(api, ring, { ...v, chunkIds: [...prep.chunkIds].reverse() }, prep.contentHash)).rejects.toBeInstanceOf(CryptoError);
   });

@@ -1,0 +1,201 @@
+name: Release
+
+# A tag X.Y.Z (no "v") that matches manifest.json publishes, all together: the
+# plugin files Obsidian installs from, the Linux server binaries, and the container
+# image. Nothing is published until the tests, the lint and the 1,000-seed
+# convergence suite have passed.
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/obsync
+
+jobs:
+  verify:
+    name: The tag matches the manifest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/check-release-version_test.sh
+      - run: scripts/check-release-version.sh "$GITHUB_REF_NAME"
+
+  # The same tests and lint as ci.yml: the tag may point at a commit CI never saw.
+  checks:
+    name: Go and plugin tests and lint
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Show the toolchain the module selects
+        run: |
+          cd server
+          go version
+          grep '^toolchain' go.mod
+      - run: cd server && go vet ./...
+      - run: cd server && go test -race ./...
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+          working-directory: server
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            plugin/package-lock.json
+            plugin/lint/package-lock.json
+      - run: make plugin-test
+      - run: make plugin-lint
+      - run: make plugin-build
+      - name: The bundle needs nothing but obsidian
+        run: |
+          ! grep -oE 'require\("[^"]+"\)' plugin/dist/main.js | grep -v 'require("obsidian")'
+
+  convergence:
+    name: Convergence suite (1,000 seeds)
+    needs: verify
+    uses: ./.github/workflows/convergence.yml
+    with:
+      seeds: "1000"
+
+  binary-linux:
+    name: Linux binary (${{ matrix.arch }})
+    needs: verify
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # The same bookworm build stage as the image, cross-compiled: no emulation.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: binary
+          platforms: linux/${{ matrix.arch }}
+          build-args: VERSION=${{ github.ref_name }}
+          outputs: type=local,dest=out
+      - name: Needs no newer glibc than the runtime image has
+        run: scripts/check-glibc.sh out/obsync
+      - name: Package
+        run: |
+          name="obsync_${GITHUB_REF_NAME}_linux_${{ matrix.arch }}"
+          mkdir -p "pkg/$name"
+          cp out/obsync LICENSE README.md "pkg/$name/"
+          cp -r deploy "pkg/$name/deploy"
+          tar -czf "$name.tar.gz" -C pkg "$name"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-binary-linux-${{ matrix.arch }}
+          path: obsync_*.tar.gz
+          if-no-files-found: error
+
+  plugin:
+    name: Plugin files
+    needs: verify
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: plugin/package-lock.json
+      - run: make plugin-build
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-plugin
+          path: |
+            plugin/dist/main.js
+            plugin/dist/manifest.json
+            plugin/dist/styles.css
+          if-no-files-found: error
+
+  image:
+    name: Container image
+    # Pushing the image is publishing: not before the tests, the convergence suite
+    # and the other release files have all passed, so a failure leaves nothing half published.
+    needs: [verify, checks, convergence, binary-linux, plugin]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          # latest is moved by the publish job, after the release exists.
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  publish:
+    name: Publish the release
+    needs: [checks, convergence, binary-linux, plugin, image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          # Only this release's files: the convergence reports have other names.
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        run: |
+          cd dist
+          ls -l
+          sha256sum -- * > SHA256SUMS
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Move latest to this release
+        run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:${GITHUB_REF_NAME}"

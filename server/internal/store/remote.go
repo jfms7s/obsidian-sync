@@ -323,6 +323,7 @@ func (r *redactRows) Close() error      { return r.r.err(r.rows.Close()) }
 
 func (r *redactRows) Next(dest []driver.Value) error {
 	err := r.rows.Next(dest)
+	//nolint:errorlint // database/sql requires the driver to return the io.EOF sentinel itself
 	if err == nil || err == io.EOF {
 		return err
 	}

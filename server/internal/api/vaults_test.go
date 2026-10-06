@@ -188,7 +188,7 @@ func TestRequestValidation(t *testing.T) {
 
 	// A streamed body has no Content-Length.
 	pr, pw := io.Pipe()
-	go func() { pw.Write([]byte("data")); pw.Close() }()
+	go func() { _, _ = pw.Write([]byte("data")); _ = pw.Close() }()
 	req, _ := http.NewRequest("PUT", e.url+base+"/chunks/"+hex.EncodeToString(bytes.Repeat([]byte{2}, 32)), pr)
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)

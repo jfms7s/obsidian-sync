@@ -51,3 +51,54 @@ it('notices a restored server even when the seq has moved past the cursor, and k
   expect(a.events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'SERVER_ROLLBACK' }));
   expect(b.events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'SERVER_ROLLBACK' }));
 });
+
+it('notices a restored server whose new commits reuse the seq of a version this device synced', async () => {
+  const user = await newUser(srv);
+  const a = await makeClient(srv, user, { name: 'Laptop', vault: 'create' });
+  const b = await makeClient(srv, user, { name: 'Phone', vault: a.vaultId });
+  await a.adapter.write('x.md', text('base\n'));
+  await settle([a, b]);
+  const backup = await srv.snapshot();
+
+  await a.adapter.write('x.md', text('base\nlaptop edit\n'));
+  await settle([a, b]);
+  await srv.restore(backup); // forgets the laptop edit
+
+  // Tablet edits the same file: its commit takes the seq the laptop edit had.
+  const c = await makeClient(srv, user, { name: 'Tablet', vault: a.vaultId });
+  await settle([c]);
+  await c.adapter.write('x.md', text('base\ntablet edit\n'));
+  await settle([c]);
+  expect(await c.state.getCursor()).toBe(await a.state.getCursor());
+
+  await settle([a, b, c]);
+  const all = [a, b, c].map((d) => Object.values(files(d.adapter)));
+  // Both edits survive on every device (one as a conflict copy), none was silently overwritten.
+  for (const contents of all) expect(contents.sort()).toEqual(['base\nlaptop edit\n', 'base\ntablet edit\n']);
+  expect(files(b.adapter)).toEqual(files(a.adapter));
+  expect(files(c.adapter)).toEqual(files(a.adapter));
+  expect(a.events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'SERVER_ROLLBACK' }));
+});
+
+it('notices a restored server when a new commit takes the seq of this device\'s own, not yet pulled, commit', async () => {
+  const user = await newUser(srv);
+  const a = await makeClient(srv, user, { name: 'Laptop', vault: 'create' });
+  const b = await makeClient(srv, user, { name: 'Phone', vault: a.vaultId });
+  await a.adapter.write('base.md', text('base\n'));
+  await settle([a, b]);
+  const backup = await srv.snapshot();
+
+  await a.adapter.write('mine.md', text('mine\n'));
+  await a.engine.runCycle(); // pushed at seq 2; this device's cursor is still 1
+  expect(await a.state.getCursor()).toBe(1);
+  await srv.restore(backup); // the server forgets mine.md
+
+  const c = await makeClient(srv, user, { name: 'Tablet', vault: a.vaultId });
+  await settle([c]);
+  await c.adapter.write('theirs.md', text('theirs\n')); // takes seq 2
+  await settle([c]);
+
+  await settle([a, b, c]);
+  for (const d of [a, b, c]) expect(files(d.adapter)).toEqual({ 'base.md': 'base\n', 'mine.md': 'mine\n', 'theirs.md': 'theirs\n' });
+  expect(a.events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'SERVER_ROLLBACK' }));
+});
