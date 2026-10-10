@@ -85,6 +85,10 @@ export class SyncEngine {
   private applyRetryAt = Infinity;
 
   private reconcileDue = true;
+  /** Reconciles started so far; compared with hubDownAt to tell whether one began after the hub lost its connection. */
+  private reconcilesStarted = 0;
+  /** reconcilesStarted when the hub was last without a connection (at start, or when its connection closed). */
+  private hubDownAt = 0;
   /** Some file is not written locally because another file or a folder holds its name; freeing that name must re-check it. */
   private hasShadowed = false;
   /** The newest vault seq known: from the last pull, raised by hub notifications. */
@@ -147,6 +151,7 @@ export class SyncEngine {
     this.reconcileDue = true;
     this.unwatch = this.opts.adapter.watch((ev) => this.onAdapterEvent(ev));
     this.setStatus('syncing');
+    this.hubDownAt = this.reconcilesStarted;
     if (this.opts.webSocket && this.opts.api.token) {
       this.hub = new HubClient(
         {
@@ -161,11 +166,16 @@ export class SyncEngine {
             this.schedule(0);
           },
           onConnected: () => {
-            // Events may have been missed while disconnected.
-            this.reconcileDue = true;
+            // Notifications may have been missed while there was no
+            // connection; a reconcile that began since then (the one at
+            // start, usually) already covers them, and the pull that every
+            // cycle begins with covers the time up to the subscribe.
+            if (this.reconcilesStarted === this.hubDownAt) this.reconcileDue = true;
             this.schedule(0);
           },
-          onDisconnected: () => undefined,
+          onDisconnected: () => {
+            this.hubDownAt = this.reconcilesStarted;
+          },
           onAuthFailure: (code, message) => this.halt(code === ErrorCode.DEVICE_REVOKED ? 'DEVICE_REVOKED' : 'UNAUTHORIZED', message),
           onVaultNotFound: () => void this.checkVaultAccess(),
         },
@@ -343,6 +353,7 @@ export class SyncEngine {
         // Cleared first so a request during the reconcile is kept, and set
         // again if it fails, so the retry reconciles too.
         this.reconcileDue = false;
+        this.reconcilesStarted++;
         let r: Awaited<ReturnType<typeof reconcile>>;
         try {
           r = await reconcile(this.ctx);
