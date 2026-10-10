@@ -1,4 +1,6 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.27.1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
+#
+# (The frontend above is docker/dockerfile 1.27.1, index digest as of 2026-10-11.)
 #
 # Multi-arch (linux/amd64, linux/arm64) image for the obsync server.
 #
@@ -48,7 +50,12 @@ COPY server/go.mod server/go.sum ./
 RUN go mod download && go mod verify
 COPY server/ ./
 
-RUN CC="$(cat /cc)" go build -trimpath \
+# The Go build cache is a cache mount, so a local rebuild after a source edit
+# only recompiles what changed. The module download above stays a plain layer,
+# so CI's layer cache (type=gha) keeps it between runs; a cache mount is not
+# kept there.
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CC="$(cat /cc)" go build -trimpath \
         -ldflags "-s -w -X main.version=${VERSION}" \
         -o /out/obsync ./cmd/obsync \
  # The final image has no shell, so /data is created here and copied over
