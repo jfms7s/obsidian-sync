@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CryptoError } from '../../src/crypto/primitives';
 import {
   Argon2TooCostlyError, checkArgon2Params, CLIENT_ARGON2_MAX, createKeyBundle, derivePassKek, DEFAULT_ARGON2, InvalidRecoveryWordsError, rewrapPassphrase, strengthenParams, unlockWithPassphrase,
-  unlockWithRecoveryWords,
+  unlockWithRecoveryWords, WrongPassphraseError, WrongRecoveryWordsError,
 } from '../../src/crypto/userkeys';
 import { seededRandom } from '../../src/util/random';
 
@@ -21,6 +21,17 @@ describe('key bundle', () => {
     words[3] = words[3] === 'zoo' ? 'abandon' : 'zoo';
     await expect(unlockWithRecoveryWords(created.bundle, USER, words.join(' '))).rejects.toThrow();
     await expect(unlockWithRecoveryWords(created.bundle, USER, 'not words')).rejects.toBeInstanceOf(InvalidRecoveryWordsError);
+  });
+
+  it('says which secret was wrong: the passphrase or the recovery words', async () => {
+    const created = await createKeyBundle(USER, 'pass phrase', seededRandom(70), FAST);
+    const other = await createKeyBundle(USER, 'pass phrase', seededRandom(71), FAST);
+    const wrongPass = await unlockWithPassphrase(created.bundle, USER, 'wrong').catch((e: unknown) => e);
+    expect(wrongPass).toBeInstanceOf(WrongPassphraseError);
+    expect(wrongPass).toBeInstanceOf(CryptoError);
+    const wrongWords = await unlockWithRecoveryWords(created.bundle, USER, other.recoveryWords).catch((e: unknown) => e);
+    expect(wrongWords).toBeInstanceOf(WrongRecoveryWordsError);
+    expect(wrongWords).toBeInstanceOf(CryptoError);
   });
 
   it('changes the passphrase without touching the recovery wrapping, never below the default cost', async () => {

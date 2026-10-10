@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ApiError, ErrorCode, NetworkError } from '../../src/api/errors';
 import { InsecureServerUrlError } from '../../src/api/url';
 import { CryptoError } from '../../src/crypto/primitives';
-import { Argon2TooCostlyError, InvalidRecoveryWordsError } from '../../src/crypto/userkeys';
+import { Argon2TooCostlyError, InvalidRecoveryWordsError, WrongPassphraseError, WrongRecoveryWordsError } from '../../src/crypto/userkeys';
 import { MissingEpochKeyError } from '../../src/crypto/vaultkeys';
 import { NotInTrashError, PathOccupiedError, UnsyncedChangesError } from '../../src/services/history';
 import { diffLines, MAX_DIFF_LINES } from '../../src/shell/diff';
@@ -99,7 +99,13 @@ describe('describeError', () => {
   });
 
   it('explains key problems', () => {
-    expect(describeError(new CryptoError('bad tag'))).toMatchObject({ kind: 'fix-input', message: expect.stringContaining('passphrase') });
+    expect(describeError(new WrongPassphraseError())).toEqual({ kind: 'fix-input', message: 'That passphrase does not unlock the account keys.' });
+    expect(describeError(new WrongRecoveryWordsError())).toEqual({ kind: 'fix-input', message: 'Those recovery words do not unlock this account\'s keys.' });
+    for (const plain of [new CryptoError('bad tag'), new CryptoError('chunk content does not match its id')]) {
+      const shown = describeError(plain);
+      expect(shown).toEqual({ kind: 'none', message: 'This data could not be decrypted or verified; it may be damaged on the server.' });
+      expect(shown.message).not.toMatch(/passphrase|recovery/);
+    }
     expect(describeError(new Argon2TooCostlyError({ memoryKib: 1 << 22, iterations: 99, parallelism: 1 }))).toMatchObject({ message: expect.stringContaining('memory') });
     expect(describeError(new InvalidRecoveryWordsError()).message).toContain('recovery words');
     expect(describeError(new MissingEpochKeyError(3)).message).toMatch(/key/);
