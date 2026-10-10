@@ -1,6 +1,8 @@
 // Command vectorgen writes the plugin's known-answer test vectors. It
-// implements the plan 2 crypto specification with Go's standard library and
-// golang.org/x/crypto, independently of the TypeScript code under test.
+// implements the project's crypto and encoding specification (kept with its
+// design docs outside this repository) with Go's standard library and
+// golang.org/x/crypto, independently of the TypeScript code under test, so
+// the vectors enforce that both readings of the specification agree.
 package main
 
 import (

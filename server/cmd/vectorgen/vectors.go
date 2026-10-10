@@ -20,9 +20,10 @@ import (
 	obsyncv1 "github.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1"
 )
 
-// Labels from plan 2's "Crypto and encoding specification". They are
-// written out again here, not shared with the TypeScript code, so the
-// vectors check the plugin against an independent reading of the spec.
+// Labels from the project's crypto and encoding specification (kept with its
+// design docs outside this repository). They are written out again here, not
+// shared with the TypeScript code, so the vectors check the plugin against an
+// independent reading of the spec.
 const (
 	labelContentKey   = "obsync/v1/content-key"
 	labelMetaKey      = "obsync/v1/meta-key"
