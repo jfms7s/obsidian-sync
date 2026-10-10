@@ -2,7 +2,7 @@
 import { ApiError, ErrorCode, NetworkError } from '../api/errors';
 import { InsecureServerUrlError } from '../api/url';
 import { CryptoError } from '../crypto/primitives';
-import { Argon2TooCostlyError, InvalidRecoveryWordsError } from '../crypto/userkeys';
+import { Argon2TooCostlyError, InvalidRecoveryWordsError, WrongPassphraseError, WrongRecoveryWordsError } from '../crypto/userkeys';
 import { MissingEpochKeyError } from '../crypto/vaultkeys';
 import { KeysAlreadySetUpError, SetupPassphraseMismatchError } from '../services/account';
 import { NotInTrashError, PathOccupiedError, UnsyncedChangesError } from '../services/history';
@@ -47,7 +47,10 @@ export function describeError(err: unknown): UserError {
   // Subclasses of CryptoError first.
   if (err instanceof Argon2TooCostlyError) return { kind: 'none', message: 'This account asks for more memory to unlock than this device allows.' };
   if (err instanceof MissingEpochKeyError) return { kind: 'retry', message: 'This device does not have the key for part of this vault yet.' };
-  if (err instanceof CryptoError) return { kind: 'fix-input', message: 'That passphrase does not unlock the account keys.' };
+  if (err instanceof WrongPassphraseError) return { kind: 'fix-input', message: 'That passphrase does not unlock the account keys.' };
+  if (err instanceof WrongRecoveryWordsError) return { kind: 'fix-input', message: 'Those recovery words do not unlock this account\'s keys.' };
+  // Any other decryption or verification failure: a damaged or tampered object, not something the user typed.
+  if (err instanceof CryptoError) return { kind: 'none', message: 'This data could not be decrypted or verified; it may be damaged on the server.' };
   if (err instanceof InvalidRecoveryWordsError || err instanceof KeysAlreadySetUpError || err instanceof SetupPassphraseMismatchError) {
     return { kind: 'fix-input', message: err.message[0]!.toUpperCase() + err.message.slice(1) + (err.message.endsWith('.') ? '' : '.') };
   }

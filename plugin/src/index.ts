@@ -5,7 +5,7 @@ export { defaultWebSocketFactory, type WebSocketFactory, type WebSocketLike } fr
 export { InsecureServerUrlError, normalizeServerUrl } from './api/url';
 export type { DeviceInfo } from './api/types';
 export { CryptoError } from './crypto/primitives';
-export { Argon2TooCostlyError, DEFAULT_ARGON2, InvalidRecoveryWordsError, type UserKeys } from './crypto/userkeys';
+export { Argon2TooCostlyError, DEFAULT_ARGON2, InvalidRecoveryWordsError, WrongPassphraseError, WrongRecoveryWordsError, type UserKeys } from './crypto/userkeys';
 export { MissingEpochKeyError } from './crypto/vaultkeys';
 export { merge3, type MergeResult } from './merge/merge3';
 export { LocalState, type Session, type StoredVault } from './state/store';
