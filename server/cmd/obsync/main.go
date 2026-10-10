@@ -134,7 +134,7 @@ func migrate(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 	defer st.Close()
-	fmt.Println("migrations applied")
+	fmt.Fprintln(stdout, "migrations applied")
 	return nil
 }
 
@@ -155,10 +155,12 @@ func health(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("health: %w", err)
 	}
+	// The probe talks to the local server directly: never via a proxy, and a
+	// redirect is a failure, not something to chase.
+	transport := &http.Transport{Proxy: nil}
+	defer transport.CloseIdleConnections()
 	client := &http.Client{
-		// The probe talks to the local server directly: never via a proxy,
-		// and a redirect is a failure, not something to chase.
-		Transport:     &http.Transport{Proxy: nil},
+		Transport:     transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	resp, err := client.Do(req)
@@ -207,7 +209,7 @@ func adminCmd(ctx context.Context, cfg config.Config, args []string) error {
 	}
 	return admin.Run(ctx, args, admin.Deps{
 		Store: st, Blobs: blobs, DefaultQuotaBytes: cfg.DefaultQuotaBytes, Params: auth.DefaultParams,
-		Stdin: stdin, Stdout: os.Stdout,
+		Stdin: stdin, Stdout: stdout,
 	})
 }
 
