@@ -1,9 +1,12 @@
 name: Convergence
 
 # Random operations on simulated devices against the real server (see
-# plugin/test/convergence). Nightly with 1,000 seeds, on demand, on every
-# push with 100 (ci.yml), and before every release with 1,000, where a
-# failure stops the publishing (release.yml).
+# plugin/test/convergence). On every push with seeds 1-100 (ci.yml), before
+# every release with seeds 1-1000, where a failure stops the publishing
+# (release.yml), and on demand. Nightly with 1,000 new seeds per night that no
+# gate has run: run N of this workflow starts at seed 1000 + N * 1000. Each
+# shard prints its range in the log and the run summary; replay a failing
+# seed with CONVERGENCE_SEED=<n> make convergence.
 on:
   schedule:
     - cron: "17 2 * * *"
@@ -12,11 +15,17 @@ on:
       seeds:
         description: How many seeds to run, split over four runners
         default: "1000"
+      first_seed:
+        description: The first seed to run
+        default: "1"
   workflow_call:
     inputs:
       seeds:
         type: string
         default: "1000"
+      first_seed:
+        type: string
+        default: "1"
 
 permissions:
   contents: read
@@ -32,6 +41,10 @@ jobs:
         shard: [0, 1, 2, 3]
     env:
       SEEDS: ${{ inputs.seeds || '1000' }}
+      FIRST_SEED: ${{ inputs.first_seed || '1' }}
+      EVENT: ${{ github.event_name }}
+      RUN_NUMBER: ${{ github.run_number }}
+      SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,12 +60,21 @@ jobs:
           cache-dependency-path: plugin/package-lock.json
       - name: Run this shard's seeds
         run: |
+          if [ "$EVENT" = schedule ]; then
+            FIRST_SEED=$(( 1000 + RUN_NUMBER * 1000 ))
+          fi
+          if ! [[ "$FIRST_SEED" =~ ^[1-9][0-9]{0,8}$ ]]; then
+            echo "first_seed must be a whole number from 1 to 999999999" >&2
+            exit 1
+          fi
           per=$(( (SEEDS + 3) / 4 ))
-          first=$(( 1 + ${{ matrix.shard }} * per ))
-          count=$(( SEEDS - ${{ matrix.shard }} * per ))
+          first=$(( FIRST_SEED + SHARD * per ))
+          count=$(( SEEDS - SHARD * per ))
           if [ "$count" -gt "$per" ]; then count=$per; fi
           if [ "$count" -le 0 ]; then echo "nothing to run in this shard"; exit 0; fi
-          echo "seeds $first to $((first + count - 1))"
+          range="seeds $first to $((first + count - 1))"
+          echo "$range"
+          echo "Shard $SHARD runs $range. Replay one with \`CONVERGENCE_SEED=<n> make convergence\`." >> "$GITHUB_STEP_SUMMARY"
           make convergence CONVERGENCE_SEEDS="$count" CONVERGENCE_FIRST_SEED="$first" CONVERGENCE_REPORT="$RUNNER_TEMP/report.json"
       - name: Keep what every seed did
         if: always()
