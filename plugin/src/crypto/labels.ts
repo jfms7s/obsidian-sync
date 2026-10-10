@@ -1,6 +1,8 @@
 // Every domain-separation label and every AAD layout, in one place. The
-// "Crypto and encoding specification" in plan 2 is the normative text; this
-// file must match it byte for byte (the known-answer tests enforce that).
+// normative text is the project's crypto and encoding specification, kept
+// with its design docs outside this repository; this file must match it byte
+// for byte. The known-answer vectors (server/cmd/vectorgen, an independent
+// Go reading of the same specification) enforce that both readings agree.
 import { concat, fromHex, u32be, utf8 } from '../util/bytes';
 
 export const LABEL = {
