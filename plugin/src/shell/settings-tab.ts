@@ -4,7 +4,7 @@
 import { Notice, PluginSettingTab, Setting, type App, type ButtonComponent, type Plugin } from 'obsidian';
 import type { FetchLike } from '../api/client';
 import * as account from '../services/account';
-import { KeysAlreadySetUpError } from '../services/account';
+import { KeysAlreadySetUpError, PassphraseIsPasswordError, type PasswordFingerprint } from '../services/account';
 import * as vaults from '../services/vaults';
 import type { LocalState, Session } from '../state/store';
 import type { ShellController } from './controller';
@@ -34,6 +34,11 @@ interface Form {
   recoveryWords: string;
   vaultName: string;
   ignoreText: string | null;
+  /**
+   * A salted digest of the password of the last sign-in in this tab, to
+   * refuse it as the passphrase. Memory only; null after a plugin reload.
+   */
+  passwordFingerprint: PasswordFingerprint | null;
 }
 
 export class ObsyncSettingTab extends PluginSettingTab {
@@ -45,7 +50,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
     super(app, plugin);
     this.form = {
       server: '', username: '', password: '', deviceName: describePlatform().name, passphrase: '', passphrase2: '', recoveryWords: '',
-      vaultName: app.vault.getName(), ignoreText: null,
+      vaultName: app.vault.getName(), ignoreText: null, passwordFingerprint: null,
     };
   }
 
@@ -145,6 +150,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
     this.text('Device name', 'Shown in your device list and in the names of conflict copies.', () => f.deviceName, (v) => (f.deviceName = v));
     new Setting(this.containerEl).addButton((b) => b.setButtonText('Sign in').setCta().onClick(this.action(b, async () => {
       await account.login(this.state, f.server, f.username, f.password, f.deviceName.trim() || describePlatform().name, describePlatform().platform, { fetch: this.fetch });
+      f.passwordFingerprint = await account.passwordFingerprint(f.password);
       f.password = '';
       await this.render();
     })));
@@ -155,14 +161,16 @@ export class ObsyncSettingTab extends PluginSettingTab {
     this.heading(reupload ? 'Set the encryption passphrase again' : 'Choose an encryption passphrase');
     this.containerEl.createEl('p', {
       text: reupload
-        ? 'The server lost the keys of your account, but this device still has them. Choose a passphrase to store them again; you will get new recovery words.'
-        : 'This passphrase protects your notes. It is separate from your account password, and nobody can reset it for you. You will also get recovery words as a backup.',
+        ? 'The server lost the keys of your account, but this device still has them. Choose a passphrase, different from your account password, to store them again; you will get new recovery words.'
+        : 'This passphrase protects your notes. It must be different from your account password: the server sees that password at every sign-in, but never this passphrase. Nobody can reset it for you. You will also get recovery words as a backup.',
     });
     this.text('Passphrase', `At least ${MIN_PASSPHRASE_LENGTH} characters.`, () => f.passphrase, (v) => (f.passphrase = v), { secret: true, autocomplete: 'new-password' });
     this.text('Repeat the passphrase', '', () => f.passphrase2, (v) => (f.passphrase2 = v), { secret: true, autocomplete: 'new-password' });
     new Setting(this.containerEl).setDesc('Creating the keys takes a few seconds, longer on a phone.').addButton((b) => b.setButtonText('Create keys').setCta().onClick(this.action(b, async () => {
       if (f.passphrase.length < MIN_PASSPHRASE_LENGTH) throw new Error(`The passphrase must have at least ${MIN_PASSPHRASE_LENGTH} characters.`);
       if (f.passphrase !== f.passphrase2) throw new Error('The two passphrases are not the same.');
+      // Without a fingerprint (the plugin was reloaded between signing in and this step) the check is skipped: the password is never stored.
+      if (f.passwordFingerprint && await account.matchesPassword(f.passwordFingerprint, f.passphrase)) throw new PassphraseIsPasswordError();
       const session = await this.session();
       try {
         const { recoveryWords } = await account.setupKeys(this.state, account.apiFor(session, { fetch: this.fetch }), session, f.passphrase);
@@ -173,6 +181,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
         new Notice(`Obsync: ${err.message}`, 10000);
       }
       f.passphrase = f.passphrase2 = '';
+      f.passwordFingerprint = null;
       await this.render();
     })));
   }

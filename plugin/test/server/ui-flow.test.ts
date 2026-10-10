@@ -4,6 +4,7 @@
 import { IDBFactory } from 'fake-indexeddb';
 import type { App as RealApp } from 'obsidian';
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it, vi } from 'vitest';
+import { apiFor } from '../../src/services/account';
 import { createEngineLock } from '../../src/shell/engine-lock';
 import { ShellController } from '../../src/shell/controller';
 import { ObsyncSettingTab } from '../../src/shell/settings-tab';
@@ -105,6 +106,14 @@ describe('the settings tab', () => {
     first.type('Repeat the passphrase', 'another passphrase!!');
     await first.press('Create keys');
     expect(first.text()).toMatch(/not the same/);
+    first.type('Repeat the passphrase', 'a long enough passphrase');
+    first.type('Passphrase', user.password);
+    first.type('Repeat the passphrase', user.password);
+    await first.press('Create keys');
+    expect(Notice.shown.at(-1)?.message).toBe('Obsync: Choose a passphrase that is different from your account password.');
+    expect(await first.state.getPendingKeySetup()).toBeUndefined();
+    expect(await apiFor((await first.state.getSession())!).getKeyBundle()).toBeFalsy();
+    first.type('Passphrase', 'a long enough passphrase');
     first.type('Repeat the passphrase', 'a long enough passphrase');
     await first.press('Create keys');
 
