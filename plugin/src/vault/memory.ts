@@ -6,6 +6,16 @@ import type { Clock } from '../util/clock';
 import { systemClock } from '../util/clock';
 import type { AdapterEvent, Expect, FileStat, VaultAdapter } from './adapter';
 
+export interface MemoryAdapterOptions {
+  /**
+   * Keep whole-second mtimes, like FAT or Obsidian's mobile adapter: two
+   * writes within one second share an mtime, so an `expect` precondition
+   * cannot tell them apart. Off by default, where every write gets a later
+   * mtime than the one before.
+   */
+  coarseMtime?: boolean;
+}
+
 interface Entry {
   path: string;
   data: Uint8Array;
@@ -24,7 +34,11 @@ export class MemoryAdapter implements VaultAdapter {
   private broken = new Set<string>();
   private brokenStat = new Set<string>();
 
-  constructor(readonly caseInsensitive = false, private readonly clock: Clock = systemClock) {}
+  constructor(
+    readonly caseInsensitive = false,
+    private readonly clock: Clock = systemClock,
+    private readonly options: MemoryAdapterOptions = {},
+  ) {}
 
   private key(path: string): string {
     return this.caseInsensitive ? caseFold(path) : path;
@@ -35,6 +49,10 @@ export class MemoryAdapter implements VaultAdapter {
   }
 
   private nextMtime(): number {
+    if (this.options.coarseMtime) {
+      this.lastMtime = Math.max(Math.floor(this.clock.now() / 1000) * 1000, this.lastMtime);
+      return this.lastMtime;
+    }
     this.lastMtime = Math.max(this.clock.now(), this.lastMtime + 1);
     return this.lastMtime;
   }
