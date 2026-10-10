@@ -46,13 +46,34 @@ func (o CommitOutcome) OK() bool { return o.Reason == CommitOK }
 // returned as an outcome; the error is only for infrastructure failures and
 // ErrNotFound when the vault does not exist.
 func (s *Store) Commit(ctx context.Context, v Version) (CommitOutcome, error) {
-	var out CommitOutcome
+	outs, err := s.CommitAll(ctx, []Version{v})
+	if err != nil {
+		return CommitOutcome{}, err
+	}
+	return outs[0], nil
+}
+
+// CommitAll applies versions in order inside one transaction and returns one
+// outcome per version, the same outcomes Commit would return one by one: a
+// later version sees the earlier ones. Rejections are outcomes and do not
+// stop the batch. An error (an infrastructure failure, or ErrNotFound when a
+// vault does not exist) rolls back the whole batch.
+func (s *Store) CommitAll(ctx context.Context, vs []Version) ([]CommitOutcome, error) {
+	outs := make([]CommitOutcome, len(vs))
+	now := s.nowMs()
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		var err error
-		out, err = commitTx(ctx, tx, v, s.nowMs())
-		return err
+		for i, v := range vs {
+			var err error
+			if outs[i], err = commitTx(ctx, tx, v, now); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	return outs, nil
 }
 
 func commitTx(ctx context.Context, tx *sql.Tx, v Version, now int64) (CommitOutcome, error) {
