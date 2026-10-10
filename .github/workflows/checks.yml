@@ -110,6 +110,10 @@ jobs:
           fi
       - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
         with:
+          # The same buf as the generated job and the Makefile, not the latest.
+          version: 1.47.2
+          # Commenting needs pull-requests: write; the results are in the job log.
+          pr_comment: false
           lint: true
           format: false
           breaking: ${{ steps.base.outputs.sha != '' }}
