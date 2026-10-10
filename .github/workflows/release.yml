@@ -164,5 +164,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Only the highest release is latest: re-tagging an older patch must not
+      # move it backwards.
       - name: Move latest to this release
-        run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:${GITHUB_REF_NAME}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          highest="$(gh api --paginate "repos/$GITHUB_REPOSITORY/tags" --jq '.[].name' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)"
+          if [ "$highest" != "$GITHUB_REF_NAME" ]; then
+            echo "latest stays where it is: $GITHUB_REF_NAME is older than $highest"
+            exit 0
+          fi
+          docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:${GITHUB_REF_NAME}"

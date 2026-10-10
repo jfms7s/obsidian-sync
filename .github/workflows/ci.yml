@@ -41,9 +41,18 @@ jobs:
           build-args: VERSION=ci-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # The binary stage for both platforms, from the same gha cache as the image.
+      - name: Build the Linux binaries
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: binary
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=ci-${{ github.sha }}
+          outputs: type=local,dest=out
+          cache-from: type=gha
       - name: The Linux binaries need no newer glibc than the runtime image has
         run: |
-          for arch in amd64 arm64; do
-            docker buildx build --target binary --platform "linux/$arch" --output "type=local,dest=out/$arch" .
-            scripts/check-glibc.sh "out/$arch/obsync"
-          done
+          ls out/*/obsync
+          test "$(ls out/*/obsync | wc -l)" -eq 2
+          for bin in out/*/obsync; do scripts/check-glibc.sh "$bin"; done
