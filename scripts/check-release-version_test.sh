@@ -37,6 +37,22 @@ repo 0.2.0 1.5.7 '{"0.2.0":"1.4.0"}'
 expect "a versions.json entry with another minAppVersion is refused" 1 "$script" 0.2.0 "$tmp/r"
 repo 0.2.0 1.5.7 'not json'
 expect "an unreadable versions.json is refused" 1 "$script" 0.2.0 "$tmp/r"
+repo 0.2.0 1.5.7 '{"0.2.0":"1.5.7"}'
+printf 'not json\n' > "$tmp/r/manifest.json"
+expect "an unreadable manifest.json is refused" 1 "$script" 0.2.0 "$tmp/r"
+expect "an unreadable manifest.json is named as such" 0 bash -c \
+  "'$script' 0.2.0 '$tmp/r' 2>&1 | grep -q 'manifest.json is not valid JSON'"
+printf '{"id":"obsync","version":"0.2.0"}\n' > "$tmp/r/manifest.json"
+expect "a manifest.json without minAppVersion is refused" 1 "$script" 0.2.0 "$tmp/r"
+
+# Without jq on PATH the script says so instead of blaming manifest.json.
+mkdir -p "$tmp/nojq"
+ln -sf "$(command -v bash)" "$tmp/nojq/bash"
+repo 0.2.0 1.5.7 '{"0.2.0":"1.5.7"}'
+expect "a missing jq is a usage error" 2 env PATH="$tmp/nojq" "$script" 0.2.0 "$tmp/r"
+expect "a missing jq is named as such" 0 bash -c \
+  "PATH='$tmp/nojq' '$script' 0.2.0 '$tmp/r' 2>&1 | grep -q 'jq is required'"
+
 expect "no arguments is a usage error" 2 "$script"
 expect "a directory without manifest.json is a usage error" 2 "$script" 0.2.0 "$tmp/nowhere"
 
