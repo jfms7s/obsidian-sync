@@ -22,6 +22,11 @@ enum ErrorCode {
   // The account password sent to authorize the request was missing or wrong.
   // Unlike UNAUTHORIZED, the device token is still valid.
   ERROR_CODE_WRONG_PASSWORD = 12;
+  // The vault does not exist, or this account is not a member of it. A
+  // client stops syncing that vault. Other missing things (a chunk, a key
+  // bundle, a device) keep NOT_FOUND. 0.1.x servers sent NOT_FOUND with the
+  // message "vault not found" instead.
+  ERROR_CODE_VAULT_NOT_FOUND = 13;
 }
 
 message Error {

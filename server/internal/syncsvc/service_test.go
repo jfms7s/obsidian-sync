@@ -184,13 +184,13 @@ func TestPutChunkEnforcesQuota(t *testing.T) {
 func TestNonMembersGetNotFound(t *testing.T) {
 	f := newFixture(t)
 	bob := storetest.SeedUser(t, f.st, "bob")
-	if _, err := f.svc.ChunksExist(ctx, bob.ID, f.vault.ID, [][]byte{storetest.ChunkID(1)}); apperr.CodeOf(err) != apperr.NotFound {
+	if _, err := f.svc.ChunksExist(ctx, bob.ID, f.vault.ID, [][]byte{storetest.ChunkID(1)}); apperr.CodeOf(err) != apperr.VaultNotFound {
 		t.Fatalf("exists err = %v", err)
 	}
-	if _, _, err := f.svc.Commit(ctx, bob.ID, "dev", f.vault.ID, []store.Version{version(1, nil)}); apperr.CodeOf(err) != apperr.NotFound {
+	if _, _, err := f.svc.Commit(ctx, bob.ID, "dev", f.vault.ID, []store.Version{version(1, nil)}); apperr.CodeOf(err) != apperr.VaultNotFound {
 		t.Fatalf("commit err = %v", err)
 	}
-	if _, err := f.svc.Changes(ctx, f.user.ID, "not-a-vault-id", 0, 0); apperr.CodeOf(err) != apperr.NotFound {
+	if _, err := f.svc.Changes(ctx, f.user.ID, "not-a-vault-id", 0, 0); apperr.CodeOf(err) != apperr.VaultNotFound {
 		t.Fatalf("malformed vault id err = %v", err)
 	}
 }

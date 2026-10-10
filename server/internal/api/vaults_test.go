@@ -160,13 +160,16 @@ func TestOtherUsersCannotReachAVault(t *testing.T) {
 
 	for _, path := range []string{"/keys", "/changes", "/heads", "/trash", "/chunks/" + chunkHex} {
 		status, apiErr := e.do("GET", "/v1/vaults/"+vault+path, bob, nil, nil)
-		if status != 404 || apiErr.Code != apperr.NotFound {
+		if status != 404 || apiErr.Code != apperr.VaultNotFound {
 			t.Errorf("GET %s = %d %v", path, status, apiErr)
 		}
 	}
 	if status, _ := e.doRaw("PUT", "/v1/vaults/"+vault+"/chunks/"+chunkHex, bob, []byte("x")); status != 404 {
 		t.Errorf("PUT chunk = %d", status)
 	}
+	// A malformed vault id is answered like a foreign one.
+	status, apiErr := e.do("GET", "/v1/vaults/not-a-vault/keys", alice, nil, nil)
+	wantErr(t, status, apiErr, 404, apperr.VaultNotFound)
 }
 
 func TestRequestValidation(t *testing.T) {
@@ -215,5 +218,5 @@ func TestVaultKeysMembershipRaceIsNotFound(t *testing.T) {
 	alice, _ := e.login("alice", "correct horse")
 	vault := e.createVault(alice)
 	status, apiErr := e.do("GET", "/v1/vaults/"+vault+"/keys", alice, nil, nil)
-	wantErr(t, status, apiErr, 404, apperr.NotFound)
+	wantErr(t, status, apiErr, 404, apperr.VaultNotFound)
 }
