@@ -40,7 +40,7 @@ type Store interface {
 	TouchChunks(ctx context.Context, vaultID string, chunkIDs [][]byte) ([]bool, error)
 	InsertChunk(ctx context.Context, c store.Chunk) (bool, error)
 	ChunkBlob(ctx context.Context, vaultID string, chunkID []byte) (key string, size int64, err error)
-	Commit(ctx context.Context, v store.Version) (store.CommitOutcome, error)
+	CommitAll(ctx context.Context, vs []store.Version) ([]store.CommitOutcome, error)
 	Changes(ctx context.Context, vaultID string, since int64, limit int) ([]store.Version, error)
 	Heads(ctx context.Context, vaultID string, after []byte, limit int) ([]store.Head, error)
 	History(ctx context.Context, vaultID string, fileID []byte) ([]store.Version, error)
@@ -202,9 +202,11 @@ type CommitResult struct {
 	HeadVersionID []byte        // the current head, with a Conflict error
 }
 
-// Commit applies each commit independently and returns one result per
-// commit plus the vault's seq afterwards. Accepted commits notify the vault's
-// subscribers once, with the highest new seq.
+// Commit applies each commit independently, all in one store transaction,
+// and returns one result per commit plus the vault's seq afterwards. A
+// rejected commit does not stop the others; a store error stores none of
+// them. Accepted commits notify the vault's subscribers once, with the
+// highest new seq.
 func (s *Service) Commit(ctx context.Context, userID, deviceID, vaultID string, commits []store.Version) ([]CommitResult, int64, error) {
 	if len(commits) == 0 || len(commits) > MaxCommitsPerRequest {
 		return nil, 0, apperr.New(apperr.Invalid, "send between 1 and %d commits", MaxCommitsPerRequest)
@@ -214,7 +216,8 @@ func (s *Service) Commit(ctx context.Context, userID, deviceID, vaultID string, 
 		return nil, 0, err
 	}
 	results := make([]CommitResult, len(commits))
-	var newest int64
+	valid := make([]store.Version, 0, len(commits))
+	indexes := make([]int, 0, len(commits)) // indexes[j] is the position of valid[j] in commits
 	for i, c := range commits {
 		results[i].FileID = c.FileID
 		if verr := s.validateCommit(c); verr != nil {
@@ -223,28 +226,35 @@ func (s *Service) Commit(ctx context.Context, userID, deviceID, vaultID string, 
 		}
 		c.VaultID = vaultID
 		c.DeviceID = deviceID
-		out, err := s.st.Commit(ctx, c)
-		if err != nil {
-			// Commits earlier in the batch are stored; tell subscribers.
-			s.publish(ctx, vaultID, newest)
-			if errors.Is(err, store.ErrNotFound) {
-				return nil, 0, errVaultNotFound // deleted concurrently
-			}
-			return nil, 0, fmt.Errorf("commit: %w", err)
+		valid = append(valid, c)
+		indexes = append(indexes, i)
+	}
+	if len(valid) == 0 {
+		return results, v.Seq, nil
+	}
+	outs, err := s.st.CommitAll(ctx, valid)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, 0, errVaultNotFound // deleted concurrently
 		}
+		return nil, 0, fmt.Errorf("commit: %w", err)
+	}
+	var newest int64
+	for j, out := range outs {
+		r := &results[indexes[j]]
 		switch out.Reason {
 		case store.CommitOK:
-			results[i].Seq = out.Seq
+			r.Seq = out.Seq
 			newest = max(newest, out.Seq)
 		case store.CommitConflict:
-			results[i].Err = apperr.New(apperr.Conflict, "the file changed since the base version")
-			results[i].HeadVersionID = out.HeadVersionID
+			r.Err = apperr.New(apperr.Conflict, "the file changed since the base version")
+			r.HeadVersionID = out.HeadVersionID
 		case store.CommitStaleEpoch:
-			results[i].Err = apperr.New(apperr.StaleEpoch, "the vault key epoch has changed")
+			r.Err = apperr.New(apperr.StaleEpoch, "the vault key epoch has changed")
 		case store.CommitMissingChunk:
-			results[i].Err = apperr.New(apperr.MissingChunk, "a referenced chunk is not on the server; upload it again")
+			r.Err = apperr.New(apperr.MissingChunk, "a referenced chunk is not on the server; upload it again")
 		default:
-			results[i].Err = apperr.New(apperr.Invalid, "%s", out.Detail)
+			r.Err = apperr.New(apperr.Invalid, "%s", out.Detail)
 		}
 	}
 	s.publish(ctx, vaultID, newest)
