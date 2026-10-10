@@ -124,7 +124,11 @@ func OpenStore(ctx context.Context, cfg config.Config) (*store.Store, error) {
 	if err := EnsureDatabaseDir(cfg.DatabaseURL); err != nil {
 		return nil, err
 	}
-	st, err := store.Open(ctx, store.Options{URL: cfg.DatabaseURL, AuthToken: cfg.DatabaseAuthToken})
+	st, err := store.Open(ctx, store.Options{
+		URL:         cfg.DatabaseURL,
+		AuthToken:   cfg.DatabaseAuthToken,
+		Synchronous: store.Synchronous(cfg.DatabaseSynchronous),
+	})
 	if err != nil {
 		return nil, err
 	}

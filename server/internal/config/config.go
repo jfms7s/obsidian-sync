@@ -60,10 +60,13 @@ type Retention struct {
 }
 
 type Config struct {
-	Listen              string    `yaml:"listen"`
-	DataDir             string    `yaml:"data_dir"`
-	DatabaseURL         string    `yaml:"database_url"`
-	DatabaseAuthToken   string    `yaml:"database_auth_token"`
+	Listen            string `yaml:"listen"`
+	DataDir           string `yaml:"data_dir"`
+	DatabaseURL       string `yaml:"database_url"`
+	DatabaseAuthToken string `yaml:"database_auth_token"`
+	// DatabaseSynchronous is SQLite's synchronous mode for a local database
+	// file: "full" (default) or "normal" (see store.SynchronousNormal).
+	DatabaseSynchronous string    `yaml:"database_synchronous"`
 	BlobBackend         string    `yaml:"blob_backend"`
 	BlobFSDir           string    `yaml:"blob_fs_dir"`
 	Cluster             bool      `yaml:"cluster"`
@@ -84,6 +87,7 @@ func Defaults() Config {
 	return Config{
 		Listen:              ":8080",
 		DataDir:             "/data",
+		DatabaseSynchronous: "full",
 		BlobBackend:         "fs",
 		DefaultQuotaBytes:   10 << 30,
 		MaxFileSizeBytes:    2 << 30,
@@ -197,6 +201,7 @@ func applyEnv(c *Config, getenv func(string) string) error {
 	str("OBSYNC_DATA_DIR", &c.DataDir)
 	str("OBSYNC_DATABASE_URL", &c.DatabaseURL)
 	str("OBSYNC_DATABASE_AUTH_TOKEN", &c.DatabaseAuthToken)
+	str("OBSYNC_DATABASE_SYNCHRONOUS", &c.DatabaseSynchronous)
 	str("OBSYNC_BLOB_BACKEND", &c.BlobBackend)
 	str("OBSYNC_BLOB_FS_DIR", &c.BlobFSDir)
 	boolean("OBSYNC_CLUSTER", &c.Cluster)
@@ -237,14 +242,25 @@ func (c Config) Validate() error {
 		add("data_dir must not be empty")
 	}
 	// Only the scheme is ever echoed: the URL may carry credentials.
+	scheme := ""
 	if u, err := url.Parse(c.DatabaseURL); err != nil {
 		add("database_url is not a valid URL")
 	} else {
+		scheme = u.Scheme
 		switch u.Scheme {
 		case "file", "libsql", "http", "https":
 		default:
 			add("database_url scheme %q is not supported (use file:, libsql://, http:// or https://)", u.Scheme)
 		}
+	}
+	switch c.DatabaseSynchronous {
+	case "full":
+	case "normal":
+		if scheme != "file" && scheme != "" {
+			add(`database_synchronous "normal" applies only to a local database file (database_url file:)`)
+		}
+	default:
+		add("database_synchronous %q is not one of full, normal", c.DatabaseSynchronous)
 	}
 	switch c.BlobBackend {
 	case "fs":
@@ -352,6 +368,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("data_dir", c.DataDir),
 		slog.String("database_url", redactURL(c.DatabaseURL)),
 		slog.String("database_auth_token", token),
+		slog.String("database_synchronous", c.DatabaseSynchronous),
 		slog.String("blob_backend", c.BlobBackend),
 		slog.String("blob_fs_dir", c.BlobFSDir),
 		slog.Bool("cluster", c.Cluster),

@@ -84,6 +84,7 @@ Settings come from environment variables (or a YAML file named by `OBSYNC_CONFIG
 |---|---|---|
 | `OBSYNC_LISTEN` | `:8080` | Address the HTTP server listens on |
 | `OBSYNC_DATA_DIR` | `/data` | Folder for the database and the encrypted chunks |
+| `OBSYNC_DATABASE_SYNCHRONOUS` | `full` | How hard the database pushes each write to disk. `full` makes every accepted change survive a power cut. `normal` makes bulk uploads much faster (one disk flush per checkpoint instead of per write) and cannot corrupt the database, but a power cut or kernel crash of the host can lose the last few accepted changes; every device then treats the server as restored from a backup, keeps its own edits and uploads them again. A crash of obsync alone loses nothing. Local database file only |
 | `OBSYNC_TRUSTED_PROXIES` | none | Reverse proxies (addresses or CIDRs, comma separated) whose `X-Forwarded-For` is believed. Without it, every client appears to come from the proxy's address |
 | `OBSYNC_DEFAULT_QUOTA_BYTES` | 10 GiB | Storage per account (unique chunks plus kept history) |
 | `OBSYNC_MAX_FILE_SIZE_BYTES` | 2 GiB | Largest file the server accepts. The plugin itself syncs files up to 256 MiB |

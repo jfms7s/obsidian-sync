@@ -21,7 +21,38 @@ type Store struct {
 type Options struct {
 	URL       string // file:/path/meta.db, libsql://…, http(s)://…
 	AuthToken string // remote databases only
-	Now       func() time.Time
+	// Synchronous is SQLite's synchronous mode for a local file; empty
+	// means SynchronousFull. Remote databases ignore it.
+	Synchronous Synchronous
+	Now         func() time.Time
+}
+
+// Synchronous is how hard a local database pushes each committed
+// transaction to disk.
+type Synchronous string
+
+const (
+	// SynchronousFull fsyncs the WAL on every commit: a committed
+	// transaction survives a power loss or kernel crash.
+	SynchronousFull Synchronous = "full"
+	// SynchronousNormal fsyncs only at checkpoints. The database cannot be
+	// corrupted, but a power loss or kernel crash can lose the last
+	// committed transactions, which devices then see as a server restored
+	// from a backup. A crash of obsync alone loses nothing.
+	SynchronousNormal Synchronous = "normal"
+)
+
+// pragma is the PRAGMA synchronous value: what to set and what reading it
+// back returns.
+func (m Synchronous) pragma() (name string, value int64, err error) {
+	switch m {
+	case "", SynchronousFull:
+		return "FULL", 2, nil
+	case SynchronousNormal:
+		return "NORMAL", 1, nil
+	default:
+		return "", 0, fmt.Errorf("synchronous mode %q is not full or normal", m)
+	}
 }
 
 func Open(ctx context.Context, opts Options) (*Store, error) {
@@ -59,6 +90,10 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 			db.Close()
 			return nil, fmt.Errorf("enable WAL: journal mode is %q", mode)
 		}
+		if err := setSynchronous(ctx, db, opts.Synchronous); err != nil {
+			db.Close()
+			return nil, err
+		}
 	} else {
 		var err error
 		if db, err = openRemote(opts.URL, opts.AuthToken); err != nil {
@@ -76,6 +111,26 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 		now = time.Now
 	}
 	return &Store{db: db, now: now}, nil
+}
+
+// setSynchronous sets the synchronous mode and reads it back, so a mode the
+// driver silently ignored fails Open instead of weakening durability unseen.
+func setSynchronous(ctx context.Context, db *sql.DB, m Synchronous) error {
+	name, want, err := m.pragma()
+	if err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, "PRAGMA synchronous="+name); err != nil {
+		return fmt.Errorf("set synchronous: %w", err)
+	}
+	var got int64
+	if err := db.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&got); err != nil {
+		return fmt.Errorf("read synchronous: %w", err)
+	}
+	if got != want {
+		return fmt.Errorf("set synchronous: mode is %d, want %d (%s)", got, want, name)
+	}
+	return nil
 }
 
 // Close closes the pool and the native database. go-libsql releases the
