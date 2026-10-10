@@ -4,7 +4,7 @@ import { InsecureServerUrlError } from '../api/url';
 import { CryptoError } from '../crypto/primitives';
 import { Argon2TooCostlyError, InvalidRecoveryWordsError } from '../crypto/userkeys';
 import { MissingEpochKeyError } from '../crypto/vaultkeys';
-import { KeysAlreadySetUpError, SetupPassphraseMismatchError } from '../services/account';
+import { KeysAlreadySetUpError, PassphraseIsPasswordError, SetupPassphraseMismatchError } from '../services/account';
 import { NotInTrashError, PathOccupiedError, UnsyncedChangesError } from '../services/history';
 
 export interface UserError {
@@ -51,6 +51,7 @@ export function describeError(err: unknown): UserError {
   if (err instanceof InvalidRecoveryWordsError || err instanceof KeysAlreadySetUpError || err instanceof SetupPassphraseMismatchError) {
     return { kind: 'fix-input', message: err.message[0]!.toUpperCase() + err.message.slice(1) + (err.message.endsWith('.') ? '' : '.') };
   }
+  if (err instanceof PassphraseIsPasswordError) return { kind: 'fix-input', message: err.message };
   if (err instanceof UnsyncedChangesError) return { kind: 'retry', message: `${err.path} has changes that are not synced yet. Wait for the sync to finish, then restore.` };
   if (err instanceof PathOccupiedError || err instanceof NotInTrashError) return { kind: 'none', message: `${err.message}.` }; // they begin with a file name: keep its case
   return { kind: 'none', message: `Something went wrong: ${err instanceof Error ? err.message : String(err)}` };
