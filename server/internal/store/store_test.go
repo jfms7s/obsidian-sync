@@ -60,6 +60,38 @@ func TestOpenWaitsForAnotherWriter(t *testing.T) {
 	}
 }
 
+// synchronous is FULL unless the operator chose NORMAL: with FULL every
+// committed transaction survives a power loss.
+func TestOpenSetsSynchronous(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		mode store.Synchronous
+		want int64 // PRAGMA synchronous: 1 NORMAL, 2 FULL
+	}{
+		{"", 2},
+		{store.SynchronousFull, 2},
+		{store.SynchronousNormal, 1},
+	} {
+		st, err := store.Open(ctx, store.Options{URL: "file:" + filepath.Join(t.TempDir(), "meta.db"), Synchronous: tc.mode})
+		if err != nil {
+			t.Fatalf("%q: %v", tc.mode, err)
+		}
+		got, err := store.PragmaInt(ctx, st, "synchronous")
+		st.Close()
+		if err != nil || got != tc.want {
+			t.Errorf("%q: synchronous = %d, err %v; want %d", tc.mode, got, err, tc.want)
+		}
+	}
+}
+
+func TestOpenRejectsUnknownSynchronous(t *testing.T) {
+	_, err := store.Open(context.Background(), store.Options{
+		URL: "file:" + filepath.Join(t.TempDir(), "meta.db"), Synchronous: "off"})
+	if err == nil || !strings.Contains(err.Error(), "synchronous") {
+		t.Fatalf("err = %v, want a synchronous error", err)
+	}
+}
+
 // A database URL that does not parse must not be echoed in the error: it can
 // carry credentials in its userinfo or query.
 func TestOpenParseErrorDoesNotLeakURL(t *testing.T) {
