@@ -3,11 +3,13 @@ import { describe, expect, it } from 'vitest';
 import type { ApiClient } from '../../src/api/client';
 import { ErrorCode } from '../../src/api/errors';
 import type { CommitInput, CommitReply } from '../../src/api/types';
+import { fileIdFor } from '../../src/crypto/objects';
 import { buildKeyring } from '../../src/crypto/vaultkeys';
 import { LocalState } from '../../src/state/store';
 import { DEFAULT_MAX_FILE_BYTES, type SyncContext } from '../../src/sync/context';
 import type { EngineEvent } from '../../src/sync/events';
 import { batchCommits, PushMemory, pushRound } from '../../src/sync/push';
+import { toHex } from '../../src/util/bytes';
 import { ManualClock } from '../../src/util/clock';
 import { seededRandom } from '../../src/util/random';
 import { IgnoreRules } from '../../src/vault/ignore';
@@ -63,5 +65,96 @@ describe('pushRound with an unexpected commit result', () => {
     expect(await state.getRefusal('n.md')).toBeUndefined();
     expect((await state.dirtyEntries()).map((e) => e.path)).toEqual(['n.md']);
     expect(events.filter((e) => e.type === 'notice')).toEqual([]);
+  });
+});
+
+describe('pushRound with MISSING_CHUNK', () => {
+  /**
+   * A device with one dirty file and a scripted server whose commit answers
+   * MISSING_CHUNK `missing` times, then ok. Each MISSING_CHUNK also drops
+   * every chunk (as if garbage collection took them), so the next exists
+   * check answers false and the chunk must be uploaded again.
+   */
+  async function setup(name: string, missing: number) {
+    const r = seededRandom(7);
+    const ring = await buildKeyring('0123456789abcdef0123456789abcdef', r.bytes(32), new Map([[1, r.bytes(32)]]), 1);
+    const state = await LocalState.open(new IDBFactory(), name);
+    const clock = new ManualClock();
+    const adapter = new MemoryAdapter(false, clock);
+    await adapter.write('n.md', new TextEncoder().encode('x\n'));
+    await state.markDirty('n.md');
+    const stored = new Set<string>();
+    const server = { puts: 0, commits: [] as string[], missingLeft: missing };
+    const api = {
+      chunksExist: async (_v: string, ids: Uint8Array[]) => ids.map((id) => stored.has(toHex(id))),
+      putChunk: async (_v: string, id: Uint8Array) => {
+        server.puts++;
+        stored.add(toHex(id));
+      },
+      commit: async (_v: string, commits: CommitInput[]): Promise<CommitReply> => ({
+        results: commits.map((c) => {
+          server.commits.push(toHex(c.versionId));
+          if (server.missingLeft > 0) {
+            server.missingLeft--;
+            stored.clear();
+            return { fileId: c.fileId, ok: false, seq: 0, headVersionId: new Uint8Array(0), error: { code: ErrorCode.MISSING_CHUNK, message: 'chunk missing' } };
+          }
+          return { fileId: c.fileId, ok: true, seq: server.commits.length, headVersionId: c.versionId };
+        }),
+        vaultSeq: server.commits.length,
+      }),
+    } as unknown as ApiClient;
+    const ctx: SyncContext = {
+      api, state, adapter, ring, deviceName: 'd', clock, random: r, ignore: new IgnoreRules(), maxFileBytes: DEFAULT_MAX_FILE_BYTES,
+      emit: () => undefined,
+    };
+    const mem = new PushMemory();
+    const fileId = toHex(await fileIdFor(ring.namingKey, 'n.md'));
+    const dirty = async () => (await state.dirtyEntries()).map((e) => e.path);
+    return { ctx, state, mem, server, fileId, dirty };
+  }
+
+  it('keeps the pending commit, uploads the chunk again and lands it on the next round', async () => {
+    const { ctx, state, mem, server, fileId, dirty } = await setup('missing-once', 1);
+    expect(await pushRound(ctx, mem)).toMatchObject({ committed: 0 });
+    expect(server.puts).toBe(1);
+    expect(mem.missingChunk.get(fileId)).toBe(1);
+    const pending = await state.getPending(fileId);
+    expect(pending?.versionId).toBe(server.commits[0]);
+    expect(await dirty()).toEqual(['n.md']);
+
+    expect(await pushRound(ctx, mem)).toMatchObject({ committed: 1 });
+    expect(server.puts).toBe(2); // the exists check found it gone and uploaded it again
+    expect(server.commits).toEqual([pending!.versionId, pending!.versionId]); // the same commit, resent
+    expect(await state.getPending(fileId)).toBeUndefined();
+    expect(mem.missingChunk.has(fileId)).toBe(false);
+    // A resent commit may describe an older state of the file, so its entry
+    // stays until the next round finds the file equal to what landed.
+    expect(await pushRound(ctx, mem)).toMatchObject({ committed: 0 });
+    expect(server.commits).toHaveLength(2);
+    expect(await dirty()).toEqual([]);
+  });
+
+  it('drops the pending commit after three MISSING_CHUNK results, keeps the file dirty and then builds a fresh commit', async () => {
+    const { ctx, state, mem, server, fileId, dirty } = await setup('missing-thrice', 3);
+    for (let round = 1; round <= 2; round++) {
+      await pushRound(ctx, mem);
+      expect(mem.missingChunk.get(fileId)).toBe(round);
+      expect(await state.getPending(fileId)).toBeDefined();
+    }
+    const first = server.commits[0];
+    expect(server.commits).toEqual([first, first]);
+
+    await pushRound(ctx, mem);
+    expect(server.commits).toEqual([first, first, first]);
+    expect(await state.getPending(fileId)).toBeUndefined();
+    expect(mem.missingChunk.has(fileId)).toBe(false);
+    expect(await dirty()).toEqual(['n.md']);
+
+    expect(await pushRound(ctx, mem)).toMatchObject({ committed: 1 });
+    expect(server.commits).toHaveLength(4);
+    expect(server.commits[3]).not.toBe(first); // a new commit, not the dropped one
+    expect(server.puts).toBe(4);
+    expect(await dirty()).toEqual([]);
   });
 });
