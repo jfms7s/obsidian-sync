@@ -1,0 +1,129 @@
+name: Checks
+
+# The tests, lint, generated-code and protocol checks, and the release script
+# tests. ci.yml runs them on every push and pull request, and release.yml runs
+# them on the tag before anything is published, so both run the same checks.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go tests and lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Show the toolchain the module selects
+        run: |
+          cd server
+          go version
+          grep '^toolchain' go.mod
+      - run: cd server && go vet ./...
+      - run: cd server && go test -race ./...
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+          working-directory: server
+
+  plugin:
+    name: Plugin typecheck, tests, lint and build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The plugin's server tests build and start the real obsync binary.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            plugin/package-lock.json
+            plugin/lint/package-lock.json
+      - run: make plugin-test
+      - run: make plugin-lint
+      - run: make plugin-build
+      - name: The bundle needs nothing but obsidian
+        run: |
+          ! grep -oE 'require\("[^"]+"\)' plugin/dist/main.js | grep -v 'require("obsidian")'
+
+  generated:
+    name: Generated code and test vectors are up to date
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: plugin/package-lock.json
+      - run: make tools proto vectors
+      - name: Nothing changed
+        run: |
+          test -z "$(git status --porcelain)" || { git status --porcelain; git diff; exit 1; }
+
+  protocol:
+    name: Protocol lint and compatibility
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # On a pull request: the commit the branch left main at. On a release tag:
+      # the previous release, so a release can't break the one before it. On a
+      # push to main there is nothing to compare with (the pull request did it).
+      - name: Find what the protocol must stay compatible with
+        id: base
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            echo "sha=$(git merge-base "origin/$BASE_REF" HEAD)" >> "$GITHUB_OUTPUT"
+          elif [ "$REF_TYPE" = tag ]; then
+            if previous=$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' "${GITHUB_SHA}^" 2>/dev/null); then
+              echo "previous release: $previous"
+              echo "sha=$(git rev-list -n 1 "$previous")" >> "$GITHUB_OUTPUT"
+            else
+              echo "no earlier release: nothing to compare with"
+            fi
+          fi
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
+        with:
+          lint: true
+          format: false
+          breaking: ${{ steps.base.outputs.sha != '' }}
+          breaking_against: ".git#ref=${{ steps.base.outputs.sha }}"
+          # Publishing to the Buf Schema Registry is not used.
+          push: false
+          archive: false
+
+  scripts:
+    name: Release scripts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/check-glibc_test.sh
+      - run: scripts/check-release-version_test.sh

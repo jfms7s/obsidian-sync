@@ -2,8 +2,8 @@ name: Release
 
 # A tag X.Y.Z (no "v") that matches manifest.json publishes, all together: the
 # plugin files Obsidian installs from, the Linux server binaries, and the container
-# image. Nothing is published until the tests, the lint and the 1,000-seed
-# convergence suite have passed.
+# image. Nothing is published until every CI check (checks.yml) and the
+# 1,000-seed convergence suite have passed.
 on:
   push:
     tags: ["[0-9]+.[0-9]+.[0-9]+"]
@@ -22,48 +22,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: scripts/check-release-version_test.sh
+      # The script's own tests run in checks, before anything is published.
       - run: scripts/check-release-version.sh "$GITHUB_REF_NAME"
 
-  # The same tests and lint as ci.yml: the tag may point at a commit CI never saw.
+  # Every check ci.yml runs, from the same workflow: the tag may point at a
+  # commit CI never saw.
   checks:
-    name: Go and plugin tests and lint
+    name: Checks
     needs: verify
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: server/go.mod
-          cache-dependency-path: server/go.sum
-      - name: Show the toolchain the module selects
-        run: |
-          cd server
-          go version
-          grep '^toolchain' go.mod
-      - run: cd server && go vet ./...
-      - run: cd server && go test -race ./...
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.14.0
-          working-directory: server
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            plugin/package-lock.json
-            plugin/lint/package-lock.json
-      - run: make plugin-test
-      - run: make plugin-lint
-      - run: make plugin-build
-      - name: The bundle needs nothing but obsidian
-        run: |
-          ! grep -oE 'require\("[^"]+"\)' plugin/dist/main.js | grep -v 'require("obsidian")'
+    uses: ./.github/workflows/checks.yml
 
   convergence:
     name: Convergence suite (1,000 seeds)
