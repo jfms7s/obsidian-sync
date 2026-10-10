@@ -230,9 +230,9 @@ async function bundleOrThrow(api: ApiClient): Promise<KeyBundleFields> {
 }
 
 /**
- * Unlocks a new device with the encryption passphrase. Throws CryptoError if
- * it is wrong, except Argon2TooCostlyError (a CryptoError subclass, check it
- * first): the bundle asks for more Argon2 work than this device allows.
+ * Unlocks a new device with the encryption passphrase. Throws
+ * WrongPassphraseError if it is wrong, or Argon2TooCostlyError if the bundle
+ * asks for more Argon2 work than this device allows (both are CryptoErrors).
  */
 export async function unlockWithPassphraseService(state: LocalState, api: ApiClient, session: Session, passphrase: string): Promise<UserKeys> {
   const keys = await unlockWithPassphrase(await bundleOrThrow(api), session.userId, passphrase);
@@ -240,7 +240,7 @@ export async function unlockWithPassphraseService(state: LocalState, api: ApiCli
   return keys;
 }
 
-/** Unlocks a new device with the 24 recovery words. */
+/** Unlocks a new device with the 24 recovery words: InvalidRecoveryWordsError if they are malformed, WrongRecoveryWordsError if they do not open the bundle. */
 export async function unlockWithRecoveryService(state: LocalState, api: ApiClient, session: Session, words: string): Promise<UserKeys> {
   const keys = await unlockWithRecoveryWords(await bundleOrThrow(api), session.userId, words);
   await state.setUserKeys({ userId: session.userId, encPriv: keys.encPriv, signSeed: keys.signSeed });
