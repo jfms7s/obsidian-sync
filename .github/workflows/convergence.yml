@@ -60,6 +60,12 @@ jobs:
           cache-dependency-path: plugin/package-lock.json
       - name: Run this shard's seeds
         run: |
+          # Both inputs are checked before any arithmetic: bash evaluates
+          # array subscripts in $(( )), so a crafted value could run commands.
+          if ! [[ "$SEEDS" =~ ^[1-9][0-9]{0,4}$ ]]; then
+            echo "seeds must be a whole number from 1 to 99999" >&2
+            exit 1
+          fi
           if [ "$EVENT" = schedule ]; then
             FIRST_SEED=$(( 1000 + RUN_NUMBER * 1000 ))
           fi
