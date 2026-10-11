@@ -1,6 +1,6 @@
 // obsync-cli's state: LocalState over fake-indexeddb, saved as a JSON
 // snapshot and loaded again on start (spec D3).
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -70,6 +70,17 @@ describe('PersistentState', () => {
     expect((await stat(dir)).mode & 0o777).toBe(0o700);
     expect((await stat(join(dir, SNAPSHOT_FILE))).mode & 0o777).toBe(0o600);
     expect(await readdir(dir)).toEqual([SNAPSHOT_FILE]);
+    await s.close();
+  });
+
+  it('leaves the mode of an existing directory alone, and refuses to save a Date', async () => {
+    const dir = await stateDir();
+    await mkdir(dir, { mode: 0o755 });
+    await chmod(dir, 0o755);
+    const s = await PersistentState.open(dir);
+    expect((await stat(dir)).mode & 0o777).toBe(0o755);
+    await s.state.setSetting('when', new Date(0));
+    await expect(s.save()).rejects.toThrow(/Date/);
     await s.close();
   });
 

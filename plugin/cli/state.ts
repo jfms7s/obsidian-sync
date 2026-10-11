@@ -55,7 +55,10 @@ export class StateFileError extends Error {
 
 const BYTES = '$bytes';
 
-function replacer(this: unknown, _key: string, value: unknown): unknown {
+function replacer(this: unknown, key: string, value: unknown): unknown {
+  // value is what toJSON made of the original (a Date is a string by now): look at the original.
+  const raw = (this as Record<string, unknown>)[key];
+  if (raw instanceof Date) throw new TypeError('the state snapshot cannot hold a Date');
   if (value instanceof Uint8Array) return { [BYTES]: Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('base64') };
   if (value instanceof ArrayBuffer || ArrayBuffer.isView(value) || value instanceof Map || value instanceof Set || value instanceof Date) {
     // Not stored by LocalState today; a silent change of type on reload would be worse than failing here.
@@ -196,8 +199,8 @@ export class PersistentState {
 
   /** Opens the state in dir (created if missing), loading its snapshot if there is one. */
   static async open(dir: string): Promise<PersistentState> {
-    await mkdir(dir, { recursive: true, mode: 0o700 });
-    await chmod(dir, 0o700);
+    // Only a folder made here is set to 0700 (mkdir's mode is cut by the umask); an existing one is the user's.
+    if ((await mkdir(dir, { recursive: true, mode: 0o700 })) !== undefined) await chmod(dir, 0o700);
     const file = join(dir, SNAPSHOT_FILE);
     const factory = new IDBFactory();
     let text: string | null = null;
