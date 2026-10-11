@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"regexp"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -27,8 +26,7 @@ const (
 )
 
 var (
-	errUsage      = errors.New("usage: obsync admin user create|list|delete|set-password [--username NAME] [--quota-bytes N]")
-	validUsername = regexp.MustCompile(`^[A-Za-z0-9._@-]{1,64}$`)
+	errUsage = errors.New("usage: obsync admin user create|list|delete|set-password [--username NAME] [--quota-bytes N]")
 )
 
 type Store interface {
@@ -177,7 +175,7 @@ func checkUsername(s string) (string, error) {
 	if name == "" {
 		return "", errors.New("--username is required")
 	}
-	if !validUsername.MatchString(name) {
+	if !auth.ValidUsername(name) {
 		return "", errors.New("usernames are 1-64 characters of letters, digits and . _ @ -")
 	}
 	return name, nil
