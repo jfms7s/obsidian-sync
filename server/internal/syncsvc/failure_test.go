@@ -161,48 +161,39 @@ func TestPutChunkCleansUpAfterClientDisconnect(t *testing.T) {
 	}
 }
 
-// failingCommits fails Commit from call number failAt on (1-based) with err.
+// failingCommits fails every CommitAll with err, storing nothing, as a
+// store whose transaction rolled back would.
 type failingCommits struct {
 	*store.Store
-	mu     sync.Mutex
-	calls  int
-	failAt int
-	err    error
+	err error
 }
 
-func (s *failingCommits) Commit(ctx context.Context, v store.Version) (store.CommitOutcome, error) {
-	s.mu.Lock()
-	s.calls++
-	fail := s.calls >= s.failAt
-	s.mu.Unlock()
-	if fail {
-		return store.CommitOutcome{}, s.err
-	}
-	return s.Store.Commit(ctx, v)
+func (s *failingCommits) CommitAll(context.Context, []store.Version) ([]store.CommitOutcome, error) {
+	return nil, s.err
 }
 
-func TestCommitNotifiesAcceptedCommitsBeforeAStoreError(t *testing.T) {
+func TestCommitBatchIsAllOrNothingOnAStoreError(t *testing.T) {
 	f := newFixture(t)
-	svc, _ := newFlakyService(t, f, &failingCommits{Store: f.st, failAt: 3, err: errors.New("connection lost")})
+	svc, _ := newFlakyService(t, f, &failingCommits{Store: f.st, err: errors.New("connection lost")})
 	ch, cancel := f.bus.Subscribe(f.vault.ID)
 	defer cancel()
-	_, _, err := svc.Commit(ctx, f.user.ID, "d", f.vault.ID, []store.Version{version(1, nil), version(2, nil), version(3, nil)})
-	if err == nil {
-		t.Fatal("want the store error")
+	results, seq, err := svc.Commit(ctx, f.user.ID, "d", f.vault.ID, []store.Version{version(1, nil), version(2, nil), version(3, nil)})
+	if err == nil || results != nil || seq != 0 {
+		t.Fatalf("results = %+v, seq %d, err %v; want only the store error", results, seq, err)
 	}
 	select {
 	case n := <-ch:
-		if n.Seq != 2 {
-			t.Fatalf("notify seq = %d, want 2", n.Seq)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("accepted commits were not announced")
+		t.Fatalf("a failed batch announced seq %d", n.Seq)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if changes, _ := f.st.Changes(ctx, f.vault.ID, 0, 10); len(changes) != 0 {
+		t.Fatalf("%d commits of a failed batch were stored", len(changes))
 	}
 }
 
 func TestCommitToVaultDeletedConcurrentlyIsNotFound(t *testing.T) {
 	f := newFixture(t)
-	svc, _ := newFlakyService(t, f, &failingCommits{Store: f.st, failAt: 1, err: store.ErrNotFound})
+	svc, _ := newFlakyService(t, f, &failingCommits{Store: f.st, err: store.ErrNotFound})
 	_, _, err := svc.Commit(ctx, f.user.ID, "d", f.vault.ID, []store.Version{version(1, nil)})
 	if apperr.CodeOf(err) != apperr.NotFound {
 		t.Fatalf("err = %v, want NOT_FOUND", err)

@@ -258,6 +258,19 @@ func TestCommitReportsEachCommitsOutcome(t *testing.T) {
 	}
 }
 
+func TestCommitOfOnlyInvalidCommitsReportsThem(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.svc.Commit(ctx, f.user.ID, "d", f.vault.ID, []store.Version{version(1, nil)}); err != nil {
+		t.Fatal(err)
+	}
+	bad := version(2, nil)
+	bad.FileID = []byte("short")
+	results, vaultSeq, err := f.svc.Commit(ctx, f.user.ID, "d", f.vault.ID, []store.Version{bad})
+	if err != nil || len(results) != 1 || apperr.CodeOf(results[0].Err) != apperr.Invalid || vaultSeq != 1 {
+		t.Fatalf("results = %+v, vaultSeq %d, err %v", results, vaultSeq, err)
+	}
+}
+
 func TestCommitBatchSize(t *testing.T) {
 	f := newFixture(t)
 	if _, _, err := f.svc.Commit(ctx, f.user.ID, "d", f.vault.ID, nil); apperr.CodeOf(err) != apperr.Invalid {

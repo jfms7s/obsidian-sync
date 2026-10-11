@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/jfms7s/obsidian-sync/server/internal/ids"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/store/storetest"
 )
@@ -379,3 +381,126 @@ func TestHistoryAndTrash(t *testing.T) {
 		t.Fatalf("restored file still in trash: %+v", trash)
 	}
 }
+
+// commitBatch is a batch that mixes every outcome: a create, an update that
+// builds on it inside the batch, a conflict, a stale epoch, a missing chunk, a
+// tombstone of an unknown file, a second create and a retry of the first.
+func commitBatch(vaultID string) []store.Version {
+	create := storetest.NewVersion(vaultID, storetest.FileID(1), nil, storetest.ChunkID(1))
+	update := storetest.NewVersion(vaultID, storetest.FileID(1), create.VersionID, storetest.ChunkID(2))
+	conflict := storetest.NewVersion(vaultID, storetest.FileID(1), nil, storetest.ChunkID(3))
+	stale := storetest.NewVersion(vaultID, storetest.FileID(2), nil, storetest.ChunkID(1))
+	stale.Epoch = 2
+	missing := storetest.NewVersion(vaultID, storetest.FileID(2), nil, storetest.ChunkID(9))
+	tombstone := storetest.NewVersion(vaultID, storetest.FileID(3), nil)
+	tombstone.Deleted = true
+	other := storetest.NewVersion(vaultID, storetest.FileID(4), nil, storetest.ChunkID(4))
+	return []store.Version{create, update, conflict, stale, missing, tombstone, other, create}
+}
+
+func withVault(vs []store.Version, vaultID string) []store.Version {
+	out := make([]store.Version, len(vs))
+	for i, v := range vs {
+		v.VaultID = vaultID
+		out[i] = v
+	}
+	return out
+}
+
+func TestCommitAllMatchesCommittingOneByOne(t *testing.T) {
+	batch := commitBatch("")
+
+	one := newFixture(t)
+	var want []store.CommitOutcome
+	for _, v := range withVault(batch, one.vault.ID) {
+		out, err := one.st.Commit(ctx, v)
+		if err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+		want = append(want, out)
+	}
+
+	all := newFixture(t)
+	got, err := all.st.CommitAll(ctx, withVault(batch, all.vault.ID))
+	if err != nil {
+		t.Fatalf("commit all: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%d outcomes, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].Reason != want[i].Reason || got[i].Seq != want[i].Seq ||
+			!bytes.Equal(got[i].HeadVersionID, want[i].HeadVersionID) || got[i].Detail != want[i].Detail {
+			t.Errorf("outcome %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	wantReasons := []store.CommitReason{store.CommitOK, store.CommitOK, store.CommitConflict, store.CommitStaleEpoch,
+		store.CommitMissingChunk, store.CommitInvalid, store.CommitOK, store.CommitOK}
+	wantSeqs := []int64{1, 2, 0, 0, 0, 0, 3, 1}
+	for i := range wantReasons {
+		if got[i].Reason != wantReasons[i] || got[i].Seq != wantSeqs[i] {
+			t.Errorf("outcome %d = %+v, want reason %d seq %d", i, got[i], wantReasons[i], wantSeqs[i])
+		}
+	}
+	if !bytes.Equal(got[2].HeadVersionID, batch[1].VersionID) {
+		t.Errorf("conflict head = %x, want the update made earlier in the batch", got[2].HeadVersionID)
+	}
+	changes, err := all.st.Changes(ctx, all.vault.ID, 0, 10)
+	if err != nil || len(changes) != 3 {
+		t.Fatalf("changes = %d, err %v; want 3", len(changes), err)
+	}
+	for i, c := range changes {
+		if c.Seq != int64(i+1) {
+			t.Fatalf("change %d has seq %d; seqs must be gapless", i, c.Seq)
+		}
+	}
+}
+
+func TestCommitAllRollsBackTheWholeBatchOnAnError(t *testing.T) {
+	f := newFixture(t)
+	batch := []store.Version{
+		storetest.NewVersion(f.vault.ID, storetest.FileID(1), nil, storetest.ChunkID(1)),
+		storetest.NewVersion(f.vault.ID, storetest.FileID(2), nil, storetest.ChunkID(2)),
+		storetest.NewVersion("no-such-vault", storetest.FileID(3), nil),
+	}
+	if _, err := f.st.CommitAll(ctx, batch); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if changes, _ := f.st.Changes(ctx, f.vault.ID, 0, 10); len(changes) != 0 {
+		t.Fatalf("%d commits of a failed batch were stored", len(changes))
+	}
+	if v, _ := f.st.VaultForMember(ctx, f.vault.ID, f.vault.OwnerID); v.Seq != 0 {
+		t.Fatalf("a failed batch advanced seq to %d", v.Seq)
+	}
+}
+
+// benchmarkCommits commits 500 new files, either in one CommitAll or one
+// Commit (one transaction) each.
+func benchmarkCommits(b *testing.B, batched bool) {
+	const n = 500
+	for b.Loop() {
+		b.StopTimer()
+		st, _ := storetest.New(b)
+		u := storetest.SeedUser(b, st, "alice")
+		v := storetest.SeedVault(b, st, u.ID)
+		vs := make([]store.Version, n)
+		for i := range vs {
+			vs[i] = storetest.NewVersion(v.ID, ids.Bytes(32), nil)
+		}
+		b.StartTimer()
+		if batched {
+			if _, err := st.CommitAll(ctx, vs); err != nil {
+				b.Fatal(err)
+			}
+			continue
+		}
+		for _, c := range vs {
+			if _, err := st.Commit(ctx, c); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+func BenchmarkCommitBatch500(b *testing.B)    { benchmarkCommits(b, true) }
+func BenchmarkCommitOneByOne500(b *testing.B) { benchmarkCommits(b, false) }
