@@ -11,16 +11,17 @@ import (
 type TOTPState struct {
 	Secret        []byte
 	PendingSecret []byte // set between enrolment begin and confirm
+	PendingAtMs   int64  // when PendingSecret was set
 	LastStep      int64  // the last accepted time step; 0 before any
 	RecoveryLeft  int    // unused recovery codes
 }
 
 func (s *Store) TOTP(ctx context.Context, userID string) (TOTPState, error) {
 	var st TOTPState
-	var last sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT totp_secret, totp_pending_secret, totp_last_step,
+	var last, pendingAt sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT totp_secret, totp_pending_secret, totp_pending_at, totp_last_step,
 		(SELECT COUNT(*) FROM totp_recovery_codes WHERE user_id = users.id AND used_at IS NULL)
-		FROM users WHERE id = ?`, userID).Scan(&st.Secret, &st.PendingSecret, &last, &st.RecoveryLeft)
+		FROM users WHERE id = ?`, userID).Scan(&st.Secret, &st.PendingSecret, &pendingAt, &last, &st.RecoveryLeft)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TOTPState{}, ErrNotFound
 	}
@@ -34,6 +35,7 @@ func (s *Store) TOTP(ctx context.Context, userID string) (TOTPState, error) {
 		st.PendingSecret = nil
 	}
 	st.LastStep = last.Int64
+	st.PendingAtMs = pendingAt.Int64
 	return st, nil
 }
 
@@ -45,7 +47,7 @@ func (s *Store) EnableTOTP(ctx context.Context, userID string, secret []byte, st
 	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
-			`UPDATE users SET totp_secret = ?, totp_pending_secret = NULL, totp_last_step = ? WHERE id = ?`, secret, step, userID)
+			`UPDATE users SET totp_secret = ?, totp_pending_secret = NULL, totp_pending_at = NULL, totp_last_step = ? WHERE id = ?`, secret, step, userID)
 		if err != nil {
 			return fmt.Errorf("enable totp: %w", err)
 		}
@@ -61,7 +63,7 @@ func (s *Store) EnableTOTP(ctx context.Context, userID string, secret []byte, st
 func (s *Store) DisableTOTP(ctx context.Context, userID string) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
-			`UPDATE users SET totp_secret = NULL, totp_pending_secret = NULL, totp_last_step = NULL WHERE id = ?`, userID)
+			`UPDATE users SET totp_secret = NULL, totp_pending_secret = NULL, totp_pending_at = NULL, totp_last_step = NULL WHERE id = ?`, userID)
 		if err != nil {
 			return fmt.Errorf("disable totp: %w", err)
 		}
@@ -85,13 +87,14 @@ func replaceRecoveryCodes(ctx context.Context, tx *sql.Tx, userID string, hashes
 	return nil
 }
 
-// UseTOTPStep records step as accepted if it is later than the last accepted
-// one and TOTP is on. It reports false when it was not (a replay, or a
-// concurrent login that used the same or a later step first).
-func (s *Store) UseTOTPStep(ctx context.Context, userID string, step int64) (bool, error) {
+// UseTOTPStep records step as accepted if TOTP is still on with secret (the
+// one the code was checked against) and step is later than the last accepted
+// one. It reports false when it was not (a replay, a concurrent login that
+// used the same or a later step first, or a secret changed meanwhile).
+func (s *Store) UseTOTPStep(ctx context.Context, userID string, secret []byte, step int64) (bool, error) {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE users SET totp_last_step = ? WHERE id = ? AND totp_secret IS NOT NULL
-		 AND (totp_last_step IS NULL OR totp_last_step < ?)`, step, userID, step)
+		`UPDATE users SET totp_last_step = ? WHERE id = ? AND totp_secret = ?
+		 AND (totp_last_step IS NULL OR totp_last_step < ?)`, step, userID, secret, step)
 	if err != nil {
 		return false, fmt.Errorf("use totp step: %w", err)
 	}

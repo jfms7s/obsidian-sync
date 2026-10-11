@@ -23,7 +23,7 @@ func TestTOTPLifecycle(t *testing.T) {
 		t.Fatalf("unknown user err = %v", err)
 	}
 	// Nothing to use while TOTP is off.
-	if ok, _ := st.UseTOTPStep(ctx, u.ID, 5); ok {
+	if ok, _ := st.UseTOTPStep(ctx, u.ID, []byte("secret"), 5); ok {
 		t.Fatal("a step was accepted with TOTP off")
 	}
 
@@ -40,9 +40,13 @@ func TestTOTPLifecycle(t *testing.T) {
 		step int64
 		ok   bool
 	}{{100, false}, {99, false}, {101, true}, {101, false}, {103, true}} {
-		if ok, err := st.UseTOTPStep(ctx, u.ID, tc.step); err != nil || ok != tc.ok {
+		if ok, err := st.UseTOTPStep(ctx, u.ID, []byte("secret"), tc.step); err != nil || ok != tc.ok {
 			t.Fatalf("step %d: ok=%v err=%v, want %v", tc.step, ok, err, tc.ok)
 		}
+	}
+	// A step checked against another secret (one replaced meanwhile) is not recorded.
+	if ok, _ := st.UseTOTPStep(ctx, u.ID, []byte("old secret"), 200); ok {
+		t.Fatal("a step was recorded for a secret that is no longer the account's")
 	}
 	if ok, _ := st.UseRecoveryCode(ctx, u.ID, []byte("h2")); !ok {
 		t.Fatal("unused recovery code refused")

@@ -41,7 +41,7 @@ type Store interface {
 	DeviceByTokenHash(ctx context.Context, tokenHash []byte) (store.Device, error)
 	TouchDevice(ctx context.Context, deviceID string) error
 	TOTP(ctx context.Context, userID string) (store.TOTPState, error)
-	UseTOTPStep(ctx context.Context, userID string, step int64) (bool, error)
+	UseTOTPStep(ctx context.Context, userID string, secret []byte, step int64) (bool, error)
 	UseRecoveryCode(ctx context.Context, userID string, hash []byte) (bool, error)
 }
 
