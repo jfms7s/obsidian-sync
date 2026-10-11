@@ -5,7 +5,7 @@ import { CHANGES_PAGE_SIZE, HEADS_PAGE_SIZE } from '../api/limits';
 import type { RemoteHead, RemoteVersion } from '../api/types';
 import type { FileRecord } from '../state/store';
 import { decryptMeta } from '../crypto/objects';
-import { fromHex, toHex } from '../util/bytes';
+import { equalBytes, fromHex, toHex } from '../util/bytes';
 import { alreadyApplied, applyHead, ensureHeadApplied } from './apply';
 import { downloadContent } from './content';
 import { ServerRollbackError, type SyncContext } from './context';
@@ -207,7 +207,8 @@ export async function pull(ctx: SyncContext, pageSize = CHANGES_PAGE_SIZE): Prom
  */
 export async function applyVaultIgnoreFirst(ctx: SyncContext): Promise<boolean> {
   if (!ctx.vaultIgnoreFileId) return false;
-  const history = await ctx.api.history(ctx.ring.vaultId, fromHex(ctx.vaultIgnoreFileId));
+  const fileId = fromHex(ctx.vaultIgnoreFileId);
+  const history = (await ctx.api.history(ctx.ring.vaultId, fileId)).filter((v) => equalBytes(v.fileId, fileId));
   const head = history[0]; // newest first
   if (!head || head.deleted) return false;
   const ok = await applyHead(ctx, head, history);
