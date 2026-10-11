@@ -6,6 +6,8 @@ import type { SyncContext } from './context';
 export interface LocalFile {
   data: Uint8Array;
   stat: FileStat;
+  /** The engine clock right before the stat: any later edit happened after this. */
+  readAt: number;
 }
 
 /**
@@ -14,10 +16,11 @@ export interface LocalFile {
  * different file that happens to collide.
  */
 export async function readLocal(ctx: SyncContext, path: string): Promise<LocalFile | null> {
+  const readAt = ctx.clock.now();
   const stat = await ctx.adapter.stat(path);
   if (!stat || stat.path !== path) return null;
   const data = await ctx.adapter.read(path);
-  return data ? { data, stat } : null;
+  return data ? { data, stat, readAt } : null;
 }
 
 /** A record only counts as "this device has version X here" when the file is really written locally. */

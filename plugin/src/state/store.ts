@@ -25,6 +25,13 @@ export interface FileRecord {
   size: number;
   /** The local file's mtime when it last matched contentHash (reconcile's fast path). */
   localMtime: number;
+  /**
+   * The engine clock (ms) right before the read or write that showed the
+   * file holding contentHash at localMtime; absent in records from before
+   * it was kept. With whole-second mtimes, reconcile trusts an unchanged
+   * size and mtime only when this is well past localMtime (see reconcile).
+   */
+  localCheckedAt?: number;
   /** A base text for 3-way merges is stored in `bases`. */
   hasBase: boolean;
   /** Not written locally: another file differs from it only in letter case (case-insensitive file systems), or a folder holds its name. */
