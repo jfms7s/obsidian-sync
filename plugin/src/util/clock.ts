@@ -10,17 +10,22 @@ export interface Clock {
 
 let nextId = 1;
 
-// Obsidian can run the plugin in a pop-out window: timers belong to the window. Outside Obsidian (tests, tools) there is none.
-const timers = typeof window !== 'undefined' ? window : { setTimeout, clearTimeout };
+// Obsidian can run the plugin in a pop-out window: timers belong to the window. Outside Obsidian (tests, tools) there is
+// none. Looked up on every call, not once at load, so a timer goes to the window there is now (and fake timers apply).
+interface Timers {
+  setTimeout(fn: () => void, ms: number): unknown;
+  clearTimeout(h: unknown): void;
+}
+const timers = (): Timers => (typeof window !== 'undefined' ? window : { setTimeout, clearTimeout });
 
 export const systemClock: Clock = {
   now: () => Date.now(),
   setTimeout(fn, ms) {
-    const h: unknown = timers.setTimeout(fn, ms);
+    const h = timers().setTimeout(fn, ms);
     return { id: nextId++, h } as TimerHandle & { h: unknown };
   },
   clearTimeout(h) {
-    timers.clearTimeout((h as TimerHandle & { h: number }).h);
+    timers().clearTimeout((h as TimerHandle & { h: unknown }).h);
   },
 };
 

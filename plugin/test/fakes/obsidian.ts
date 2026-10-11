@@ -353,7 +353,8 @@ export class Vault {
     const queue = this.pending;
     this.pending = [];
     for (const p of queue) {
-      if (hidden(p.path)) continue;
+      // A hidden path is never indexed, but a rename from a visible one to it still drops the old entry.
+      if (hidden(p.path) && p.type !== 'rename') continue;
       if (p.type === 'create') {
         if (this.fs.get(p.path) && !this.index.has(p.path)) {
           const node = this.indexAdd(p.path, p.folder);
@@ -378,7 +379,7 @@ export class Vault {
           this.indexRemove(p.oldPath);
           this.trigger('delete', old);
         }
-        if (this.fs.get(p.path)) {
+        if (!hidden(p.path) && this.fs.get(p.path)) {
           const node = this.indexAdd(p.path, p.folder);
           if (node) this.trigger('create', node);
         }
@@ -429,15 +430,16 @@ export class Vault {
 
   async delete(file: TAbstractFile, force = false): Promise<void> {
     const folder = file instanceof TFolder;
-    const kids = folder ? [...this.fs.subtree(file.path).slice(1)] : [];
+    // The indexed nodes below it, as Obsidian reports them; hidden files were never indexed.
+    const kids = folder ? this.fs.subtree(file.path).slice(1).flatMap((e) => this.index.get(e.path) ?? []) : [];
     if (folder) this.fs.rmdir(file.path, force);
     else this.fs.remove(file.path);
     this.indexRemove(file.path);
     this.announceDelete(file, kids);
   }
 
-  private announceDelete(file: TAbstractFile, kids: FsEntry[]): void {
-    if (this.opts.childEvents) for (const k of kids) this.trigger('delete', Object.assign(k.kind === 'folder' ? new TFolder(this, k.path) : new TFile(this, k.path)));
+  private announceDelete(file: TAbstractFile, kids: TAbstractFile[]): void {
+    if (this.opts.childEvents) for (const k of kids) this.trigger('delete', k);
     this.trigger('delete', file);
   }
 
