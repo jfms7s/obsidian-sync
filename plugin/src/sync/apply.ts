@@ -2,6 +2,7 @@
 import type { RemoteVersion } from '../api/types';
 import { decryptMeta, fileIdFor, type FileMeta } from '../crypto/objects';
 import { CryptoError } from '../crypto/primitives';
+import { mergeJsonSettings } from '../merge/json-merge';
 import { merge3 } from '../merge/merge3';
 import type { FileRecord, PendingCommit } from '../state/store';
 import { equalBytes, fromHex, toHex, utf8 } from '../util/bytes';
@@ -12,6 +13,7 @@ import { decodeText, downloadContent, hashHex } from './content';
 import type { SyncContext } from './context';
 import { applyKey, clearFailure, isDeferred, isFileError, recordFailure } from './failures';
 import { isSyncedHere, readLocal } from './local';
+import { rememberBeforeWrite, rememberWritten } from './settings-files';
 
 export { isSyncedHere, readLocal, type LocalFile } from './local';
 
@@ -347,13 +349,19 @@ async function tryApply(
   const data = await remote();
   const text = decodeText(path, data);
 
+  const settings = ctx.ignore.isSettingsFile(path);
   if (!local || !localChanged) {
     // New here, unchanged here, or deleted here (a remote edit wins over a local delete).
     if (local && !(await stillAsRead(ctx, path, local, localHash!))) return false;
+    if (settings && localHash !== contentHash) rememberBeforeWrite(ctx, path, local ? decodeText(path, local.data) : null);
     const writtenAt = ctx.clock.now();
     if (!(await adapter.write(path, data, expectFor(local?.stat ?? null)))) return false;
     await state.recordSynced(await recordWritten(ctx, path, writtenAt, record(fileId, path, versionId, v, contentHash, -1)), text);
     ctx.emit({ type: 'remote-change', path, action: 'write' });
+    if (settings && localHash !== contentHash) {
+      rememberWritten(ctx, path, contentHash!);
+      ctx.onSettingsApplied?.(path, meta.deviceName);
+    }
     return true;
   }
 
@@ -363,6 +371,28 @@ async function tryApply(
   }
 
   const localText = decodeText(path, local.data);
+  if (settings) {
+    // Settings files merge by key, never into a conflict copy (json-merge.ts).
+    // The base is what Obsidian may still hold when a remote version was
+    // written since the plugin loaded (settings-files.ts).
+    const base = ctx.restartBases?.get(path)?.before ?? (liveBase && rec.hasBase ? await baseText() : null);
+    const merged = text !== null && localText !== null ? mergeJsonSettings(base, localText, text) : null;
+    if (merged === null) {
+      ctx.emit({ type: 'notice', code: 'SETTINGS_REPLACED', persistent: false, path, message: `${path} could not be merged (not a JSON object); the version from ${deviceLabel(meta)} replaced it` });
+    }
+    const result = merged === null ? data : utf8(merged);
+    if (merged === null || merged !== localText) {
+      if (!(await stillAsRead(ctx, path, local, localHash!))) return false;
+      rememberBeforeWrite(ctx, path, localText);
+      if (!(await adapter.write(path, result, expectFor(local.stat)))) return false;
+      rememberWritten(ctx, path, await hashHex(result));
+      ctx.onSettingsApplied?.(path, meta.deviceName);
+    }
+    await state.recordSynced(record(fileId, path, versionId, v, contentHash, -1), text);
+    if (merged !== null && merged !== text) await state.markDirty(path);
+    if (merged !== null) ctx.emit({ type: 'merged', path });
+    return true;
+  }
   if (text !== null && localText !== null) {
     const base = liveBase && rec.hasBase ? await baseText() : '';
     const m = merge3(base, localText, text);

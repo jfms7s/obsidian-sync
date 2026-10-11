@@ -11,6 +11,7 @@ import type { LocalState } from '../state/store';
 import { heldDeletions, releaseHeldDeletions, restoreHeldDeletions } from '../sync/deletion-hold';
 import { composeIgnoreRules, type SyncEngine } from '../sync/engine';
 import type { EngineEvent, SyncStatus } from '../sync/events';
+import type { RestartBase } from '../sync/settings-files';
 import type { Clock } from '../util/clock';
 import type { Random } from '../util/random';
 import type { VaultAdapter } from '../vault/adapter';
@@ -81,6 +82,8 @@ export class ShellController {
   /** The last start that got as far as opening the session found this device not set up. */
   private lastStartNeedsSetup = false;
   private readonly listeners = new Set<(e: EngineEvent) => void>();
+  /** Settings files written from other devices since the plugin loaded (SyncContext.restartBases): kept across engine restarts. */
+  private readonly restartBases = new Map<string, RestartBase>();
 
   constructor(private readonly o: ShellOptions) {}
 
@@ -145,6 +148,7 @@ export class ShellController {
         ...(o.clock ? { clock: o.clock } : {}), ...(o.random ? { random: o.random } : {}), ...(o.autoRun !== undefined ? { autoRun: o.autoRun } : {}),
         ...(o.maxBytesPerRound !== undefined ? { maxBytesPerRound: o.maxBytesPerRound } : {}),
         ...(o.ownPluginFolders ? { ownPluginFolders: o.ownPluginFolders } : {}),
+        restartBases: this.restartBases,
       });
       this.lastStartNeedsSetup = !r.ok;
       if (!r.ok) {

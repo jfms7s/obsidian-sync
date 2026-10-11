@@ -25,6 +25,7 @@ import type { EngineEvent, EngineListener, SyncStatus } from './events';
 import { applyVaultIgnoreFirst, pull } from './pull';
 import { PushMemory, pushRound } from './push';
 import { reconcile } from './reconcile';
+import type { RestartBase } from './settings-files';
 
 export const RECONCILE_INTERVAL_MS = 15 * 60_000;
 /** Local changes are synced once they pause this long... */
@@ -54,6 +55,12 @@ export interface EngineOptions {
   settingsSync?: SettingsSyncPolicy;
   /** The folder name(s) of this plugin under plugins/ when not OBSYNC_PLUGIN_ID: never synced. */
   ownPluginFolders?: readonly string[];
+  /**
+   * SyncContext.restartBases: pass one map for the plugin's lifetime (the
+   * shell does), so it outlives engine restarts and is gone when Obsidian
+   * restarts. Default: a map of this engine's own.
+   */
+  restartBases?: Map<string, RestartBase>;
   /**
    * The user's ignore patterns (gitignore-like globs), on top of the
    * defaults, the config folder and the vault's .obsyncignore (which the
@@ -148,6 +155,8 @@ export class SyncEngine {
   private vaultIgnore: ParsedIgnoreFile = { globs: [], rejected: [] };
   /** The server's .obsyncignore was looked for before this engine's first pull (a device that never pulled). */
   private vaultIgnoreFetched = false;
+  /** Settings files from other devices written in this cycle, and by which devices: one notice at its end. */
+  private settingsApplied = { files: 0, devices: new Set<string>() };
 
   constructor(private readonly opts: EngineOptions) {
     if (opts.configDir.replace(/\//g, '') === '') throw new RangeError('the vault\'s config folder must be named');
@@ -171,6 +180,11 @@ export class SyncEngine {
         this.hasShadowed = true;
       },
       reloadVaultIgnore: () => this.loadVaultIgnore(),
+      restartBases: opts.restartBases ?? new Map(),
+      onSettingsApplied: (_path, device) => {
+        this.settingsApplied.files++;
+        if (device) this.settingsApplied.devices.add(device);
+      },
     };
   }
 
@@ -467,6 +481,26 @@ export class SyncEngine {
 
   private async cycle(): Promise<void> {
     if (this.halted) return;
+    try {
+      await this.cycleBody();
+    } finally {
+      this.noticeSettingsApplied();
+    }
+  }
+
+  /** Obsidian reads its settings files at start: one notice per cycle that wrote any. */
+  private noticeSettingsApplied(): void {
+    const { files, devices } = this.settingsApplied;
+    if (files === 0) return;
+    this.settingsApplied = { files: 0, devices: new Set() };
+    const from = [...devices].sort();
+    this.emit({
+      type: 'notice', code: 'SETTINGS_APPLIED', persistent: false, count: files, devices: from,
+      message: `${files} Obsidian settings file(s) from ${from.join(', ') || 'another device'} were written; restart Obsidian to use them`,
+    });
+  }
+
+  private async cycleBody(): Promise<void> {
     this.debounceStart = null; // this cycle takes every event so far
     await this.eventWrites;
     this.setStatus('syncing');
