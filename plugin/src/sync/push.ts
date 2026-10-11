@@ -18,6 +18,7 @@ import { holdLargeDeletions, type HoldMemory } from './deletion-hold';
 import { applyKey, clearFailure, isCycleError, isDeferred, pushKey, recordFailure } from './failures';
 import { pull, resolveConflict } from './pull';
 import { forgetServerRemovals, serverRemovals } from './server-removal';
+import { mergeStaleWrite } from './settings-files';
 import { isVaultIgnoreFile } from '../vault/ignore';
 
 /** Bounds one push round so memory stays small; the engine runs rounds until nothing is left. */
@@ -184,7 +185,12 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
     await state.clearDirty(entry.path, entry.gen);
     return null;
   }
-  const local = await readLocal(ctx, path);
+  let local = await readLocal(ctx, path);
+  // A settings file Obsidian rewrote from its stale copy after a remote version arrived: push only what changed here.
+  if (local && synced && !rec.deleted) {
+    local = await mergeStaleWrite(ctx, path, fileId, rec.contentHash, local);
+    if (!local) return 'wait';
+  }
   const versionId = ctx.random.bytes(16);
 
   if (!local) {

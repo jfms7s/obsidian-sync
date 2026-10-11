@@ -1,5 +1,6 @@
 // The device's local sync state (spec §4.2), one IndexedDB database per
 // synced vault on this device.
+import { SETTINGS_SYNC_OFF, type SettingsSyncPolicy } from '../vault/config-policy';
 import { pushKey } from './failure-keys';
 import type { KeyBundleFields } from '../crypto/userkeys';
 import { inTx, openDb, req } from './idb';
@@ -243,6 +244,9 @@ export class LocalState {
   /** The user's ignore rules (stored under the setting key earlier versions used). */
   getIgnoreGlobs(): Promise<string[]> { return this.getSetting<string[]>('ignoreGlobs', []); }
   setIgnoreGlobs(globs: string[]): Promise<void> { return this.setSetting('ignoreGlobs', globs); }
+  /** This device's settings sync policy (config-policy.ts); off until the user turns it on. */
+  getSettingsSync(): Promise<SettingsSyncPolicy> { return this.getSetting<SettingsSyncPolicy>('settingsSync', SETTINGS_SYNC_OFF); }
+  setSettingsSync(policy: SettingsSyncPolicy): Promise<void> { return this.setSetting('settingsSync', policy); }
 
   async getSetting<T>(key: string, fallback: T): Promise<T> { return (await this.kvGet<T>(`setting:${key}`)) ?? fallback; }
   setSetting(key: string, value: unknown): Promise<void> { return this.kvPut(`setting:${key}`, value); }

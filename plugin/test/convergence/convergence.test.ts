@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { afterAll, expect, inject, it } from 'vitest';
 import { startServer } from '../helpers/server';
-import { coverageShortfalls, runSeed, seedsFromEnv, type SeedReport } from './harness';
+import { coverageShortfalls, runSeed, seedsFromEnv, SERVER_RETENTION, type SeedReport } from './harness';
 
 const obsyncBin = inject('obsyncBin');
 
@@ -41,7 +41,7 @@ afterAll(() => {
 // holds one seed's data, and a seed that breaks its server cannot take the
 // next ones with it.
 it.each(seeds)('seed %i converges with no lost edit', async (seed) => {
-  const srv = await startServer(obsyncBin);
+  const srv = await startServer(obsyncBin, { env: { ...SERVER_RETENTION } });
   try {
     const report = await runSeed(srv, { seed, clients: 3, steps });
     reports.push(report);
