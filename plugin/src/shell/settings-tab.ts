@@ -2,7 +2,7 @@
 // which one is shown), then the day-to-day settings. All logic is in the
 // setup controller and the shell controller; this file only builds the
 // screens and shows errors.
-import { Notice, PluginSettingTab, Setting, type App, type ButtonComponent, type Plugin, type TextAreaComponent } from 'obsidian';
+import { Notice, Platform, PluginSettingTab, Setting, type App, type ButtonComponent, type Plugin, type TextAreaComponent } from 'obsidian';
 import type { FetchLike } from '../api/client';
 import { PASSPHRASE_MIN_CHARS, PASSPHRASE_MIN_WORDS } from '../services/account';
 import type { LocalState } from '../state/store';
@@ -10,6 +10,7 @@ import type { NewlyIgnored } from '../sync/server-removal';
 import type { ShellController, StartResult } from './controller';
 import { describeError } from './errors';
 import { ConfirmModal, TrashModal } from './history-modal';
+import { CORE_SETTINGS_FILES, defaultSettingsSyncPolicy, type CoreSettingsFile, type SettingsSyncPolicy } from '../vault/config-policy';
 import { parseIgnoreFile, VAULT_IGNORE_FILE } from '../vault/ignore';
 import { formatIgnoreText, parseIgnoreText } from './ignore-text';
 import { describePlatform } from './platform';
@@ -53,6 +54,14 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1 << 20) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1 << 20)).toFixed(bytes < 10 << 20 ? 1 : 0)} MB`;
 }
+
+const CORE_LABELS: Record<CoreSettingsFile, string> = {
+  'app.json': 'Editor and files',
+  'appearance.json': 'Appearance',
+  'hotkeys.json': 'Hotkeys',
+  'core-plugins.json': 'Core plugins',
+  'community-plugins.json': 'Community plugin list',
+};
 
 export class ObsyncSettingTab extends PluginSettingTab {
   private readonly form: Form;
@@ -315,6 +324,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
     await this.renderHeldDeletions();
     this.renderVaultIgnore();
     this.renderIgnore();
+    await this.renderSettingsSync();
     new Setting(this.containerEl).setName('Deleted files').setDesc('Restore a file that was deleted. To see the earlier versions of a note, use the history command or the note\'s menu.')
       .addButton((b) => b.setButtonText('Show deleted files').onClick(() => new TrashModal(this.app, this.shell).open()));
     await this.renderDevices();
@@ -441,6 +451,53 @@ export class ObsyncSettingTab extends PluginSettingTab {
         }));
         if (cta) b.setCta();
       });
+  }
+
+  /**
+   * Which of Obsidian's own settings this device syncs (config-policy.ts):
+   * a master switch, off until the user turns it on, then one toggle per
+   * core settings file and one per installed plugin's data.json.
+   */
+  private async renderSettingsSync(): Promise<void> {
+    const policy = await this.shell.settingsSync();
+    const save = async (next: SettingsSyncPolicy): Promise<void> => {
+      await this.shell.setSettingsSync(next);
+      await this.render();
+    };
+    this.heading('Obsidian settings');
+    new Setting(this.containerEl).setName('Sync Obsidian settings with my other devices')
+      .setDesc(`Settings files arrive on disk; restart Obsidian to use them. Devices only exchange settings when they use the same config folder name (${this.app.vault.configDir}). Plugin code, themes, CSS snippets and the workspace layout are never synced.`)
+      .addToggle((t) => t.setValue(policy.enabled).onChange((on) => this.run(async () => {
+        // Turned on for the first time: every core file, but a phone keeps its own appearance.
+        const fresh = Object.keys(policy.core).length === 0 && policy.pluginData.length === 0;
+        await save(on && fresh ? defaultSettingsSyncPolicy(Platform.isMobile) : { ...policy, enabled: on });
+      })));
+    if (!policy.enabled) return;
+    for (const file of CORE_SETTINGS_FILES) {
+      new Setting(this.containerEl).setName(CORE_LABELS[file]).setDesc(file)
+        .addToggle((t) => t.setValue(policy.core[file] === true).onChange((on) => this.run(() => save({ ...policy, core: { ...policy.core, [file]: on } }))));
+    }
+    const plugins = await this.shell.installedPlugins();
+    if (plugins.length === 0) return;
+    this.containerEl.createEl('p', {
+      text: 'Plugin settings (each plugin\'s data.json) are off by default: some plugins keep API keys or paths that only fit this device there.',
+    });
+    for (const p of plugins) {
+      const on = policy.pluginData.includes(p.id);
+      new Setting(this.containerEl).setName(p.name).setDesc(`plugins/${p.id}/data.json`)
+        .addToggle((t) => t.setValue(on).onChange((v) => this.run(() => save({
+          ...policy, pluginData: v ? [...policy.pluginData, p.id] : policy.pluginData.filter((id) => id !== p.id),
+        }))));
+    }
+  }
+
+  /** Runs a toggle's work, showing an error instead of throwing from the change handler. */
+  private run(fn: () => Promise<void>): void {
+    void fn().catch((err: unknown) => {
+      const message = describeError(err).message;
+      this.errorEl?.setText(message);
+      new Notice(`Obsync: ${message}`, 10000);
+    });
   }
 
   private async renderDevices(): Promise<void> {
