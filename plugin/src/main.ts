@@ -7,6 +7,7 @@ import { LocalState } from './state/store';
 import { toHex } from './util/bytes';
 import { cryptoRandom } from './util/random';
 import { ShellController } from './shell/controller';
+import { HEARTBEAT_FILE, type HeartbeatSink } from './shell/heartbeat';
 import { createEngineLock } from './shell/engine-lock';
 import { describeError } from './shell/errors';
 import { DeletionHoldModal, HistoryModal, TrashModal } from './shell/history-modal';
@@ -38,8 +39,16 @@ export default class ObsyncPlugin extends Plugin {
     const adapter = await ObsidianAdapter.create(this.app.vault, pluginDir, this.app.fileManager);
     const fetch = createRequestUrlTransport();
     const roundBytes = pushRoundBytes();
+    // obsync-cli on this folder holds off while this file is fresh (shell/heartbeat.ts).
+    const beatFile = `${pluginDir}/${HEARTBEAT_FILE}`;
+    const heartbeat: HeartbeatSink = {
+      write: (text) => this.app.vault.adapter.write(beatFile, text),
+      remove: async () => {
+        if (await this.app.vault.adapter.exists(beatFile)) await this.app.vault.adapter.remove(beatFile);
+      },
+    };
     const shell = new ShellController({
-      state, adapter, configDir: this.app.vault.configDir, fetch, webSocket: defaultWebSocketFactory, lock: createEngineLock(`obsync-engine:${key}`),
+      state, adapter, configDir: this.app.vault.configDir, fetch, webSocket: defaultWebSocketFactory, lock: createEngineLock(`obsync-engine:${key}`), heartbeat,
       ...(roundBytes !== undefined ? { maxBytesPerRound: roundBytes } : {}),
     });
     this.shell = shell;

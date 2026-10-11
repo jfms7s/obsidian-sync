@@ -27,3 +27,5 @@ export * as vaults from './services/vaults';
 export { openSyncSession, type SyncSessionOptions, type SyncSessionResult } from './services/session';
 // Large local deletions held for a person's answer (the plugin asks in a modal, obsync-cli has a command).
 export * as deletions from './sync/deletion-hold';
+// The plugin's heartbeat that obsync-cli on the same folder pauses for.
+export { HEARTBEAT_FILE, HEARTBEAT_INTERVAL_MS, HEARTBEAT_STALE_MS, isFresh as isHeartbeatFresh, parseHeartbeat, type Heartbeat } from './shell/heartbeat';

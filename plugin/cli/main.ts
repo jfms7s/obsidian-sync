@@ -187,6 +187,7 @@ async function dispatch(command: Command, values: Values, io: Io, log: Logger): 
           init: values.init === true,
           trash: values['no-trash'] !== true,
           configDir: typeof values['config-dir'] === 'string' ? values['config-dir'] : '.obsidian',
+          ...heartbeatCheck(io.env),
           ...(io.fetch ? { fetch: io.fetch } : {}),
           ...(io.webSocket !== undefined ? { webSocket: io.webSocket } : {}),
         }));
@@ -194,6 +195,12 @@ async function dispatch(command: Command, values: Values, io: Io, log: Logger): 
   } finally {
     await release();
   }
+}
+
+/** OBSYNC_CLI_HEARTBEAT_CHECK_MS: how often the daemon looks at Obsidian's heartbeat (tests set it low). */
+function heartbeatCheck(env: NodeJS.ProcessEnv): { heartbeatCheckMs?: number } {
+  const ms = Number(env['OBSYNC_CLI_HEARTBEAT_CHECK_MS']);
+  return Number.isInteger(ms) && ms > 0 ? { heartbeatCheckMs: ms } : {};
 }
 
 async function ensureDir(dir: string): Promise<string> {

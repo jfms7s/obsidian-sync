@@ -11,11 +11,12 @@ import type { LocalState } from '../state/store';
 import { heldDeletions, releaseHeldDeletions, restoreHeldDeletions } from '../sync/deletion-hold';
 import type { SyncEngine } from '../sync/engine';
 import type { EngineEvent, SyncStatus } from '../sync/events';
-import type { Clock } from '../util/clock';
+import { systemClock, type Clock } from '../util/clock';
 import type { Random } from '../util/random';
 import type { VaultAdapter } from '../vault/adapter';
 import { assertValidIgnorePatterns } from '../vault/ignore';
 import type { EngineLock } from './engine-lock';
+import { startHeartbeat, type HeartbeatSink } from './heartbeat';
 import { HistoryController } from './history-controller';
 
 export interface ShellOptions {
@@ -32,6 +33,8 @@ export interface ShellOptions {
   random?: Random;
   /** SyncEngine's maxBytesPerRound (main.ts sets less on a phone). */
   maxBytesPerRound?: number;
+  /** Where to keep the heartbeat that tells obsync-cli on this folder to hold off while the engine runs (none: no heartbeat). */
+  heartbeat?: HeartbeatSink;
 }
 
 export type StartResult = { ok: true } | { ok: false; reason: Extract<SyncSessionResult, { ok: false }>['reason'] | 'stopped' };
@@ -50,6 +53,8 @@ interface Running {
   history: HistoryController;
   release: () => void;
   off: () => void;
+  /** Stops the heartbeat and removes its file. */
+  stopHeartbeat: () => Promise<void>;
 }
 
 /**
@@ -158,7 +163,9 @@ export class ShellController {
         await r.engine.stop().catch(() => undefined);
         throw err;
       }
-      this.running = { engine: r.engine, history: new HistoryController({ api: r.api, ring: r.ring, adapter: o.adapter, state: o.state }), release, off };
+      const device = (await o.state.getSession())?.deviceName ?? '';
+      const stopHeartbeat = o.heartbeat ? startHeartbeat(o.heartbeat, o.clock ?? systemClock, device) : async () => undefined;
+      this.running = { engine: r.engine, history: new HistoryController({ api: r.api, ring: r.ring, adapter: o.adapter, state: o.state }), release, off, stopHeartbeat };
       this.phase = 'running';
       return { ok: true };
     } catch (err) {
@@ -218,6 +225,7 @@ export class ShellController {
         r.off();
         await r.engine.stop();
       } finally {
+        await r.stopHeartbeat();
         r.release();
         this.stopping = null;
         this.phase = 'idle';
