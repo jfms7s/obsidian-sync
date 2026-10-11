@@ -8,7 +8,7 @@ import { CryptoError } from '../../src/crypto/primitives';
 import { buildKeyring } from '../../src/crypto/vaultkeys';
 import { equalBytes, toHex, utf8 } from '../../src/util/bytes';
 import { seededRandom } from '../../src/util/random';
-import { decodeText, downloadContent, isTextPath, prepareContent, splitChunks } from '../../src/sync/content';
+import { decodeText, DOWNLOAD_CONCURRENCY, downloadContent, isTextPath, prepareContent, splitChunks } from '../../src/sync/content';
 
 const VAULT = '0123456789abcdef0123456789abcdef';
 
@@ -26,6 +26,34 @@ describe('content', () => {
     expect(decodeText('a.md', new Uint8Array([0x68, 0x69]))).toBe('hi');
     expect(decodeText('a.md', new Uint8Array([0xff]))).toBeNull();
     expect(decodeText('a.png', new Uint8Array([0x68]))).toBeNull();
+  });
+
+  it('downloads the chunks of a version a few at a time and puts them together in order', async () => {
+    const r = seededRandom(4);
+    const ring = await buildKeyring(VAULT, r.bytes(32), new Map([[1, r.bytes(32)]]), 1);
+    const keys = ring.epochs.get(1)!;
+    const data = new Uint8Array(6 * CHUNK_SIZE + 3);
+    for (let i = 0; i < data.length; i += 4096) data[i] = (i / 4096) & 255; // every chunk differs
+    const prep = await prepareContent(keys, data);
+    const blobs = new Map<string, Uint8Array>();
+    for (let i = 0; i < prep.chunks.length; i++) blobs.set(toHex(prep.chunkIds[i]!), await encryptChunk(r, VAULT, keys, prep.chunkIds[i]!, prep.chunks[i]!));
+    let inFlight = 0;
+    let most = 0;
+    const api = {
+      getChunk: async (_v: string, id: Uint8Array) => {
+        most = Math.max(most, ++inFlight);
+        await new Promise((res) => setTimeout(res, 5));
+        inFlight--;
+        return blobs.get(toHex(id))!;
+      },
+    } as unknown as ApiClient;
+    const v: RemoteVersion = {
+      fileId: new Uint8Array(32), versionId: new Uint8Array(16), baseVersionId: new Uint8Array(0), epoch: 1, encMeta: new Uint8Array(1),
+      chunkIds: prep.chunkIds, size: data.length, deleted: false, deviceId: 'd', createdAtMs: 0, seq: 1,
+    };
+    expect(equalBytes(await downloadContent(api, ring, v, prep.contentHash), data)).toBe(true);
+    expect(most).toBeGreaterThan(1);
+    expect(most).toBeLessThanOrEqual(DOWNLOAD_CONCURRENCY);
   });
 
   it('downloads, decrypts and verifies a multi-chunk version, retrying a cut-off download', async () => {
@@ -73,9 +101,10 @@ describe('content', () => {
       fileId: new Uint8Array(32), versionId: new Uint8Array(16), baseVersionId: new Uint8Array(0), epoch: 1, encMeta: new Uint8Array(1),
       chunkIds, size, deleted: false, deviceId: 'd', createdAtMs: 0, seq: 1,
     });
-    // A repeated small chunk posing as a two-chunk file: the first, not the last, is short.
-    await expect(downloadContent(api, ring, v([id, id], CHUNK_SIZE + 10), small.contentHash)).rejects.toBeInstanceOf(CryptoError);
-    expect(fetches).toBe(1);
+    // A repeated small chunk posing as a ten-chunk file: the first, not the last, is short, and the
+    // download stops there (the chunks already on their way, at most DOWNLOAD_CONCURRENCY, finish).
+    await expect(downloadContent(api, ring, v(Array.from({ length: 10 }, () => id), 9 * CHUNK_SIZE + 10), small.contentHash)).rejects.toBeInstanceOf(CryptoError);
+    expect(fetches).toBeLessThanOrEqual(DOWNLOAD_CONCURRENCY);
     fetches = 0;
     await expect(downloadContent(api, ring, v([id, id, id], 30), small.contentHash)).rejects.toBeInstanceOf(CryptoError); // 3 chunks for 30 bytes
     await expect(downloadContent(api, ring, v([id], 0), small.contentHash)).rejects.toBeInstanceOf(CryptoError); // an empty file has none

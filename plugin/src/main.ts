@@ -12,6 +12,7 @@ import { describeError } from './shell/errors';
 import { DeletionHoldModal, HistoryModal, TrashModal } from './shell/history-modal';
 import { noticeFor } from './shell/notices';
 import { ObsidianAdapter } from './shell/obsidian-adapter';
+import { pushRoundBytes } from './shell/platform';
 import { ObsyncSettingTab } from './shell/settings-tab';
 import { statusLabel } from './shell/status';
 import { createRequestUrlTransport } from './shell/transport';
@@ -36,8 +37,10 @@ export default class ObsyncPlugin extends Plugin {
     const pluginDir = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
     const adapter = await ObsidianAdapter.create(this.app.vault, pluginDir, this.app.fileManager);
     const fetch = createRequestUrlTransport();
+    const roundBytes = pushRoundBytes();
     const shell = new ShellController({
       state, adapter, configDir: this.app.vault.configDir, fetch, webSocket: defaultWebSocketFactory, lock: createEngineLock(`obsync-engine:${key}`),
+      ...(roundBytes !== undefined ? { maxBytesPerRound: roundBytes } : {}),
     });
     this.shell = shell;
 

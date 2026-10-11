@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
 import { fileIdFor } from '../../src/crypto/objects';
 import { fromHex, toHex } from '../../src/util/bytes';
 import { ServerRollbackError } from '../../src/sync/context';
-import { newestPerFile, pull, resolveConflict } from '../../src/sync/pull';
+import { newestPerFile, PREFETCH_VERSIONS, pull, resolveConflict } from '../../src/sync/pull';
 import { PushMemory, pushRound } from '../../src/sync/push';
 import type { RemoteVersion } from '../../src/api/types';
 import { files, landedPendingOvertakenTwice, nameKeepingCollision, newDevice, newUser, remoteCommit, text, type Device } from '../helpers/fixture';
@@ -208,6 +208,42 @@ describe('pull', () => {
     await pull(d.ctx);
     expect(reads).toHaveBeenCalledTimes(1);
     expect(Object.keys(files(d.adapter))).toHaveLength(10);
+  });
+
+  it('downloads the versions of a page a few at a time, and applies them in order', async () => {
+    const d = await device();
+    for (let i = 0; i < 12; i++) await remoteCommit(d, `n${String(i).padStart(2, '0')}.md`, text(`note ${i}\n`));
+    const getChunk = d.api.getChunk.bind(d.api);
+    let inFlight = 0;
+    let most = 0;
+    d.api.getChunk = async (...args) => {
+      most = Math.max(most, ++inFlight);
+      try {
+        await new Promise((r) => setTimeout(r, 10));
+        return await getChunk(...args);
+      } finally {
+        inFlight--;
+      }
+    };
+    const order: string[] = [];
+    d.adapter.watch((e) => order.push(e.path));
+    await pull(d.ctx);
+    expect(Object.keys(files(d.adapter))).toHaveLength(12);
+    expect(order).toEqual([...order].sort());
+    expect(most).toBeGreaterThan(1);
+    expect(most).toBeLessThanOrEqual(PREFETCH_VERSIONS);
+  });
+
+  it('does not download its own versions again when they come back', async () => {
+    const d = await device();
+    for (let i = 0; i < 5; i++) {
+      await d.adapter.write(`n${i}.md`, text(`${i}\n`));
+      await d.state.markDirty(`n${i}.md`);
+    }
+    await pushRound(d.ctx, new PushMemory());
+    const before = d.net.count('GET', '/chunks/');
+    await pull(d.ctx);
+    expect(d.net.count('GET', '/chunks/')).toBe(before);
   });
 
   it('does not download versions over the device size limit', async () => {

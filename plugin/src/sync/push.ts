@@ -10,6 +10,7 @@ import { CommitSchema } from '../gen/obsync/v1/obsync_pb';
 import type { DirtyEntry, PendingCommit } from '../state/store';
 import { fromHex, toHex } from '../util/bytes';
 import { InvalidPathError, normalizePath } from '../util/path';
+import { mapConcurrently } from '../util/pool';
 import { isSyncedHere, readLocal } from './apply';
 import { decodeText, hashHex, prepareContent, splitChunks } from './content';
 import type { SyncContext } from './context';
@@ -19,7 +20,10 @@ import { pull, resolveConflict } from './pull';
 
 /** Bounds one push round so memory stays small; the engine runs rounds until nothing is left. */
 export const MAX_FILES_PER_ROUND = 200;
+/** The default for SyncContext.maxBytesPerRound; the shell sets less on a phone. */
 export const MAX_BYTES_PER_ROUND = 64 << 20;
+/** How many chunks upload at once. */
+export const UPLOAD_CONCURRENCY = 3;
 
 /** The refusal fingerprint of a refused deletion (a content refusal holds the content hash). */
 const DELETION_REFUSED = 'deleted';
@@ -228,6 +232,9 @@ async function uploadChunks(ctx: SyncContext, ops: Op[]): Promise<Op[]> {
   for (let i = 0; i < wanted.length; i += MAX_CHUNK_EXISTS_BATCH) {
     const batch = wanted.slice(i, i + MAX_CHUNK_EXISTS_BATCH);
     const exists = await ctx.api.chunksExist(ctx.ring.vaultId, batch.map((w) => w.id));
+    const missing: typeof batch = [];
+    // First, one at a time, make sure each op's content is at hand (a
+    // resent pending commit reads it from disk again, or is dropped).
     for (let j = 0; j < batch.length; j++) {
       const w = batch[j]!;
       if (exists[j] || dropped.has(w.op)) continue;
@@ -252,10 +259,14 @@ async function uploadChunks(ctx: SyncContext, ops: Op[]): Promise<Op[]> {
         }
         w.op.data = local.data;
       }
-      const chunk = splitChunks(w.op.data)[w.idx]!;
+      missing.push(w);
+    }
+    // Then upload a few chunks at a time.
+    await mapConcurrently(missing, UPLOAD_CONCURRENCY, async (w) => {
+      const chunk = splitChunks(w.op.data!)[w.idx]!;
       const sealed = await encryptChunk(ctx.random, ctx.ring.vaultId, keys(w.op.pending.epoch), w.id, chunk);
       await ctx.api.putChunk(ctx.ring.vaultId, w.id, sealed);
-    }
+    });
   }
   return ops.filter((op) => !dropped.has(op));
 }
@@ -296,7 +307,7 @@ export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<Push
   let bytes = 0;
   const fileIds = new Set<string>();
   for (const entry of entries) {
-    if (ops.length >= MAX_FILES_PER_ROUND || bytes >= MAX_BYTES_PER_ROUND) break;
+    if (ops.length >= MAX_FILES_PER_ROUND || bytes >= (ctx.maxBytesPerRound ?? MAX_BYTES_PER_ROUND)) break;
     if (await isDeferred(ctx, pushKey(entry.path))) continue;
     let op: Op | null | 'wait';
     try {

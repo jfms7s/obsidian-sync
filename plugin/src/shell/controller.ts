@@ -30,6 +30,8 @@ export interface ShellOptions {
   autoRun?: boolean;
   clock?: Clock;
   random?: Random;
+  /** SyncEngine's maxBytesPerRound (main.ts sets less on a phone). */
+  maxBytesPerRound?: number;
 }
 
 export type StartResult = { ok: true } | { ok: false; reason: Extract<SyncSessionResult, { ok: false }>['reason'] | 'stopped' };
@@ -138,6 +140,7 @@ export class ShellController {
       const r = await openSyncSession({
         state: o.state, adapter: o.adapter, webSocket: o.webSocket, fetch: o.fetch, configDir: o.configDir,
         ...(o.clock ? { clock: o.clock } : {}), ...(o.random ? { random: o.random } : {}), ...(o.autoRun !== undefined ? { autoRun: o.autoRun } : {}),
+        ...(o.maxBytesPerRound !== undefined ? { maxBytesPerRound: o.maxBytesPerRound } : {}),
       });
       this.lastStartNeedsSetup = !r.ok;
       if (!r.ok) {

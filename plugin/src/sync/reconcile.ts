@@ -3,6 +3,7 @@
 import { fileIdFor } from '../crypto/objects';
 import { toHex } from '../util/bytes';
 import { normalizePath } from '../util/path';
+import { mapConcurrently } from '../util/pool';
 import { isCoarseMtime, type FileStat } from '../vault/adapter';
 import { ensureHeadApplied, isSyncedHere } from './apply';
 import { hashHex } from './content';
@@ -32,20 +33,6 @@ interface LocalLook {
   st?: FileStat | null;
   /** The stat threw (not a cycle error, which fails the reconcile). */
   statFailed?: boolean;
-}
-
-/** fn over items with at most limit calls running at once; the results keep the items' order. */
-async function mapConcurrently<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out = new Array<R>(items.length);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < items.length) {
-      const i = next++;
-      out[i] = await fn(items[i]!);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return out;
 }
 
 /**
