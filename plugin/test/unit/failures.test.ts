@@ -4,6 +4,7 @@ import type { ApiClient } from '../../src/api/client';
 import { ApiError, ErrorCode, NetworkError } from '../../src/api/errors';
 import { CryptoError } from '../../src/crypto/primitives';
 import { buildKeyring, epochKeys, MissingEpochKeyError } from '../../src/crypto/vaultkeys';
+import { applyKey, pathOfPushKey, pushKey } from '../../src/state/failure-keys';
 import { LocalState } from '../../src/state/store';
 import { DEFAULT_MAX_FILE_BYTES, ServerRollbackError, type SyncContext } from '../../src/sync/context';
 import type { EngineEvent } from '../../src/sync/events';
@@ -36,9 +37,9 @@ it('backs off a failing file from 1 minute, notifying only the first time', asyn
   await recordFailure(c, 'push:a.md', 'a.md', new Error('EIO'));
   expect((await c.state.getFailure('push:a.md'))!.attempts).toBe(2);
   expect(c.events).toEqual([{ type: 'notice', code: 'FILE_FAILED', persistent: false, path: 'a.md', message: 'a.md: EIO' }]);
-  expect(await nextRetryAt(c)).toBe((await c.state.getFailure('push:a.md'))!.nextAt);
+  expect(nextRetryAt(await c.state.allFailures())).toBe((await c.state.getFailure('push:a.md'))!.nextAt);
   await clearFailure(c, 'push:a.md');
-  expect(await nextRetryAt(c)).toBeNull();
+  expect(nextRetryAt(await c.state.allFailures())).toBeNull();
 });
 
 it('finds the earliest retry of each kind of failure on its own', async () => {
@@ -49,13 +50,13 @@ it('finds the earliest retry of each kind of failure on its own', async () => {
   c.clock.advance(10 * 60_000);
   await recordFailure(c, 'push:c.md', 'c.md', new Error('EIO'));
   const at = async (key: string) => (await c.state.getFailure(key))!.nextAt;
-  expect(await nextRetryAt(c, 'push:')).toBe(await at('push:a.md'));
-  expect(await nextRetryAt(c, 'apply:')).toBe(await at('apply:01'));
-  expect(await nextRetryAt(c)).toBe(await at('push:a.md'));
+  expect(nextRetryAt(await c.state.allFailures(), 'push')).toBe(await at('push:a.md'));
+  expect(nextRetryAt(await c.state.allFailures(), 'apply')).toBe(await at('apply:01'));
+  expect(nextRetryAt(await c.state.allFailures())).toBe(await at('push:a.md'));
   await clearFailure(c, 'push:a.md');
-  expect(await nextRetryAt(c, 'push:')).toBe(await at('push:c.md'));
+  expect(nextRetryAt(await c.state.allFailures(), 'push')).toBe(await at('push:c.md'));
   await clearFailure(c, 'apply:01');
-  expect(await nextRetryAt(c, 'apply:')).toBeNull();
+  expect(nextRetryAt(await c.state.allFailures(), 'apply')).toBeNull();
 });
 
 it('uses the error to pick the notice code', async () => {
@@ -87,4 +88,11 @@ it('fails the cycle on programming errors, IndexedDB errors and a missing epoch 
   expect(missing).toBeInstanceOf(CryptoError);
   expect(isCycleError(missing)).toBe(true);
   expect(isCycleError(new CryptoError('bad'))).toBe(false);
+});
+
+it('builds and reads the failure keys in one place', () => {
+  expect(pushKey('Notes/a.md')).toBe('push:Notes/a.md');
+  expect(applyKey('0a1b')).toBe('apply:0a1b');
+  expect(pathOfPushKey(pushKey('Notes/a:b.md'))).toBe('Notes/a:b.md');
+  expect(pathOfPushKey(applyKey('0a1b'))).toBeNull();
 });

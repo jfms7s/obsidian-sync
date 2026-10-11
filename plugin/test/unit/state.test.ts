@@ -25,6 +25,15 @@ const rec = (over: Partial<FileRecord> = {}): FileRecord => ({
 });
 
 describe('LocalState', () => {
+  it('reads ignore rules saved through the generic setting key by earlier versions', async () => {
+    const s = await LocalState.open(new IDBFactory(), 'ignore-globs-compat');
+    expect(await s.getIgnoreGlobs()).toEqual([]);
+    await s.setSetting('ignoreGlobs', ['Old/']);
+    expect(await s.getIgnoreGlobs()).toEqual(['Old/']);
+    await s.setIgnoreGlobs(['New/']);
+    expect(await s.getSetting('ignoreGlobs', [])).toEqual(['New/']);
+  });
+
   it('stores session, keys, vault, cursor and settings', async () => {
     const st = await open();
     expect(await st.getCursor()).toBe(0);
