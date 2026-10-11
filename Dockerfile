@@ -12,9 +12,9 @@
 # The libSQL driver links a prebuilt static library that ships inside its Go
 # module for linux/amd64 and linux/arm64.
 
-# golang:1.25.14-bookworm, index digest as of 2026-10-05. Bookworm's glibc
+# golang:1.26.9-bookworm, index digest as of 2026-10-11. Bookworm's glibc
 # (2.36) matches the runtime image, so the binary cannot need a newer one.
-FROM --platform=$BUILDPLATFORM golang:1.25.14-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.9-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c AS build
 
 ARG TARGETARCH
 ARG VERSION=dev

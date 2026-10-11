@@ -2,7 +2,7 @@ module github.com/jfms7s/obsidian-sync/server
 
 go 1.25.0
 
-toolchain go1.25.14
+toolchain go1.26.9
 
 require google.golang.org/protobuf v1.36.12
 
