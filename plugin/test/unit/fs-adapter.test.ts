@@ -2,7 +2,7 @@
 // contract over a real temporary folder, then what only a real disk has
 // (other programs' edits seen by the watcher, links, the trash, atomic
 // writes).
-import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -154,7 +154,7 @@ describe('FsAdapter on a real disk', () => {
     expect(await adapter.hasFolder('empty')).toBe(false);
   });
 
-  it('neither lists nor follows symbolic links, and refuses paths that go through one', async () => {
+  it('never follows symbolic links: a link to a file is listed but refused, a linked folder is not entered, a path through one is refused', async () => {
     const root = await tempDir();
     const outside = await tempDir();
     await put(outside, 'private.md', 'not yours');
@@ -163,14 +163,119 @@ describe('FsAdapter on a real disk', () => {
     await symlink(join(outside, 'private.md'), join(root, 'file-link.md'));
     await put(root, 'real/a.md', 'a');
     await symlink(join(root, 'real'), join(root, 'alias'));
-    expect(await adapter.list()).toEqual(['real/a.md']);
-    expect(await adapter.stat('file-link.md')).toBeNull();
+    // Listed, so the engine does not take it for deleted; it then fails as a file (FILE_FAILED) instead of syncing.
+    expect(await adapter.list()).toEqual(['file-link.md', 'real/a.md']);
+    await expect(adapter.stat('file-link.md')).rejects.toThrow(/symbolic link/);
+    await expect(adapter.read('file-link.md')).rejects.toThrow(/symbolic link/);
+    await expect(adapter.write('file-link.md', bytes('x'))).rejects.toThrow(/symbolic link/);
+    await expect(adapter.remove('file-link.md')).rejects.toThrow(/symbolic link/);
     await expect(adapter.read('linked/private.md')).rejects.toThrow(/symbolic link/);
     await expect(adapter.write('linked/new.md', bytes('x'))).rejects.toThrow(/symbolic link/);
     await expect(adapter.write('alias/a.md', bytes('x'))).rejects.toThrow(/symbolic link/);
-    await expect(adapter.write('file-link.md', bytes('x'))).rejects.toThrow(/symbolic link/);
     expect(await readFile(join(outside, 'private.md'), 'utf8')).toBe('not yours');
+    expect(await readdir(outside)).toEqual(['private.md']);
     expect((await lstat(join(root, 'file-link.md'))).isSymbolicLink()).toBe(true);
+  });
+
+  it('reports a note replaced by a link as there, not deleted', async () => {
+    const { root, adapter, events, off } = await watched();
+    await adapter.write('g.md', bytes('note'));
+    const outside = await tempDir();
+    await put(outside, 'g.md', 'elsewhere');
+    await rm(join(root, 'g.md'));
+    await symlink(join(outside, 'g.md'), join(root, 'g.md'));
+    await settle(adapter);
+    // The watcher may see the gap between the two steps (a delete, then a create), but what the
+    // engine finds when it looks is a file it cannot sync, never a deletion to push.
+    expect(events.at(-1)).toMatchObject({ path: 'g.md' });
+    expect(events.at(-1)!.type).not.toBe('delete');
+    expect(await adapter.list()).toEqual(['g.md']);
+    await expect(adapter.stat('g.md')).rejects.toThrow(/symbolic link/);
+    off();
+  });
+
+  it('refuses paths that are not inside the vault', async () => {
+    const parent = await tempDir();
+    const root = join(parent, 'vault');
+    await mkdir(root);
+    await put(parent, 'secret.md', 'outside');
+    const adapter = await FsAdapter.create(root);
+    for (const p of ['../secret.md', 'a/../../secret.md', './x.md', 'a//b.md', '/etc/passwd']) {
+      await expect(adapter.read(p)).rejects.toThrow(/not a path inside the vault/);
+      await expect(adapter.stat(p)).rejects.toThrow(/not a path inside the vault/);
+      await expect(adapter.write(p, bytes('x'))).rejects.toThrow(/not a path inside the vault/);
+    }
+    await expect(adapter.rename('a.md', '../out.md')).resolves.toBe(false); // no a.md
+    await adapter.write('a.md', bytes('a'));
+    await expect(adapter.rename('a.md', '../out.md')).rejects.toThrow(/not a path inside the vault/);
+    expect(await readdir(parent)).toEqual(['secret.md', 'vault']);
+  });
+
+  it('does not let a .trash that links elsewhere carry deleted files out of the vault', async () => {
+    const root = await tempDir();
+    const outside = await tempDir();
+    await symlink(outside, join(root, '.trash'));
+    const adapter = await FsAdapter.create(root);
+    await adapter.write('note.md', bytes('keep me'));
+    await expect(adapter.remove('note.md')).rejects.toThrow(/symbolic link/);
+    expect(await readFile(join(root, 'note.md'), 'utf8')).toBe('keep me');
+    expect(await readdir(outside)).toEqual([]);
+  });
+
+  it('does not replace a folder holding only links', async () => {
+    const root = await tempDir();
+    const adapter = await FsAdapter.create(root);
+    await mkdir(join(root, 'linkdir'));
+    await symlink('/nonexistent', join(root, 'linkdir', 'l'));
+    await expect(adapter.write('linkdir', bytes('x'))).rejects.toThrow();
+    expect((await lstat(join(root, 'linkdir', 'l'))).isSymbolicLink()).toBe(true);
+  });
+
+  it('lists a name stored in both NFC and NFD once', async () => {
+    const root = await tempDir();
+    const adapter = await FsAdapter.create(root);
+    await put(root, 'café.md'.normalize('NFC'), 'nfc');
+    await put(root, 'café.md'.normalize('NFD'), 'nfd');
+    expect(await adapter.list()).toEqual(['café.md'.normalize('NFC')]);
+  });
+
+  it('removes temporary files left by a crash once they are old, and only those', async () => {
+    const root = await tempDir();
+    const adapter = await FsAdapter.create(root);
+    await put(root, 'd/.obsync-00000000000000aa.tmp', 'old');
+    await put(root, 'd/.obsync-00000000000000bb.tmp', 'in flight');
+    const old = new Date(Date.now() - 2 * 60 * 60_000);
+    await utimes(join(root, 'd/.obsync-00000000000000aa.tmp'), old, old);
+    expect(await adapter.list()).toEqual([]);
+    expect(await readdir(join(root, 'd'))).toEqual(['.obsync-00000000000000bb.tmp']);
+  });
+
+  it('does not report changes in folders it is told not to watch, but still lists them', async () => {
+    const root = await tempDir();
+    const adapter = await FsAdapter.create(root, { unwatched: (f) => f === '.git' });
+    const events: AdapterEvent[] = [];
+    const off = adapter.watch((e) => events.push(e));
+    await settle(adapter);
+    await put(root, '.git/objects/ab', 'g');
+    await put(root, 'note.md', 'n');
+    await settle(adapter);
+    expect(events.map((e) => e.path)).not.toContain('.git/objects/ab');
+    expect(events).toContainEqual({ type: 'create', path: 'note.md' });
+    expect(await adapter.list()).toEqual(['.git/objects/ab', 'note.md']);
+    off();
+  });
+
+  it('stays fast when many files are deleted behind its back', async () => {
+    const { root, adapter, events, off } = await watched();
+    for (let i = 0; i < 2000; i++) await put(root, `many/${i}.md`, 'x');
+    await settle(adapter);
+    events.length = 0;
+    const started = Date.now();
+    for (let i = 0; i < 2000; i++) await rm(join(root, `many/${i}.md`));
+    await settle(adapter);
+    expect(events.filter((e) => e.type === 'delete')).toHaveLength(2000);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    off();
   });
 
   it('opens a vault through a link to it', async () => {
