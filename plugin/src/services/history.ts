@@ -107,7 +107,7 @@ export async function restore(api: ApiClient, ring: VaultKeyring, adapter: Vault
   if (!target.meta) throw new Error('this version cannot be decrypted');
   const path = target.meta.path;
   const fileId = toHex(target.version.fileId);
-  const data = await readVersion(api, ring, target);
+  // The cheap checks first: a restore that will be refused downloads nothing.
   if (await state.getPending(fileId)) throw new UnsyncedChangesError(path);
   const stat = await adapter.stat(path);
   if (stat && stat.path !== path) throw new PathOccupiedError(path, stat.path);
@@ -131,6 +131,8 @@ export async function restore(api: ApiClient, ring: VaultKeyring, adapter: Vault
     // Synced as live but gone here: a local delete (or rename) not pushed yet.
     throw new UnsyncedChangesError(path);
   }
+  const data = await readVersion(api, ring, target);
+  // The precondition is the stat from before the download: a file changed meanwhile is not overwritten.
   if (!(await adapter.write(path, data, expectFor(stat)))) throw new UnsyncedChangesError(path);
   return path;
 }
