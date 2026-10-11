@@ -50,6 +50,30 @@ describe('the plugin entry point', () => {
     await tick();
   });
 
+  it('asks what to do with a large deletion on hold in a dialog instead of a notice', async () => {
+    const plugin = newPlugin(new fakeObsidian.App(new fakeObsidian.Vault()));
+    await plugin.onload();
+    await tick();
+    const shell = controllerOf(plugin);
+    vi.spyOn(shell, 'heldDeletions').mockResolvedValue(Array.from({ length: 120 }, (_, i) => `n${i}.md`));
+    const restore = vi.spyOn(shell, 'restoreHeldHere').mockResolvedValue(120);
+    fakeObsidian.Modal.opened.length = 0;
+    fakeObsidian.Notice.shown.length = 0;
+    const listeners = (shell as unknown as { listeners: Set<(e: EngineEvent) => void> }).listeners;
+    for (const l of [...listeners]) l({ type: 'notice', code: 'DELETIONS_HELD', persistent: true, message: '120 files deleted on this device are on hold' });
+    await tick();
+
+    const dialog = fakeObsidian.Modal.opened.at(-1)!;
+    expect(dialog.contentEl.allText()).toMatch(/120 files were deleted on this device/);
+    expect(fakeObsidian.Notice.shown).toEqual([]);
+    await dialog.contentEl.settings.flatMap((x) => x.buttons).find((b) => b.text === 'Restore here')!.click();
+    await tick();
+    expect(restore).toHaveBeenCalled();
+    expect(fakeObsidian.Notice.shown).toEqual([{ message: 'Obsync: restoring 120 files.' }]);
+    plugin.onunload();
+    await tick();
+  });
+
   it('tells the user that "Sync now" does nothing while no engine runs', async () => {
     const plugin = newPlugin(new fakeObsidian.App(new fakeObsidian.Vault()));
     await plugin.onload();
