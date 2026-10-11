@@ -11,6 +11,7 @@ import { MissingEpochKeyError, type VaultKeyring } from '../crypto/vaultkeys';
 import type { LocalState } from '../state/store';
 import { backoffDelay, DEFAULT_BACKOFF, type BackoffPolicy } from '../util/backoff';
 import { systemClock, type Clock, type TimerHandle } from '../util/clock';
+import { errorMessage } from '../util/errors';
 import { cryptoRandom, type Random } from '../util/random';
 import type { AdapterEvent, VaultAdapter } from '../vault/adapter';
 import { IgnoreRules } from '../vault/ignore';
@@ -261,7 +262,11 @@ export class SyncEngine {
           await st.markDirty(ev.path);
         }
       })
-      .catch(() => undefined);
+      .catch(() => {
+        // Not recorded (the database failed): a reconcile finds the change instead of the 15-minute one.
+        this.reconcileDue = true;
+        this.schedule(0);
+      });
     this.debounce();
   }
 
@@ -410,7 +415,7 @@ export class SyncEngine {
       } catch (handlingErr) {
         // Handling failed too (e.g. IndexedDB while forgetting synced
         // versions): back off and try the whole cycle again.
-        this.setStatus('error', String((handlingErr as Error)?.message ?? handlingErr));
+        this.setStatus('error', errorMessage(handlingErr));
         this.schedule(backoffDelay(this.attempt++, this.random, this.opts.backoff ?? DEFAULT_BACKOFF));
       }
     }
@@ -464,7 +469,7 @@ export class SyncEngine {
     const retryAfter = err instanceof ApiError ? (err.retryAfterMs ?? 0) : 0;
     const delay = backoffDelay(this.attempt++, this.random, this.opts.backoff ?? DEFAULT_BACKOFF, retryAfter);
     if (err instanceof NetworkError) this.setStatus('offline', err.message);
-    else this.setStatus('error', isTemporary(err) ? `retrying: ${(err as Error).message}` : String((err as Error)?.message ?? err));
+    else this.setStatus('error', isTemporary(err) ? `retrying: ${errorMessage(err)}` : errorMessage(err));
     this.schedule(delay);
   }
 }

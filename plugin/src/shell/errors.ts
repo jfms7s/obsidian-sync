@@ -6,6 +6,7 @@ import { Argon2TooCostlyError, InvalidRecoveryWordsError, WrongPassphraseError, 
 import { MissingEpochKeyError } from '../crypto/vaultkeys';
 import { KeysAlreadySetUpError, PassphraseIsPasswordError, SetupPassphraseMismatchError, WeakPassphraseError } from '../services/account';
 import { NotInTrashError, PathOccupiedError, UnsyncedChangesError } from '../services/history';
+import { errorMessage } from '../util/errors';
 
 export interface UserError {
   message: string;
@@ -57,5 +58,5 @@ export function describeError(err: unknown): UserError {
   if (err instanceof PassphraseIsPasswordError || err instanceof WeakPassphraseError) return { kind: 'fix-input', message: err.message };
   if (err instanceof UnsyncedChangesError) return { kind: 'retry', message: `${err.path} has changes that are not synced yet. Wait for the sync to finish, then restore.` };
   if (err instanceof PathOccupiedError || err instanceof NotInTrashError) return { kind: 'none', message: `${err.message}.` }; // they begin with a file name: keep its case
-  return { kind: 'none', message: `Something went wrong: ${err instanceof Error ? err.message : String(err)}` };
+  return { kind: 'none', message: `Something went wrong: ${errorMessage(err)}` };
 }
