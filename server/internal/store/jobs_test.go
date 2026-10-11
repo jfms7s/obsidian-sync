@@ -259,3 +259,63 @@ func TestReleaseLease(t *testing.T) {
 		t.Fatal("b could not take a released lease")
 	}
 }
+
+// DeleteDeadChunks removes a whole batch in one transaction with the same
+// per-row liveness check as DeleteDeadChunk, and reduces each vault's usage
+// by what was actually deleted there.
+func TestDeleteDeadChunksBatch(t *testing.T) {
+	st, clk := storetest.New(t)
+	u := storetest.SeedUser(t, st, "alice")
+	vaults := []store.Vault{storetest.SeedVault(t, st, u.ID), storetest.SeedVault(t, st, u.ID)}
+	const perVault = 300
+	for vi, v := range vaults {
+		for i := 0; i < perVault; i++ {
+			id := make([]byte, 32)
+			id[0], id[1] = byte(i>>8), byte(i)
+			storetest.SeedChunk(t, st, v.ID, id, int64(vi+1)) // 1 byte each in vault 0, 2 in vault 1
+		}
+	}
+	cutoff := clk.Now().UnixMilli() + 1
+	dead, err := st.DeadChunks(ctx, cutoff, 1000)
+	if err != nil || len(dead) != 2*perVault {
+		t.Fatalf("dead = %d, err %v", len(dead), err)
+	}
+	// One chunk is touched again (an exists-check) between listing and deleting.
+	clk.Advance(time.Minute)
+	rescued := dead[0]
+	if _, err := st.TouchChunks(ctx, rescued.VaultID, [][]byte{rescued.ChunkID}); err != nil {
+		t.Fatal(err)
+	}
+	before := map[string]int64{}
+	for _, v := range vaults {
+		got, _ := st.VaultForMember(ctx, v.ID, u.ID)
+		before[v.ID] = got.BytesUsed
+	}
+
+	deleted, err := st.DeleteDeadChunks(ctx, dead, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted) != len(dead)-1 {
+		t.Fatalf("deleted %d of %d, want all but the re-touched one", len(deleted), len(dead))
+	}
+	freed := map[string]int64{}
+	for _, c := range deleted {
+		if c.VaultID == rescued.VaultID && bytes.Equal(c.ChunkID, rescued.ChunkID) {
+			t.Fatal("the re-touched chunk was deleted")
+		}
+		freed[c.VaultID] += c.Size
+	}
+	for _, v := range vaults {
+		got, _ := st.VaultForMember(ctx, v.ID, u.ID)
+		if got.BytesUsed != before[v.ID]-freed[v.ID] {
+			t.Errorf("vault %s usage %d, want %d", v.ID, got.BytesUsed, before[v.ID]-freed[v.ID])
+		}
+	}
+	if left, _ := st.DeadChunks(ctx, cutoff, 1000); len(left) != 0 {
+		t.Fatalf("%d dead chunks left", len(left))
+	}
+	if again, err := st.DeleteDeadChunks(ctx, dead, cutoff); err != nil || len(again) != 0 {
+		t.Fatalf("second delete = %d, err %v; want none", len(again), err)
+	}
+}

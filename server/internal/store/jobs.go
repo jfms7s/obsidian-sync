@@ -258,27 +258,51 @@ func (s *Store) DeadChunks(ctx context.Context, touchedBeforeMs int64, limit int
 // DeleteDeadChunk deletes c's row if it is still dead and subtracts its size
 // from the vault's usage. The caller deletes the blob afterwards.
 func (s *Store) DeleteDeadChunk(ctx context.Context, c DeadChunk, touchedBeforeMs int64) (bool, error) {
-	var deleted bool
+	deleted, err := s.DeleteDeadChunks(ctx, []DeadChunk{c}, touchedBeforeMs)
+	return len(deleted) == 1, err
+}
+
+// DeleteDeadChunks deletes, in one transaction, each chunk of cs whose row
+// is still dead (the same per-row check as DeleteDeadChunk, so a chunk
+// touched or referenced since DeadChunks listed it survives), reduces each
+// vault's usage by the sizes it deleted there, and returns the deleted
+// chunks. The caller deletes their blobs afterwards.
+func (s *Store) DeleteDeadChunks(ctx context.Context, cs []DeadChunk, touchedBeforeMs int64) ([]DeadChunk, error) {
+	var deleted []DeadChunk
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx,
-			`DELETE FROM chunks WHERE vault_id = ? AND chunk_id = ? AND touched_at < ? AND `+unreferenced,
-			c.VaultID, c.ChunkID, touchedBeforeMs)
-		if err != nil {
-			return fmt.Errorf("delete chunk: %w", err)
+		deleted = deleted[:0]
+		freed := map[string]int64{}
+		var order []string // vaults in first-seen order, for a stable update order
+		for _, c := range cs {
+			res, err := tx.ExecContext(ctx,
+				`DELETE FROM chunks WHERE vault_id = ? AND chunk_id = ? AND touched_at < ? AND `+unreferenced,
+				c.VaultID, c.ChunkID, touchedBeforeMs)
+			if err != nil {
+				return fmt.Errorf("delete chunk: %w", err)
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("delete chunk: %w", err)
+			}
+			if n == 0 {
+				continue
+			}
+			if _, seen := freed[c.VaultID]; !seen {
+				order = append(order, c.VaultID)
+			}
+			freed[c.VaultID] += c.Size
+			deleted = append(deleted, c)
 		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("delete chunk: %w", err)
-		}
-		if n == 0 {
-			return nil
-		}
-		deleted = true
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE vaults SET bytes_used = bytes_used - ? WHERE id = ?`, c.Size, c.VaultID); err != nil {
-			return fmt.Errorf("reduce usage: %w", err)
+		for _, vaultID := range order {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE vaults SET bytes_used = bytes_used - ? WHERE id = ?`, freed[vaultID], vaultID); err != nil {
+				return fmt.Errorf("reduce usage: %w", err)
+			}
 		}
 		return nil
 	})
-	return deleted, err
+	if err != nil {
+		return nil, err
+	}
+	return deleted, nil
 }
