@@ -19,7 +19,7 @@ export default function setup(project: TestProject): () => void {
   const serverDir = fileURLToPath(new URL('../../../server', import.meta.url));
   execFileSync('go', ['build', '-o', bin, './cmd/obsync'], {
     cwd: serverDir,
-    env: { ...process.env, CGO_ENABLED: '1', GOTOOLCHAIN: 'auto' },
+    env: { ...process.env, CGO_ENABLED: '0', GOTOOLCHAIN: 'auto' },
     stdio: 'inherit',
   });
   project.provide('obsyncBin', bin);

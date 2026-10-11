@@ -45,3 +45,9 @@ func AddMember(tb testing.TB, s *Store, vaultID, userID, role string) {
 		tb.Fatalf("add member: %v", err)
 	}
 }
+
+// DriverName is the database/sql driver the store opens.
+const DriverName = driverName
+
+// BundledSQLiteVersion is the SQLite version the driver ships.
+const BundledSQLiteVersion = bundledSQLiteVersion

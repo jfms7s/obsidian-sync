@@ -102,7 +102,7 @@ Settings come from environment variables (or a YAML file named by `OBSYNC_CONFIG
 |---|---|---|
 | `OBSYNC_LISTEN` | `:8080` | Address the HTTP server listens on |
 | `OBSYNC_DATA_DIR` | `/data` | Folder for the database and the encrypted chunks. obsync keeps it private (mode 0700, files 0600) |
-| `OBSYNC_DATABASE_URL`, `OBSYNC_DATABASE_AUTH_TOKEN` | `file:` in the data folder, none | A remote libSQL database (sqld or Turso) instead of the local file: `libsql://` or `https://`. With a token, `http://` is refused except to a loopback host, since the token would cross the network in clear |
+| `OBSYNC_DATABASE_URL`, `OBSYNC_DATABASE_AUTH_TOKEN` | `file:` in the data folder, none | The metadata database, a local SQLite file. Remote databases (`libsql://`, `http://`, `https://`) are reserved for clustered mode and are not supported yet: the server refuses to start with one |
 | `OBSYNC_DATABASE_SYNCHRONOUS` | `full` | How hard the database pushes each write to disk. `full` makes every accepted change survive a power cut. `normal` makes bulk uploads much faster (one disk flush per checkpoint instead of per write) and cannot corrupt the database, but a power cut or kernel crash of the host can lose the last few accepted changes; every device then treats the server as restored from a backup, keeps its own edits and uploads them again. A crash of obsync alone loses nothing. Local database file only |
 | `OBSYNC_TRUSTED_PROXIES` | none | Reverse proxies (addresses or CIDRs, comma separated) whose `X-Forwarded-For` is believed. Without it, every client appears to come from the proxy's address |
 | `OBSYNC_DEFAULT_QUOTA_BYTES` | 10 GiB | Storage per account (unique chunks plus kept history) |
@@ -184,7 +184,7 @@ deploy/    Compose stack with Caddy, systemd unit
 scripts/   Release checks
 ```
 
-You need Go (the `go.mod` pins the toolchain), Node 22.12 or newer (`.nvmrc`; on an older Node the plugin tests fail with "Cannot find native binding"), and a C compiler (the libSQL driver needs CGO).
+You need Go (the `go.mod` pins the toolchain), Node 22.12 or newer (`.nvmrc`; on an older Node the plugin tests fail with "Cannot find native binding"), and, for `make test` only, a C compiler: the server is pure Go and builds without one, but Go's race detector needs cgo.
 
 ```bash
 make tools            # buf, protoc-gen-go, golangci-lint into ./bin, and npm ci

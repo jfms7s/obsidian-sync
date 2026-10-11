@@ -1,5 +1,6 @@
-// Which paths are not synced (spec §9.1): a fixed default list plus the
-// user's own globs, stored per device.
+// Which paths are not synced (spec §9.1): a fixed default list, the vault's
+// own .obsyncignore (synced, so every device shares it) and the user's own
+// globs, stored per device. A path is ignored when any of them matches.
 
 /**
  * Never synced. The vault's configuration folder (Vault.configDir, usually
@@ -20,6 +21,14 @@ export const DEFAULT_IGNORES: readonly string[] = [
   '*.tmp',
   '*.swp',
 ];
+
+/**
+ * The vault-level ignore file, at the vault root. It syncs like any file so
+ * every device gets the same baseline, and no rule ever matches it: a `*`
+ * line would otherwise stop the file itself from syncing and strand every
+ * device on the rules it has.
+ */
+export const VAULT_IGNORE_FILE = '.obsyncignore';
 
 /** A glob uses syntax these rules do not support. */
 export class InvalidIgnorePatternError extends Error {
@@ -43,6 +52,30 @@ export function assertValidIgnorePatterns(patterns: readonly string[]): void {
     const why = validateIgnorePattern(p);
     if (why !== null) throw new InvalidIgnorePatternError(p, why);
   }
+}
+
+export interface ParsedIgnoreFile {
+  globs: string[];
+  /** Lines skipped for unsupported syntax, with their 1-based line number (blank and comment lines count). */
+  rejected: Array<{ line: number; pattern: string; why: string }>;
+}
+
+/**
+ * One glob per line; blank lines and lines starting with '#' are skipped,
+ * and so is a line that uses unsupported syntax: it is listed in rejected
+ * and the rest of the text still applies.
+ */
+export function parseIgnoreFile(text: string): ParsedIgnoreFile {
+  const globs: string[] = [];
+  const rejected: ParsedIgnoreFile['rejected'] = [];
+  text.split(/\r?\n/).forEach((raw, i) => {
+    const t = raw.trim();
+    if (t === '' || t.startsWith('#')) return;
+    const why = validateIgnorePattern(t);
+    if (why === null) globs.push(t);
+    else rejected.push({ line: i + 1, pattern: t, why });
+  });
+  return { globs, rejected };
 }
 
 function escape(ch: string): string {
@@ -84,21 +117,30 @@ export interface IgnoreOptions {
   defaults?: readonly string[];
   /** The vault's configuration folder (Vault.configDir), ignored in addition to the defaults. */
   configDir?: string;
+  /** The globs of the vault's .obsyncignore (parseIgnoreFile), ignored in addition to the defaults. */
+  vaultGlobs?: readonly string[];
 }
 
 export class IgnoreRules {
   private readonly res: RegExp[];
+  private readonly ci: boolean;
 
   /** Throws InvalidIgnorePatternError for a glob that uses unsupported syntax ('!', '['). */
   constructor(readonly userGlobs: readonly string[] = [], o: IgnoreOptions = {}) {
-    const ci = o.caseInsensitive ?? false;
+    const ci = (this.ci = o.caseInsensitive ?? false);
     const config = o.configDir?.replace(/^\/+|\/+$/g, '');
-    this.res = [...(o.defaults ?? DEFAULT_IGNORES), ...(config ? [`${config}/`] : []), ...userGlobs]
+    this.res = [...(o.defaults ?? DEFAULT_IGNORES), ...(config ? [`${config}/`] : []), ...(o.vaultGlobs ?? []), ...userGlobs]
       .filter((g) => g.trim() !== '' && !g.trim().startsWith('#'))
       .map((g) => compileGlob(g, ci));
   }
 
   matches(path: string): boolean {
+    if (isVaultIgnoreFile(path, this.ci)) return false;
     return this.res.some((re) => re.test(path));
   }
+}
+
+/** path is the vault's .obsyncignore (the one at the root; a nested one is an ordinary file). */
+export function isVaultIgnoreFile(path: string, caseInsensitive = false): boolean {
+  return caseInsensitive ? path.toLowerCase() === VAULT_IGNORE_FILE : path === VAULT_IGNORE_FILE;
 }
