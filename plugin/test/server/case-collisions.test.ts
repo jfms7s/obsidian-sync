@@ -92,6 +92,32 @@ describe('names that differ only in letter case', () => {
     expect(b.events.some((e) => e.type === 'notice' && e.code === 'CASE_COLLISION')).toBe(false);
   });
 
+  it('does not take a case-only rename of an older file for a rename of the file here (convergence seeds 251, 353)', async () => {
+    // The laptop renames its own new note before it ever syncs, so its
+    // version says "renamed from" a name the server only gets later, from
+    // the phone. On the phone the incoming name loses the collision and is
+    // shadowed; once the phone's own note has synced, a reconcile looks at
+    // that shadowed version again. It must not read it as a rename of the
+    // phone's note: that would overwrite the note with the laptop's text and
+    // then delete the old name everywhere.
+    const user = await newUser(srv);
+    const a = await makeClient(srv, user, { name: 'Laptop', vault: 'create', caseInsensitive: true });
+    const b = await makeClient(srv, user, { name: 'Phone', vault: a.vaultId, caseInsensitive: true });
+    const keeps = await nameKeepingCollision(a, 'todo.md', 'TODO.md');
+    const other = keeps === 'todo.md' ? 'TODO.md' : 'todo.md';
+    await a.adapter.write(keeps, text('laptop draft\n'));
+    await a.adapter.rename(keeps, other);
+    await a.engine.runCycle();
+    await b.adapter.write(keeps, text('phone note\n'));
+    await b.engine.runCycle(); // the laptop's file is shadowed here, the phone's note is pushed
+    expect(files(b.adapter)[keeps]).toBe('phone note\n');
+    await b.restart(); // reconciles: the shadowed version is applied again
+    await b.engine.runCycle();
+    await settle([a, b]);
+    for (const d of [a, b]) expect(Object.values(files(d.adapter)).sort()).toEqual(['laptop draft\n', 'phone note\n']);
+    expect(files(b.adapter)).toEqual(files(a.adapter));
+  });
+
   it('lets the name with the lower file id keep a collision on every case-insensitive device, whoever wrote it first', async () => {
     // File ids depend on the vault's naming key, so across fresh vaults the
     // lower one is sometimes the name the second device wrote and sometimes

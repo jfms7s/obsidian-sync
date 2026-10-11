@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
 import { fileIdFor } from '../../src/crypto/objects';
 import { fromHex, toHex } from '../../src/util/bytes';
+import { applyVersion } from '../../src/sync/apply';
 import { ServerRollbackError } from '../../src/sync/context';
 import { newestPerFile, PREFETCH_VERSIONS, pull, resolveConflict } from '../../src/sync/pull';
 import { PushMemory, pushRound } from '../../src/sync/push';
@@ -313,6 +314,35 @@ describe('pull', () => {
     await pull(d.ctx);
     expect(files(d.adapter)).toEqual({ 'TODO.md': '- milk\n' });
     expect(d.events.some((e) => e.type === 'notice' && e.code === 'CASE_COLLISION')).toBe(false);
+  });
+
+  /** The newest version of path on the server, applied on its own (as a reconcile does, in file id order). */
+  const applyNewest = async (d: Device, path: string) => {
+    const [v] = await d.api.history(d.vaultId, await fileIdFor(d.ring.namingKey, path));
+    expect(await applyVersion(d.ctx, v!)).toBe(true);
+  };
+
+  it('renames an edited file in place when its create arrives after the server deleted the old name', async () => {
+    const d = await device({ caseInsensitive: true });
+    await remoteCommit(d, 'todo.md', text('- milk\n'));
+    await pull(d.ctx);
+    await remoteCommit(d, 'TODO.md', text('- milk\n- eggs\n'), 'Remote', { renamedFrom: 'todo.md' });
+    await remoteCommit(d, 'todo.md', null);
+    await applyNewest(d, 'TODO.md');
+    expect(files(d.adapter)).toEqual({ 'TODO.md': '- milk\n- eggs\n' });
+    expect(d.events.some((e) => e.type === 'notice' && e.code === 'CASE_COLLISION')).toBe(false);
+  });
+
+  it('keeps both files when a case-only rename with other content names a file the server still has', async () => {
+    // renamed_from names a path, not a version: here the other device renamed
+    // a draft of its own that never synced, not the file this device holds.
+    const d = await device({ caseInsensitive: true });
+    await remoteCommit(d, 'todo.md', text('- milk\n'));
+    await pull(d.ctx);
+    await remoteCommit(d, 'TODO.md', text('a draft\n'), 'Remote', { renamedFrom: 'todo.md' });
+    await applyNewest(d, 'TODO.md');
+    expect(Object.values(files(d.adapter)).sort()).toEqual(['- milk\n', 'a draft\n']);
+    expect(d.events.some((e) => e.type === 'notice' && e.code === 'CASE_COLLISION')).toBe(true);
   });
 
   it('records its own landed commit as synced when the pull returns it', async () => {
