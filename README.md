@@ -59,7 +59,7 @@ The image is published as `ghcr.io/jfms7s/obsync` with a tag for every release. 
 
 ### Without Docker
 
-Release archives contain the `obsync` binary for Linux (amd64 and arm64) and the example systemd unit. Run the steps below from inside the extracted archive:
+Each release has a static `obsync` binary for Linux (amd64, arm64), macOS (amd64, arm64) and Windows (amd64): `obsync_X.Y.Z_<os>_<arch>.tar.gz`, or `.zip` for Windows. The Linux archives also contain the example systemd unit. On Linux, run the steps below from inside the extracted archive:
 
 ```bash
 tar -xzf obsync_X.Y.Z_linux_amd64.tar.gz      # or _arm64
@@ -78,7 +78,7 @@ sudo sh -c 'set -a; OBSYNC_DATA_DIR=/var/lib/obsync; . /etc/obsync/obsync.env; e
 
 Put a reverse proxy with TLS in front of it (the compose example's `Caddyfile` is a few lines). The server itself speaks plain HTTP on `OBSYNC_LISTEN` (default `:8080`; the systemd unit binds `127.0.0.1:8080`). With the proxy on the same machine, set `OBSYNC_TRUSTED_PROXIES=127.0.0.1,::1` in `/etc/obsync/obsync.env`, so that rate limits see each client's own address instead of the proxy's.
 
-- The server is built for Linux. On any other system (macOS, Windows) run the Docker image.
+- On macOS and Windows, run `obsync serve` under the service manager you use (launchd, a Windows service wrapper); only the systemd unit ships. Set `OBSYNC_DATA_DIR` (or `data_dir`) and `OBSYNC_LISTEN` as on Linux. obsync makes its data folder private on Unix systems (macOS included). On Windows, new files inherit the folder's ACL, so give the data folder an ACL that only the service's account can read.
 
 ### Managing accounts and devices
 
