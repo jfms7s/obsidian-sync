@@ -3,7 +3,7 @@
 import { fileIdFor } from '../crypto/objects';
 import { equalBytes, toHex } from '../util/bytes';
 import { normalizePath } from '../util/path';
-import { isCoarseMtime } from '../vault/adapter';
+import { isCoarseMtime, type FileStat } from '../vault/adapter';
 import { alreadyApplied, applyHead, isSyncedHere } from './apply';
 import { hashHex } from './content';
 import type { FileRecord } from '../state/store';
@@ -18,6 +18,33 @@ export interface ReconcileResult {
   vaultSeq: number;
   /** Files not written locally because another file or a folder holds their name. */
   shadowed: number;
+}
+
+/** How many local files reconcile looks up (file id and stat) at a time. */
+export const RECONCILE_CONCURRENCY = 8;
+
+/** One local file as step 2 of reconcile found it; st is only looked up for a file synced here. */
+interface LocalLook {
+  path: string;
+  fileId: string;
+  rec: FileRecord | undefined;
+  st?: FileStat | null;
+  /** The stat threw (not a cycle error, which fails the reconcile). */
+  statFailed?: boolean;
+}
+
+/** fn over items with at most limit calls running at once; the results keep the items' order. */
+async function mapConcurrently<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
 }
 
 /**
@@ -41,18 +68,20 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
 
   // 0. A server restored from a backup (whatever its seq says now).
   const heads = await remoteHeads(ctx);
-  if (await serverLostHistory(ctx, heads)) {
+  const before = new Map((await state.allFiles()).map((r) => [r.fileId, r]));
+  if (await serverLostHistory(ctx, heads, before.values())) {
     // A loop, not Math.max(...): spreading 125,000+ heads overflows the call stack.
     let top = 0;
     for (const h of heads) if (h.seq > top) top = h.seq;
     throw new ServerRollbackError(await state.getCursor(), top);
   }
 
-  // 1. Remote heads this device has not applied (failed files after their backoff).
+  // 1. Remote heads this device has not applied (failed files after their
+  // backoff). The records from before step 1 do: each head is another file,
+  // and one applied here is not looked at again in this step.
   for (const head of heads) {
     const fileId = toHex(head.fileId);
-    const rec = await state.getFile(fileId);
-    if (alreadyApplied(rec, toHex(head.versionId), ctx) || (await isDeferred(ctx, applyKey(fileId)))) continue;
+    if (alreadyApplied(before.get(fileId), toHex(head.versionId), ctx) || (await isDeferred(ctx, applyKey(fileId)))) continue;
     const history = await ctx.api.history(ctx.ring.vaultId, head.fileId);
     const v = history.find((x) => equalBytes(x.versionId, head.versionId));
     if (v) {
@@ -62,10 +91,15 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
     }
   }
 
-  // 2. Local files that are new or changed without an event.
+  // 2. Local files that are new or changed without an event. Step 1 changed
+  // records, so they are loaded again. File ids and stats are worked out a
+  // few at a time (each stat is a bridge hop on mobile); the results are
+  // then taken in path order, so dirty entries get their generations in
+  // the same order as before.
   const records = new Map((await state.allFiles()).map((r) => [r.fileId, r]));
   const present = new Set<string>();
   let shadowed = 0;
+  const paths: string[] = [];
   // A folder the ignore rules match is skipped whole (so is everything in it).
   for (const raw of await adapter.list((folder) => ctx.ignore.matches(`${folder}/`))) {
     let path: string;
@@ -74,22 +108,29 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
     } catch {
       continue;
     }
-    if (ctx.ignore.matches(path)) continue;
+    if (!ctx.ignore.matches(path)) paths.push(path);
+  }
+  const looked = await mapConcurrently(paths, RECONCILE_CONCURRENCY, async (path): Promise<LocalLook> => {
     const fileId = toHex(await fileIdFor(ctx.ring.namingKey, path));
-    present.add(fileId);
     const rec = records.get(fileId);
+    if (rec?.shadowed || !isSyncedHere(rec) || rec.deleted) return { path, fileId, rec };
+    try {
+      return { path, fileId, rec, st: await adapter.stat(path) };
+    } catch (err) {
+      if (isCycleError(err)) throw err;
+      return { path, fileId, rec, statFailed: true };
+    }
+  });
+  for (const { path, fileId, rec, st, statFailed } of looked) {
+    present.add(fileId);
     if (rec?.shadowed) continue;
     if (!isSyncedHere(rec) || rec.deleted) {
       await state.markDirty(path);
       markedDirty++;
       continue;
     }
-    let st: Awaited<ReturnType<typeof adapter.stat>>;
-    try {
-      st = await adapter.stat(path);
-    } catch (err) {
+    if (statFailed) {
       // One unreadable file must not fail the cycle: push reports it for this file.
-      if (isCycleError(err)) throw err;
       await state.markDirty(path);
       markedDirty++;
       continue;
