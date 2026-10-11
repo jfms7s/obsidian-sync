@@ -58,7 +58,12 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts Option
 	if err != nil {
 		return nil, err
 	}
-	blobs, err := blob.NewFS(cfg.BlobFSDir)
+	blobs, err := OpenBlobs(cfg)
+	if err != nil {
+		st.Close()
+		return nil, err
+	}
+	b, err := OpenBus(cfg)
 	if err != nil {
 		st.Close()
 		return nil, err
@@ -68,7 +73,6 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts Option
 		st.Close()
 		return nil, err
 	}
-	b := bus.NewMemory()
 	h := hub.New(authSvc, st, b, log, hub.Options{})
 	syncSvc := syncsvc.New(st, blobs, b, syncsvc.Limits{MaxFileSizeBytes: cfg.MaxFileSizeBytes}, log)
 	handler := api.NewHandler(api.Deps{
@@ -76,7 +80,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts Option
 		Sync:  syncSvc,
 		Store: st,
 		Hub:   h,
-		Ready: func(ctx context.Context) error { return errors.Join(st.Ping(ctx), blobs.Ping(ctx)) },
+		Ready: readiness(st, blobs, b),
 		Log:   log,
 		RateLimits: api.RateLimits{
 			DeviceRPS:      cfg.RateLimit.DeviceRPS,
@@ -137,6 +141,45 @@ func OpenStore(ctx context.Context, cfg config.Config) (*store.Store, error) {
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
 	return st, nil
+}
+
+// OpenBlobs builds the configured blob store. Every command that touches
+// blobs uses it, so serve and admin always agree on where blobs live.
+func OpenBlobs(cfg config.Config) (blob.Store, error) {
+	switch cfg.BlobBackend {
+	case "fs":
+		return blob.NewFS(cfg.BlobFSDir)
+	default:
+		// config.Validate rejects it first.
+		return nil, fmt.Errorf("blob backend %q is not supported", cfg.BlobBackend)
+	}
+}
+
+// OpenBus builds the notification bus: in memory on a single node.
+func OpenBus(cfg config.Config) (bus.Bus, error) {
+	if cfg.Cluster {
+		// config.Validate rejects it first.
+		return nil, errors.New("cluster mode is not available yet: there is no shared bus")
+	}
+	return bus.NewMemory(), nil
+}
+
+// readiness checks every backend that can be checked: the ones with a Ping
+// method. A backend without one (the in-memory bus) has nothing to fail.
+func readiness(backends ...any) func(context.Context) error {
+	var checks []func(context.Context) error
+	for _, b := range backends {
+		if p, ok := b.(interface{ Ping(context.Context) error }); ok {
+			checks = append(checks, p.Ping)
+		}
+	}
+	return func(ctx context.Context) error {
+		errs := make([]error, 0, len(checks))
+		for _, check := range checks {
+			errs = append(errs, check(ctx))
+		}
+		return errors.Join(errs...)
+	}
 }
 
 func (a *App) Close() error { return a.Store.Close() }
