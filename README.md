@@ -207,20 +207,21 @@ journalctl --user -u obsync-cli -f
 loginctl enable-linger "$USER"         # optional: keep it running while you are logged out
 ```
 
-`obsync-cli status` shows the account, the vault, the folder, whether the daemon runs and what it is doing, and recent warnings. Exit codes: 0 ok, 1 error, 2 when you must log in, unlock or choose a vault first (the unit does not restart on 2). For a timer or cron job instead of a service, use `sync --once`.
+`obsync-cli status` shows the account, the vault, the folder, whether the daemon runs and what it is doing, and recent warnings. Exit codes: 0 ok, 1 error, 2 when a person must act: log in, unlock, choose a vault, or check the folder (the first sync needs `--init`; the folder is missing, empty although files were synced from it, or not the one this login syncs). The unit does not restart on 2. For a timer or cron job instead of a service, use `sync --once`.
 
 ### With Obsidian on the same folder
 
-Obsidian's plugin and the CLI on one folder would each take the other's writes for new edits. So they take turns: while Obsidian syncs the folder, its plugin keeps a heartbeat file in its own folder (`.obsidian/plugins/obsync/active`), and the daemon pauses. It resumes at most 10 seconds after Obsidian closes (90 seconds if Obsidian was killed), with a full comparison of the folder and the server. If your vault's configuration folder is not `.obsidian`, pass `--config-dir`.
+Obsidian's plugin and the CLI on one folder would each take the other's writes for new edits. So they take turns: while Obsidian syncs the folder, its plugin keeps a heartbeat file in its own folder (`.obsidian/plugins/obsync/active`, rewritten every 30 seconds), and the daemon pauses within 10 seconds, after the sync round it is in. It resumes within about 10 seconds after Obsidian closes, or about 100 seconds if Obsidian was killed (the heartbeat then has to go stale), with a full comparison of the folder and the server. If your vault's configuration folder is not `.obsidian`, pass `--config-dir`.
 
 ### Good to know
 
-- **The state directory holds this device's keys.** It is `~/.local/state/obsync-cli/default/` (mode 0700; `$XDG_STATE_HOME` moves it, `--name` keeps several apart, `--state-dir` sets it), with the session token and the unlocked keys: the same secrets the plugin keeps in Obsidian's database on that machine. Keep it out of backups you do not trust. `obsync-cli logout` revokes the device on the server and deletes the state.
+- **The state directory holds this device's keys.** It is `~/.local/state/obsync-cli/default/` (mode 0700; `$XDG_STATE_HOME` moves it, `--name` keeps several apart, `--state-dir` sets it), with the session token and the unlocked keys: the same secrets the plugin keeps in Obsidian's database on that machine. Keep it out of backups you do not trust. `obsync-cli logout` revokes the device on the server and deletes the state (if the server cannot be reached, it says so and deletes the state anyway: then remove the device from another one).
 - **Deleted files go to the folder's `.trash/`** (never synced), like Obsidian's "Move to Obsidian trash" setting; `--no-trash` deletes them for good. The server keeps the content for the history view either way.
 - **A large deletion waits for you.** If more than 50 files and a fifth of the vault disappear from the folder at once (an unmounted disk, a wrong `git checkout`), the deletion is held instead of reaching your other devices. `obsync-cli deletions` lists it; `--release` deletes the files everywhere, `--restore` brings them back here.
 - **Symbolic links are not synced** (a link to a file is reported as a failed file, never as a deletion), and nothing is read or written through a linked folder.
 - The same files are skipped as in Obsidian: `.trash/`, `.git/`, the configuration folder, operating-system junk files, and whatever the vault's `.obsyncignore` lists.
-- One command at a time per state: `login`, `unlock`, `vaults --choose`, `deletions` and `logout` wait for the daemon to stop (`systemctl --user stop obsync-cli`).
+- One process at a time per state: `login`, `unlock`, `vaults --choose`, `deletions --release`/`--restore` and `logout` are refused while the daemon runs; stop it first (`systemctl --user stop obsync-cli`).
+- **A folder that is gone or empty is not taken for deleted files.** If the folder's disk is unmounted while the daemon runs, it retries until the folder is back; at start, a missing folder, or an empty one from which files were synced, stops it with exit code 2.
 
 ## Troubleshooting
 

@@ -26,7 +26,8 @@ ExecStart=/usr/bin/node %h/.local/lib/obsync/obsync-cli.mjs sync --vault-dir %h/
 Restart=on-failure
 RestartSec=30s
 RestartPreventExitStatus=2
-# The daemon finishes the cycle in progress and saves its state on SIGTERM.
+# On SIGTERM the daemon finishes the cycle in progress and saves its state; a
+# cycle longer than this is killed, and the next start replays it safely.
 TimeoutStopSec=60s
 NoNewPrivileges=yes
 
