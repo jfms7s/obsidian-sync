@@ -9,6 +9,7 @@ import type { LocalState } from '../state/store';
 import type { ShellController, StartResult } from './controller';
 import { describeError } from './errors';
 import { ConfirmModal, TrashModal } from './history-modal';
+import { parseIgnoreFile, VAULT_IGNORE_FILE } from '../vault/ignore';
 import { formatIgnoreText, parseIgnoreText } from './ignore-text';
 import { describePlatform } from './platform';
 import { SetupController, type RemoteVaults } from './setup-controller';
@@ -33,6 +34,7 @@ interface Form {
   recoveryWords: string;
   vaultName: string;
   ignoreText: string | null;
+  vaultIgnoreText: string | null;
 }
 
 /** A text area for typed text that is not prose (recovery words, ignore rules): no spell check or autocorrect. */
@@ -55,7 +57,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
     this.setup = new SetupController({ state, fetch, shell });
     this.form = {
       server: '', username: '', password: '', deviceName: describePlatform().name, passphrase: '', passphrase2: '', recoveryWords: '',
-      vaultName: app.vault.getName(), ignoreText: null,
+      vaultName: app.vault.getName(), ignoreText: null, vaultIgnoreText: null,
     };
   }
 
@@ -264,6 +266,9 @@ export class ObsyncSettingTab extends PluginSettingTab {
     this.containerEl.createEl('p', {
       text: 'Before the first sync, list the files and folders this device should not sync, for example .venv/ or node_modules/. Nothing is uploaded or downloaded until you start.',
     });
+    this.containerEl.createEl('p', {
+      text: `Rules the vault already keeps in ${VAULT_IGNORE_FILE} apply on every device too: they arrive before anything else and can be edited here once syncing has started.`,
+    });
     this.ignoreEditor('Start syncing', async (globs, button) => {
       const started = await this.setup.confirmIgnores(globs);
       this.form.ignoreText = null;
@@ -300,6 +305,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
       })));
     }
     await this.renderHeldDeletions();
+    this.renderVaultIgnore();
     this.renderIgnore();
     new Setting(this.containerEl).setName('Deleted files').setDesc('Restore a file that was deleted. To see the earlier versions of a note, use the history command or the note\'s menu.')
       .addButton((b) => b.setButtonText('Show deleted files').onClick(() => new TrashModal(this.app, this.shell).open()));
@@ -332,6 +338,41 @@ export class ObsyncSettingTab extends PluginSettingTab {
       }));
   }
 
+  /**
+   * The vault's .obsyncignore, which Obsidian neither lists nor opens (it
+   * is a hidden file): on a phone this is the only place to edit it. Lines
+   * with unsupported syntax are saved but skipped, and listed below.
+   */
+  private renderVaultIgnore(): void {
+    const f = this.form;
+    const skipped = this.containerEl.createDiv({ cls: 'obsync-error' });
+    const showSkipped = (text: string): void => {
+      skipped.empty();
+      for (const r of parseIgnoreFile(text).rejected) skipped.createDiv({ text: `Line ${r.line} is skipped: ${r.pattern} — ${r.why}` });
+    };
+    const current = async (): Promise<string> => f.vaultIgnoreText ?? (await this.shell.vaultIgnoreText());
+    new Setting(this.containerEl).setName('Ignored on every device')
+      .setDesc(`Patterns every device of this vault does not sync, in addition to its own list below; saved in ${VAULT_IGNORE_FILE} at the vault root, which syncs like a note. Same syntax as below.`)
+      .addTextArea((a) => {
+        plainTextArea(a, 4);
+        a.onChange((v) => (f.vaultIgnoreText = v));
+        void (async () => {
+          const text = await current();
+          a.setValue(text);
+          showSkipped(text);
+        })().catch((err: unknown) => skipped.setText(describeError(err).message));
+      })
+      .addButton((b) => b.setButtonText('Save for every device').onClick(this.action(b, async () => {
+        const text = await current();
+        const parsed = await this.shell.setVaultIgnoreText(text);
+        f.vaultIgnoreText = null;
+        showSkipped(text);
+        const n = parsed.rejected.length;
+        new Notice(n === 0 ? 'Obsync: rules for every device saved.' : `Obsync: rules for every device saved; ${n} ${n === 1 ? 'line is' : 'lines are'} skipped (see the settings).`);
+        b.setDisabled(false);
+      })));
+  }
+
   private renderIgnore(): void {
     this.ignoreEditor('Save', async (globs, button) => {
       await this.shell.setIgnoreGlobs(globs);
@@ -349,7 +390,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
   private ignoreEditor(buttonText: string, save: (globs: string[], button: ButtonComponent) => Promise<void>, cta = false): void {
     const f = this.form;
     const errors = this.containerEl.createDiv({ cls: 'obsync-error' });
-    new Setting(this.containerEl).setName('Ignored files').setDesc('Patterns of files and folders this device does not sync, one per line. A folder ends with a slash. Lines starting with # are comments.')
+    new Setting(this.containerEl).setName('Ignored files').setDesc('Patterns of files and folders this device does not sync, one per line. A folder ends with a slash. Lines starting with # are comments. Negation (!) and character classes ([...]) are not supported.')
       .addTextArea((a) => {
         plainTextArea(a, 6);
         a.onChange((v) => (f.ignoreText = v));
