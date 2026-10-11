@@ -407,3 +407,26 @@ func TestRunPassReportsAndReleasesTheLease(t *testing.T) {
 		t.Fatalf("err = %v, want ErrLeaseHeld while another process holds the lease", err)
 	}
 }
+
+// Between passes the lease is free, so an export (obsync admin export) or an
+// on-demand pass can take it while the server runs; it waits only for a
+// pass in progress.
+func TestRunOnceGivesTheLeaseBackAfterThePass(t *testing.T) {
+	ctx := context.Background()
+	st, clk := storetest.New(t)
+	blobs, _ := blob.NewFS(t.TempDir())
+	r := jobs.New(st, blobs, jobs.Config{Interval: time.Hour, Retention: config.Retention{TrashDays: 30}, GCGrace: time.Hour}, clk.Now, discard())
+	if err := r.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := st.AcquireLease(ctx, jobs.LeaseName, "export-test", time.Minute); !ok {
+		t.Fatal("the runner kept the lease after its pass")
+	}
+	// While someone else holds it, the next pass does nothing and leaves it.
+	if err := r.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := st.AcquireLease(ctx, jobs.LeaseName, "someone-else", time.Minute); ok {
+		t.Fatal("a skipped pass released another holder's lease")
+	}
+}
