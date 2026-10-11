@@ -252,7 +252,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
       return;
     }
     const begin = async (button: ButtonComponent): Promise<void> => {
-      const started = await this.shell.start();
+      const started = await this.shell.start({ byUser: true });
       if (!started.ok) {
         const message = `Sync could not start: ${START_FAILURES[started.reason]}`;
         this.errorEl?.setText(message);
@@ -269,7 +269,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
         .setDesc(`Created ${new Date(v.createdAtMs).toLocaleDateString()}`)
         .addButton((b) => {
           b.setButtonText('Use this vault').onClick(this.action(b, async () => {
-            await this.shell.stop();
+            await this.shell.stopForGood();
             await vaults.chooseVault(this.state, api, session, keys, v.vaultId);
             await begin(b);
           }));
@@ -279,7 +279,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
     this.text('New vault name', 'Create a new, empty vault on the server for this one.', () => f.vaultName, (v) => (f.vaultName = v));
     new Setting(this.containerEl).addButton((b) => b.setButtonText('Create vault').setCta().onClick(this.action(b, async () => {
       if (f.vaultName.trim() === '') throw new Error('Give the vault a name.');
-      await this.shell.stop();
+      await this.shell.stopForGood();
       await vaults.createVault(this.state, api, session, keys, f.vaultName.trim());
       await begin(b);
     })));
@@ -297,7 +297,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
       }));
     if (this.shell.status === 'stopped') {
       new Setting(this.containerEl).setName('Sync is not running').addButton((b) => b.setButtonText('Start').setCta().onClick(this.action(b, async () => {
-        await this.shell.start();
+        await this.shell.start({ byUser: true });
         await this.render();
       })));
     }

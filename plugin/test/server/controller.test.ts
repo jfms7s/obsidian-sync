@@ -1,10 +1,13 @@
 // The shell's controller and history controller, against the real server.
-import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
 import { InvalidIgnorePatternError } from '../../src/vault/ignore';
 import { createEngineLock } from '../../src/shell/engine-lock';
 import { HistoryController } from '../../src/shell/history-controller';
 import { ShellController, type ShellOptions } from '../../src/shell/controller';
+import { SyncEngine } from '../../src/sync/engine';
 import type { EngineEvent } from '../../src/sync/events';
+import type { EngineLock } from '../../src/shell/engine-lock';
+import type { LocalState } from '../../src/state/store';
 import { makeClient, settle } from '../helpers/client';
 import { files, newDevice, newUser, text, type Device } from '../helpers/fixture';
 import { startServer, type TestServer } from '../helpers/server';
@@ -22,6 +25,54 @@ function controllerFor(dev: Device, extra: Partial<ShellOptions> = {}): ShellCon
     state: dev.state, adapter: dev.adapter, configDir: '.obsidian', fetch: dev.net.fetch, webSocket: null, autoRun: false,
     lock: createEngineLock('test-vault', { locks: null, registry: new Map() }), clock: dev.clock, random: dev.random, ...extra,
   });
+}
+
+/** Whether the lock can be taken at once (and gives it straight back). */
+async function lockIsFree(lock: EngineLock): Promise<boolean> {
+  const release = await Promise.race([lock.acquire(), flush().then(() => null)]);
+  release?.();
+  return release !== null;
+}
+
+/** Makes engine.stop() wait until the returned function is called. */
+function slowStop(engine: SyncEngine): () => void {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  const real = engine.stop.bind(engine);
+  engine.stop = async () => {
+    await gate;
+    await real();
+  };
+  return open;
+}
+
+/**
+ * A state whose first read of key waits until the returned function is
+ * called, after the read: a start in progress (holding the lock) has
+ * already taken the value it read.
+ */
+function gatedRead(state: LocalState, key: 'getSession' | 'ignoreGlobs'): { state: LocalState; open: () => void } {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  let first = true;
+  const proxy = new Proxy(state, {
+    get(target, prop) {
+      const value = Reflect.get(target, prop, target) as unknown;
+      if (typeof value !== 'function') return value;
+      const fn = value as (...args: unknown[]) => unknown;
+      const gated = key === 'getSession' ? prop === 'getSession' : prop === 'getSetting';
+      if (!gated) return fn.bind(target);
+      return async (...args: unknown[]) => {
+        const result = await fn.apply(target, args);
+        if (first && (key === 'getSession' || args[0] === 'ignoreGlobs')) {
+          first = false;
+          await gate;
+        }
+        return result;
+      };
+    },
+  });
+  return { state: proxy, open };
 }
 
 describe('ShellController', () => {
@@ -124,6 +175,115 @@ describe('ShellController', () => {
     expect(c.engine).toBeNull();
   });
 
+  it('returns from a second concurrent stop only once the engine has stopped and the lock is free', async () => {
+    const user = await newUser(srv);
+    const dev = await newDevice(srv, user, { name: 'Laptop', vault: 'create' });
+    const lock = createEngineLock('vault', { locks: null, registry: new Map() });
+    const c = controllerFor(dev, { lock });
+    await c.start();
+    const engine = c.engine!;
+    const finishStop = slowStop(engine);
+    const first = c.stop();
+    let secondDone = false;
+    const second = c.stop().then(() => {
+      secondDone = true;
+    });
+    await flush();
+    expect(secondDone).toBe(false);
+    finishStop();
+    await second;
+    expect(engine.status).toBe('stopped');
+    expect(await lockIsFree(lock)).toBe(true);
+    await first;
+  });
+
+  it('leaves no engine running and the lock free after stop, start, stop', async () => {
+    const user = await newUser(srv);
+    const dev = await newDevice(srv, user, { name: 'Laptop', vault: 'create' });
+    const lock = createEngineLock('vault', { locks: null, registry: new Map() });
+    const c = controllerFor(dev, { lock });
+    await c.start();
+    const engine = c.engine!;
+    const finishStop = slowStop(engine);
+    const stops = [c.stop()];
+    const again = c.start();
+    stops.push(c.stop());
+    setTimeout(finishStop, 30);
+    await stops[1];
+    expect(engine.status).toBe('stopped');
+    expect(c.engine).toBeNull();
+    expect(await lockIsFree(lock)).toBe(true);
+    expect(await again).toEqual({ ok: false, reason: 'stopped' });
+    await Promise.all(stops);
+    expect(c.engine).toBeNull();
+  });
+
+  it('runs no engine after a logout during a start, even when something asks to start again meanwhile', async () => {
+    const user = await newUser(srv);
+    const dev = await newDevice(srv, user, { name: 'Laptop', vault: 'create' });
+    const { state, open } = gatedRead(dev.state, 'getSession');
+    const lock = createEngineLock('vault', { locks: null, registry: new Map() });
+    const c = controllerFor(dev, { state, lock });
+    const first = c.start();
+    await flush();
+    const out = c.logout();
+    const automatic = c.start(); // e.g. the plugin's start when the layout is ready
+    open();
+    await out;
+    expect(c.engine).toBeNull();
+    expect(await dev.state.getSession()).toBeUndefined();
+    await first;
+    expect(await automatic).toEqual({ ok: false, reason: 'stopped' });
+    expect(c.engine).toBeNull();
+    expect(await lockIsFree(lock)).toBe(true);
+  });
+
+  it('applies ignore rules saved while a start is in progress', async () => {
+    const user = await newUser(srv);
+    const dev = await newDevice(srv, user, { name: 'Laptop', vault: 'create' });
+    const other = await makeClient(srv, user, { name: 'Phone', vault: dev.vaultId });
+    const { state, open } = gatedRead(dev.state, 'ignoreGlobs');
+    const c = controllerFor(dev, { state });
+    const starting = c.start();
+    await flush(); // the start has read the old rules and holds the lock
+    const saving = c.setIgnoreGlobs(['Scratch/']);
+    await flush();
+    open();
+    await saving;
+    expect(await starting).toEqual({ ok: true });
+    await dev.adapter.write('Scratch/s.md', text('scratch\n'));
+    await dev.adapter.write('keep.md', text('keep\n'));
+    await c.engine!.runCycle();
+    await settle([other]);
+    expect(files(other.adapter)).toEqual({ 'keep.md': 'keep\n' });
+    await c.stop();
+  });
+
+  it('detaches the engine and gives the lock back when the engine fails to start', async () => {
+    const user = await newUser(srv);
+    const dev = await newDevice(srv, user, { name: 'Laptop', vault: 'create' });
+    const lock = createEngineLock('vault', { locks: null, registry: new Map() });
+    const c = controllerFor(dev, { lock });
+    const events: EngineEvent[] = [];
+    c.on((e) => events.push(e));
+    let failed: SyncEngine | null = null;
+    const start = vi.spyOn(SyncEngine.prototype, 'start').mockImplementationOnce(async function (this: SyncEngine) {
+      failed = this;
+      throw new Error('boom');
+    });
+    try {
+      await expect(c.start()).rejects.toThrow('boom');
+    } finally {
+      start.mockRestore();
+    }
+    expect(c.engine).toBeNull();
+    expect(await lockIsFree(lock)).toBe(true);
+    (failed! as unknown as { emit(e: EngineEvent): void }).emit({ type: 'status', status: 'synced' });
+    expect(events).toEqual([]);
+    expect(await c.start()).toEqual({ ok: true }); // a later start works
+    await c.stop();
+  });
+
   it('does not sync the configuration folder, whatever it is called, and applies the user\'s ignore rules', async () => {
     const user = await newUser(srv);
     const dev = await newDevice(srv, user, { name: 'Laptop', vault: 'create' });
@@ -151,7 +311,8 @@ describe('ShellController', () => {
     await c.logout();
     expect(c.engine).toBeNull();
     expect(await dev.state.getSession()).toBeUndefined();
-    expect(await c.start()).toEqual({ ok: false, reason: 'not-logged-in' });
+    expect(await c.start()).toEqual({ ok: false, reason: 'stopped' }); // stopped for good: only the user starts again
+    expect(await c.start({ byUser: true })).toEqual({ ok: false, reason: 'not-logged-in' });
   });
 });
 
