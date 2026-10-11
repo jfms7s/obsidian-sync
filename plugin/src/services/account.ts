@@ -8,9 +8,9 @@ import {
   createKeyBundle, rewrapPassphrase, unlockWithPassphrase, unlockWithRecoveryWords, userKeysFromSecrets,
   DEFAULT_ARGON2, type Argon2Params, type UserKeys,
 } from '../crypto/userkeys';
-import { CryptoError } from '../crypto/primitives';
+import { CryptoError, hmacSha256 } from '../crypto/primitives';
 import type { LocalState, PendingKeySetup, Session } from '../state/store';
-import { equalBytes } from '../util/bytes';
+import { equalBytes, utf8 } from '../util/bytes';
 import type { Clock } from '../util/clock';
 import { cryptoRandom, type Random } from '../util/random';
 
@@ -87,6 +87,38 @@ export class SetupPassphraseMismatchError extends Error {
     super('the keys were already set up with the passphrase entered first; use that one, or change it in the settings');
     this.name = 'SetupPassphraseMismatchError';
   }
+}
+
+/**
+ * Thrown when the new encryption passphrase is the account password. The
+ * server sees the account password at every sign-in, so a passphrase equal
+ * to it would let the server open the keys.
+ */
+export class PassphraseIsPasswordError extends Error {
+  constructor() {
+    super('Choose a passphrase that is different from your account password.');
+    this.name = 'PassphraseIsPasswordError';
+  }
+}
+
+/**
+ * A salted digest of the account password, so the setup screen can refuse a
+ * passphrase equal to it without keeping the password. Keep it in memory
+ * only: never store it.
+ */
+export interface PasswordFingerprint {
+  salt: Uint8Array;
+  digest: Uint8Array;
+}
+
+export async function passwordFingerprint(password: string, random: Random = cryptoRandom): Promise<PasswordFingerprint> {
+  const salt = random.bytes(32);
+  return { salt, digest: await hmacSha256(salt, utf8(password)) };
+}
+
+/** Whether candidate is the password fp was made from. */
+export async function matchesPassword(fp: PasswordFingerprint, candidate: string): Promise<boolean> {
+  return equalBytes(await hmacSha256(fp.salt, utf8(candidate)), fp.digest);
 }
 
 const samePublicKeys = (a: KeyBundleFields, b: KeyBundleFields) =>
@@ -256,11 +288,13 @@ export async function loadUserKeys(state: LocalState, userId: string): Promise<U
 /**
  * Changes the encryption passphrase. The server requires the account
  * (login) password to replace the bundle: a wrong one is ApiError
- * WRONG_PASSWORD (403).
+ * WRONG_PASSWORD (403). A new passphrase equal to the account password is
+ * PassphraseIsPasswordError, before any request.
  */
 export async function changePassphrase(
   api: ApiClient, session: Session, keys: UserKeys, newPassphrase: string, accountPassword: string, random: Random = cryptoRandom,
 ): Promise<void> {
+  if (newPassphrase === accountPassword) throw new PassphraseIsPasswordError();
   const current = await bundleOrThrow(api);
   await api.putKeyBundle(await rewrapPassphrase(current, session.userId, keys, newPassphrase, random), accountPassword);
 }

@@ -8,7 +8,7 @@ import { Argon2TooCostlyError, createKeyBundle, generateUserKeys } from '../../s
 import { deriveEpochKeys, sealKey } from '../../src/crypto/vaultkeys';
 import {
   acknowledgeRecoveryWords, apiFor, changePassphrase, KeysAlreadySetUpError, keyStatus, listDevices, login, logout,
-  recoveryWordsToConfirm, revokeDevice, SetupPassphraseMismatchError, setupKeys, unlockWithPassphraseService, unlockWithRecoveryService,
+  matchesPassword, PassphraseIsPasswordError, passwordFingerprint, recoveryWordsToConfirm, revokeDevice, SetupPassphraseMismatchError, setupKeys, unlockWithPassphraseService, unlockWithRecoveryService,
 } from '../../src/services/account';
 import { chooseVault, createVault, listRemoteVaults, openVaultKeys } from '../../src/services/vaults';
 import { LocalState } from '../../src/state/store';
@@ -214,6 +214,24 @@ describe('account and keys', () => {
       .rejects.toMatchObject({ code: ErrorCode.WRONG_PASSWORD, status: 403 });
     await changePassphrase(api, session, keys, 'new passphrase', 'carol-password', seededRandom(3));
     expect((await unlockWithPassphraseService(await newState('d5'), api, session, 'new passphrase')).encPub).toEqual(keys.encPub);
+  });
+
+  it('refuses a new passphrase equal to the account password before sending anything', async () => {
+    const s = await newState('d4b');
+    const session = await login(s, srv.url, 'carol', 'carol-password', 'Desk', 'linux');
+    const net = new Net();
+    await expect(changePassphrase(apiFor(session, { fetch: net.fetch }), session, generateUserKeys(seededRandom(4)), 'carol-password', 'carol-password', seededRandom(4)))
+      .rejects.toBeInstanceOf(PassphraseIsPasswordError);
+    expect(net.log).toEqual([]);
+  });
+
+  it('recognises the account password from its fingerprint, and nothing else', async () => {
+    const fp = await passwordFingerprint('carol-password', seededRandom(5));
+    expect(await matchesPassword(fp, 'carol-password')).toBe(true);
+    expect(await matchesPassword(fp, 'carol-password ')).toBe(false);
+    expect(await matchesPassword(fp, 'another passphrase')).toBe(false);
+    const other = await passwordFingerprint('carol-password', seededRandom(6));
+    expect(toHex(other.digest)).not.toBe(toHex(fp.digest));
   });
 
   it('lists and revokes devices, and a logged-out device is refused', async () => {
