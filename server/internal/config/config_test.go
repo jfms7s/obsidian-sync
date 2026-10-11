@@ -380,3 +380,35 @@ func TestLogValueIncludesRateLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricsListen(t *testing.T) {
+	cfg, err := config.Load("", env(nil))
+	if err != nil || cfg.MetricsListen != "" {
+		t.Fatalf("default metrics_listen = %q (err %v), want empty: off", cfg.MetricsListen, err)
+	}
+	cfg, err = config.Load("", env(map[string]string{"OBSYNC_METRICS_LISTEN": ":9090"}))
+	if err != nil || cfg.MetricsListen != ":9090" {
+		t.Fatalf("metrics_listen = %q, err %v", cfg.MetricsListen, err)
+	}
+	cfg, err = config.Load(writeFile(t, "metrics_listen: 127.0.0.1:9100\n"), env(nil))
+	if err != nil || cfg.MetricsListen != "127.0.0.1:9100" {
+		t.Fatalf("yaml metrics_listen = %q, err %v", cfg.MetricsListen, err)
+	}
+	for name, v := range map[string]string{
+		"no port":      "localhost",
+		"bad port":     ":http-alt",
+		"port too big": ":70000",
+		"same as main": ":8080",
+		"path":         "http://0.0.0.0:9090/metrics",
+	} {
+		if _, err := config.Load("", env(map[string]string{"OBSYNC_METRICS_LISTEN": v})); err == nil || !strings.Contains(err.Error(), "metrics_listen") {
+			t.Errorf("%s (%q): err = %v", name, v, err)
+		}
+	}
+	var buf bytes.Buffer
+	cfg.MetricsListen = ":9090"
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("config", "cfg", cfg)
+	if !strings.Contains(buf.String(), "metrics_listen=:9090") {
+		t.Errorf("startup log %q lacks metrics_listen", buf.String())
+	}
+}

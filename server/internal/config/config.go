@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/netip"
 	"net/url"
 	"os"
@@ -60,7 +61,10 @@ type Retention struct {
 }
 
 type Config struct {
-	Listen            string `yaml:"listen"`
+	Listen string `yaml:"listen"`
+	// MetricsListen, when set (host:port), serves Prometheus metrics at
+	// /metrics on a second listener. Empty: no metrics listener.
+	MetricsListen     string `yaml:"metrics_listen"`
 	DataDir           string `yaml:"data_dir"`
 	DatabaseURL       string `yaml:"database_url"`
 	DatabaseAuthToken string `yaml:"database_auth_token"`
@@ -198,6 +202,7 @@ func applyEnv(c *Config, getenv func(string) string) error {
 	}
 
 	str("OBSYNC_LISTEN", &c.Listen)
+	str("OBSYNC_METRICS_LISTEN", &c.MetricsListen)
 	str("OBSYNC_DATA_DIR", &c.DataDir)
 	str("OBSYNC_DATABASE_URL", &c.DatabaseURL)
 	str("OBSYNC_DATABASE_AUTH_TOKEN", &c.DatabaseAuthToken)
@@ -237,6 +242,15 @@ func (c Config) Validate() error {
 
 	if c.Listen == "" {
 		add("listen must not be empty")
+	}
+	if c.MetricsListen != "" {
+		if host, port, err := net.SplitHostPort(c.MetricsListen); err != nil || strings.ContainsAny(host, "/") {
+			add("metrics_listen %q is not host:port (such as :9090 or 127.0.0.1:9090)", c.MetricsListen)
+		} else if n, err := strconv.ParseUint(port, 10, 16); err != nil {
+			add("metrics_listen %q: the port must be a number from 0 to 65535", c.MetricsListen)
+		} else if n != 0 && c.MetricsListen == c.Listen {
+			add("metrics_listen must not be the same address as listen")
+		}
 	}
 	if c.DataDir == "" {
 		add("data_dir must not be empty")
@@ -382,6 +396,7 @@ func (c Config) LogValue() slog.Value {
 	}
 	return slog.GroupValue(
 		slog.String("listen", c.Listen),
+		slog.String("metrics_listen", c.MetricsListen),
 		slog.String("data_dir", c.DataDir),
 		slog.String("database_url", redactURL(c.DatabaseURL)),
 		slog.String("database_auth_token", token),
