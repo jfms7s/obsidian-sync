@@ -2,7 +2,9 @@ package store_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/jfms7s/obsidian-sync/server/internal/ids"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
@@ -81,5 +83,49 @@ func TestVaultKeysForNonMember(t *testing.T) {
 	}
 	if keys, err := st.VaultKeys(ctx, empty.ID, alice.ID); err != nil || len(keys) != 0 {
 		t.Fatalf("keys = %+v, err = %v, want none", keys, err)
+	}
+}
+
+func TestOwnedVaultUsage(t *testing.T) {
+	st, clk := storetest.New(t)
+	alice := storetest.SeedUser(t, st, "alice")
+	bob := storetest.SeedUser(t, st, "bob")
+	keys := []store.VaultKey{{Epoch: 0, SealedKey: []byte("k0")}, {Epoch: 1, SealedKey: []byte("k1")}}
+	newVault := func(owner string) string {
+		t.Helper()
+		id := ids.New()
+		if err := st.CreateVault(ctx, store.Vault{ID: id, OwnerID: owner, EncName: []byte("n")}, keys); err != nil {
+			t.Fatal(err)
+		}
+		clk.Advance(time.Millisecond) // keep creation order stable
+		return id
+	}
+	put := func(vault string, size int64) {
+		t.Helper()
+		if _, err := st.InsertChunk(ctx, store.Chunk{VaultID: vault, ChunkID: ids.Bytes(32), BlobKey: ids.New(), Size: size}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, second, bobs := newVault(alice.ID), newVault(alice.ID), newVault(bob.ID)
+	put(first, 10)
+	put(first, 5)
+	put(second, 3)
+	put(bobs, 100)
+	// A vault bob shares with alice counts against bob only.
+	store.AddMember(t, st, bobs, alice.ID, "editor")
+
+	got, err := st.OwnedVaultUsage(ctx, alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []store.VaultUsage{{VaultID: first, BytesUsed: 15}, {VaultID: second, BytesUsed: 3}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("usage = %+v, want %+v", got, want)
+	}
+	if total, _ := st.UsageBytes(ctx, alice.ID); total != 18 {
+		t.Fatalf("UsageBytes = %d, want the sum 18", total)
+	}
+	if got, err := st.OwnedVaultUsage(ctx, ids.New()); err != nil || len(got) != 0 {
+		t.Fatalf("unknown user = %+v, %v", got, err)
 	}
 }

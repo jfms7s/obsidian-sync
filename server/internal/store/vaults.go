@@ -141,3 +141,33 @@ func (s *Store) UsageBytes(ctx context.Context, ownerID string) (int64, error) {
 	}
 	return n, nil
 }
+
+// VaultUsage is one owned vault's stored chunk bytes.
+type VaultUsage struct {
+	VaultID   string
+	BytesUsed int64
+}
+
+// OwnedVaultUsage returns the stored chunk bytes of every vault the user
+// owns, ordered like ListVaults. Their sum is UsageBytes; vaults the user is
+// only a member of are left out, since they count against their owner.
+func (s *Store) OwnedVaultUsage(ctx context.Context, ownerID string) ([]VaultUsage, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, bytes_used FROM vaults WHERE owner_id = ? ORDER BY created_at, id`, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("vault usage: %w", err)
+	}
+	defer rows.Close()
+	var out []VaultUsage
+	for rows.Next() {
+		var u VaultUsage
+		if err := rows.Scan(&u.VaultID, &u.BytesUsed); err != nil {
+			return nil, fmt.Errorf("scan vault usage: %w", err)
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("vault usage: %w", err)
+	}
+	return out, nil
+}
