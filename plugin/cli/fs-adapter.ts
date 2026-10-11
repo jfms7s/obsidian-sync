@@ -12,17 +12,22 @@
 // move the file into the vault's .trash folder (never synced, the folder
 // Obsidian's own "move to Obsidian trash" uses), unless trash is off.
 //
-// Symbolic links are neither listed nor followed: the vault is the folder's
-// own files. A path whose folders lead outside the vault through a link is
-// refused, so a link cannot make the engine read or write elsewhere.
+// Symbolic links are never followed. A link where a file would be is listed
+// (so a note replaced by a link is not taken for deleted) but cannot be
+// read, written or removed: the engine reports it as a file that failed. A
+// path with '.', '..' or empty segments, or whose folders are reached
+// through a link, is refused, so nothing can make the engine read or write
+// outside the vault.
 import { randomBytes } from 'node:crypto';
 import { watch as fsWatch, type FSWatcher, type Stats } from 'node:fs';
-import { chmod, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import type { AdapterEvent, Expect, FileStat, VaultAdapter } from '../src/index';
 
 /** Temporary files of this adapter: hidden, and ignored by the engine's default `*.tmp` rule. */
 export const TEMP_PATTERN = /^\.obsync-[0-9a-f]{16}\.tmp$/;
+/** A temporary file older than this was left by a crash and is removed when list() comes across it. */
+const STALE_TEMP_MS = 60 * 60_000;
 const tempName = (): string => `.obsync-${randomBytes(8).toString('hex')}.tmp`;
 
 const TRASH = '.trash';
@@ -36,6 +41,11 @@ function spellings(path: string): string[] {
 }
 const baseName = (p: string): string => p.slice(p.lastIndexOf('/') + 1);
 const parentOf = (p: string): string => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
+
+/** Refuses what is not a vault-relative path: a '.', '..' or empty segment, or a leading '/'. */
+function checkRelative(path: string): void {
+  if (path.split('/').some((seg) => seg === '' || seg === '.' || seg === '..')) throw new Error(`refusing ${JSON.stringify(path)}: not a path inside the vault`);
+}
 
 function code(err: unknown): string | undefined {
   return (err as NodeJS.ErrnoException | null)?.code;
@@ -71,6 +81,12 @@ interface Resolved {
 export interface FsAdapterOptions {
   /** Move deleted files into <vault>/.trash (default true); false deletes them for good. */
   trash?: boolean;
+  /**
+   * Folders (vault-relative, NFC) whose changes the watcher need not report:
+   * ones the engine ignores anyway, such as .git, so a git operation does
+   * not cost a database write per file. list() still lists them.
+   */
+  unwatched?: (folder: string) => boolean;
   /** The watcher failed (e.g. out of inotify watches); changes made by other programs are then found by reconcile only. */
   onWatchError?: (err: Error) => void;
 }
@@ -130,6 +146,7 @@ export class FsAdapter implements VaultAdapter {
    * not exist yet are created by this adapter as real folders.
    */
   private async checkInside(rel: string): Promise<void> {
+    checkRelative(rel);
     let dir = parentOf(rel);
     for (;;) {
       let real: string;
@@ -163,6 +180,7 @@ export class FsAdapter implements VaultAdapter {
     for (const spelling of spellings(path)) {
       const st = await lstatOrNull(this.abs(spelling));
       if (!st) continue;
+      if (st.isSymbolicLink()) throw new Error(`${path} is a symbolic link: links are not synced`);
       if (!st.isFile()) return null;
       const disk = await this.storedCase(spelling);
       if (disk === null) return null;
@@ -180,10 +198,14 @@ export class FsAdapter implements VaultAdapter {
     return null;
   }
 
+  /** Whether anything but folders and this adapter's temporary files is below dir (a link counts: removing it would lose it). */
   private async holdsFile(dir: string): Promise<boolean> {
     for (const e of await readdir(this.abs(dir), { withFileTypes: true })) {
-      if (e.isFile() && !TEMP_PATTERN.test(e.name)) return true;
-      if (e.isDirectory() && (await this.holdsFile(dir === '' ? e.name : `${dir}/${e.name}`))) return true;
+      if (e.isDirectory()) {
+        if (await this.holdsFile(dir === '' ? e.name : `${dir}/${e.name}`)) return true;
+      } else if (!(e.isFile() && TEMP_PATTERN.test(e.name))) {
+        return true;
+      }
     }
     return false;
   }
@@ -215,16 +237,21 @@ export class FsAdapter implements VaultAdapter {
   /** Every file, hidden ones included; the trash folder is this adapter's own and not part of the vault. */
   async list(skip?: (folder: string) => boolean): Promise<string[]> {
     const out = new Set<string>();
-    await this.walk('', (folder) => this.isTrash(folder) || (skip?.(folder) ?? false), out);
-    return [...out].map((p) => p.normalize('NFC')).sort();
+    await this.walk('', (folder) => this.isTrash(folder) || (skip?.(folder) ?? false), out, true);
+    // A name on disk in both NFC and NFD is one path for the engine, which
+    // reaches the NFC one (as ObsidianAdapter does).
+    return [...new Set([...out].map((p) => p.normalize('NFC')))].sort();
   }
 
   private isTrash(rel: string): boolean {
     return (this.options.trash ?? true) && (rel === TRASH || rel.startsWith(`${TRASH}/`));
   }
 
-  /** Adds the files below dir to out, spelled as on disk; skip is given folders in NFC. */
-  private async walk(dir: string, skip: ((folder: string) => boolean) | undefined, out: Set<string>): Promise<void> {
+  /**
+   * Adds the files (and links) below dir to out, spelled as on disk; skip
+   * is given folders in NFC. sweep removes temporary files left by a crash.
+   */
+  private async walk(dir: string, skip: ((folder: string) => boolean) | undefined, out: Set<string>, sweep = false): Promise<void> {
     let entries;
     try {
       entries = await readdir(this.abs(dir), { withFileTypes: true });
@@ -234,13 +261,23 @@ export class FsAdapter implements VaultAdapter {
     }
     for (const e of entries) {
       const rel = dir === '' ? e.name : `${dir}/${e.name}`;
-      if (e.isFile()) {
-        if (!TEMP_PATTERN.test(e.name)) out.add(rel);
+      if (e.isFile() && TEMP_PATTERN.test(e.name)) {
+        if (sweep) await this.sweepTemp(rel);
+      } else if (e.isFile()) {
+        out.add(rel);
+      } else if (e.isSymbolicLink()) {
+        // Where a file would be (a link to a file, or a broken one); a link to a folder is not entered.
+        if (!(await stat(this.abs(rel)).catch(() => null))?.isDirectory()) out.add(rel);
       } else if (e.isDirectory()) {
         if (skip?.(rel.normalize('NFC'))) continue;
-        await this.walk(rel, skip, out);
+        await this.walk(rel, skip, out, sweep);
       }
     }
+  }
+
+  private async sweepTemp(rel: string): Promise<void> {
+    const st = await lstatOrNull(this.abs(rel));
+    if (st && Date.now() - st.mtimeMs > STALE_TEMP_MS) await unlink(this.abs(rel)).catch(() => undefined);
   }
 
   // ----- changing things -----
@@ -317,6 +354,13 @@ export class FsAdapter implements VaultAdapter {
       await unlink(tmp).catch(() => undefined);
       throw err;
     }
+    // The rename itself survives a power cut only once the folder is on disk.
+    const dir = await open(dirname(this.abs(target)), 'r');
+    try {
+      await dir.sync();
+    } finally {
+      await dir.close();
+    }
   }
 
   write(path: string, data: Uint8Array, expect?: Expect): Promise<boolean> {
@@ -360,7 +404,9 @@ export class FsAdapter implements VaultAdapter {
   /** Moves a file to .trash/<its path>, under a new name if one is there already. */
   private async moveToTrash(disk: string): Promise<void> {
     const dest = `${TRASH}/${disk}`;
+    await this.checkInside(dest); // a .trash that is a link to elsewhere would carry the file out of the vault
     await mkdir(dirname(this.abs(dest)), { recursive: true });
+    await this.checkInside(dest);
     let target = dest;
     for (let n = 1; await lstatOrNull(this.abs(target)); n++) {
       const dot = baseName(dest).lastIndexOf('.');
@@ -414,7 +460,7 @@ export class FsAdapter implements VaultAdapter {
   private async remember(disk: string): Promise<void> {
     if (!this.watcher) return;
     const st = await lstatOrNull(this.abs(disk));
-    if (st?.isFile()) this.known.set(this.key(disk), { path: disk.normalize('NFC'), disk, mtime: Math.floor(st.mtimeMs), size: st.size });
+    if (st?.isFile() || st?.isSymbolicLink()) this.known.set(this.key(disk), { path: disk.normalize('NFC'), disk, mtime: Math.floor(st.mtimeMs), size: st.size });
   }
 
   private forget(disk: string): void {
@@ -450,7 +496,7 @@ export class FsAdapter implements VaultAdapter {
     this.watcher = watcher;
     this.enqueue(async () => {
       const files = new Set<string>();
-      await this.walk('', (folder) => this.isTrash(folder), files);
+      await this.walk('', (folder) => this.walkSkip(folder), files);
       for (const p of files) await this.remember(p);
     });
   }
@@ -479,7 +525,17 @@ export class FsAdapter implements VaultAdapter {
   }
 
   private ignored(rel: string): boolean {
-    return TEMP_PATTERN.test(baseName(rel)) || this.isTrash(rel.normalize('NFC'));
+    if (TEMP_PATTERN.test(baseName(rel))) return true;
+    const nfc = rel.normalize('NFC');
+    if (this.isTrash(nfc)) return true;
+    const skip = this.options.unwatched;
+    if (!skip) return false;
+    for (let dir = parentOf(nfc); dir !== ''; dir = parentOf(dir)) if (skip(dir)) return true;
+    return skip(nfc); // the folder itself
+  }
+
+  private walkSkip(folder: string): boolean {
+    return this.isTrash(folder) || (this.options.unwatched?.(folder) ?? false);
   }
 
   /** Compares what is at rel with what was known and reports the difference. */
@@ -492,7 +548,7 @@ export class FsAdapter implements VaultAdapter {
     }
     const k = this.key(rel);
     const was = this.known.get(k);
-    if (st?.isFile()) {
+    if (st?.isFile() || st?.isSymbolicLink()) {
       const now = { path: rel.normalize('NFC'), disk: rel, mtime: Math.floor(st.mtimeMs), size: st.size };
       if (was && was.mtime === now.mtime && was.size === now.size) return;
       this.known.set(k, now);
@@ -502,6 +558,7 @@ export class FsAdapter implements VaultAdapter {
     if (was) {
       this.known.delete(k);
       this.emit({ type: 'delete', path: was.path });
+      return;
     }
     // A folder that was there and is gone: every file known below it went with it.
     await this.rescan(rel, true);
@@ -513,7 +570,7 @@ export class FsAdapter implements VaultAdapter {
     const present = new Set<string>();
     if (!onlyGone) {
       const files = new Set<string>();
-      await this.walk(dir, (folder) => this.isTrash(folder), files).catch(() => undefined);
+      await this.walk(dir, (folder) => this.walkSkip(folder), files).catch(() => undefined);
       for (const p of files) {
         present.add(this.key(p));
         await this.check(p);
