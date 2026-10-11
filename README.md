@@ -53,7 +53,7 @@ Create an account. The password is read from the terminal (or from standard inpu
 docker compose run --rm obsync admin user create --username alice
 ```
 
-Everything the server stores (the database and the encrypted chunks) is in the `obsync-data` volume (Docker names it `obsync_obsync-data`), which is also all you need to back up. Stop the server while you copy it (`docker compose stop obsync`, copy the volume, `docker compose start obsync`): a copy taken while the server writes can catch the database half-way through a write. The convergence suite restores both copies of a stopped server and copies of a running one taken between two requests. `docker compose logs -f obsync` shows what it does. The server never logs tokens, keys, passphrases or encrypted payloads.
+Everything the server stores (the database and the encrypted chunks) is in the `obsync-data` volume (Docker names it `obsync_obsync-data`), which is also all you need to back up. Either take a backup while the server runs with `obsync admin export` (see [Backups](#backups)), or stop the server while you copy the volume (`docker compose stop obsync`, copy the volume, `docker compose start obsync`): a plain copy taken while the server writes can catch the database half-way through a write. The convergence suite restores both copies of a stopped server and copies of a running one taken between two requests. `docker compose logs -f obsync` shows what it does. The server never logs tokens, keys, passphrases or encrypted payloads.
 
 The image is published as `ghcr.io/jfms7s/obsync` with a tag for every release. Pin a release in `.env` (`OBSYNC_VERSION=0.1.0`) rather than following `latest`.
 
@@ -93,6 +93,23 @@ Put a reverse proxy with TLS in front of it (the compose example's `Caddyfile` i
 | `admin device revoke --username NAME (--id DEVICE_ID \| --all)` | Signs one device, or all of them, out for good |
 | `admin maintenance run [--as-of TIME]` | Runs one pass of history pruning, trash purge and chunk cleanup now, or as if the time were `TIME` (RFC 3339, e.g. `2027-01-31T00:00:00Z`). The server runs the same pass every `OBSYNC_JOBS_INTERVAL_MINUTES` under a lease; while its pass (or an export) runs, this one is refused, so try again a minute later |
 | `admin user delete --username NAME --yes` | Deletes the account with all its vaults and their history. Without `--yes` it only says what it would delete. It cannot be undone |
+| `admin export --out DIR [--copy] [--wait 2m]` | Writes a backup the server can start from, while the server runs (see [Backups](#backups)) |
+| `admin export --prune DIR --keep N` | Removes all but the newest `N` exports in `DIR` (only folders with a `MANIFEST.json`) |
+
+#### Backups
+
+`obsync admin export --out DIR` writes a consistent copy of the database to `DIR/meta.db` and places every chunk it lists in `DIR/blobs/`, then writes `DIR/MANIFEST.json` (server version, time, counts and bytes). It runs next to a running server: it holds the maintenance lease, so no pruning or chunk cleanup deletes anything until it is done (it waits up to `--wait` for a pass already running). `DIR` must be new or empty.
+
+- Chunk files are never changed once written, so they are **hard-linked** into the export: it is instant and takes no space until the live chunk is deleted. Deleting an export never touches the live data. On another filesystem, or with `--copy`, they are copied.
+- Exit status 0 is success, 1 a failure (nothing is left behind), and **3** means the export is complete but some chunks were already missing from the live store; `MANIFEST.json` lists them.
+- Only a local database (`file:`) can be exported; back up a `libsql://` database on its own server. Do not run `admin user delete` during an export (its chunks would show as missing).
+- An export holds the account data (password and token hashes, encrypted notes): copy it off the machine (`tar`, `rsync`, restic) to somewhere as private as the server.
+- To restore, stop the server, point `OBSYNC_DATA_DIR` (or the volume) at the export (and `OBSYNC_BLOB_FS_DIR` at its `blobs` folder if you set that variable), and start it. Devices notice the server went back in time and upload what they have that is newer.
+
+```bash
+obsync admin export --out /var/lib/obsync/export/$(date +%F)
+obsync admin export --prune /var/lib/obsync/export --keep 3
+```
 
 ### Configuration
 
