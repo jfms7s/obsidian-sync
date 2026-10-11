@@ -198,3 +198,24 @@ func TestRemoteErrorsDoNotLeakURLCredentials(t *testing.T) {
 		t.Fatalf("error = %q; want credentials redacted", msg)
 	}
 }
+
+// bundledSQLiteVersion is the SQLite that go-libsql ships as a prebuilt C
+// library. govulncheck cannot see it, so this test names it: bumping go-libsql
+// changes it; check https://www.sqlite.org/cves.html for the new version before
+// updating the constant.
+const bundledSQLiteVersion = "3.45.1"
+
+func TestBundledSQLiteVersion(t *testing.T) {
+	db, err := sql.Open("libsql", "file:"+filepath.Join(t.TempDir(), "version.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var got string
+	if err := db.QueryRowContext(context.Background(), `SELECT sqlite_version()`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != bundledSQLiteVersion {
+		t.Fatalf("bundled SQLite is %s, the test names %s: check https://www.sqlite.org/cves.html for %s, then update bundledSQLiteVersion", got, bundledSQLiteVersion, got)
+	}
+}
