@@ -198,6 +198,8 @@ An account can ask for a code from an authenticator app (any app that supports T
 
 Devices signed in already stay signed in. A new sign-in asks for the code after the password. **Turn off** needs the password and a code or a recovery code. If both the app and the recovery codes are lost, the server's administrator can turn it off: `obsync admin user totp disable --username NAME`.
 
+For operators: a server older than this feature still starts on the newer database, but it does not ask for the code. Do not roll the server back past the release that added two-step sign-in while accounts use it.
+
 ### Good to know
 
 - **Mobile apps sync only while Obsidian is open.** iOS and Android suspend apps in the background. When you come back, the plugin compares everything with the server.
