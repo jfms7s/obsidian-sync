@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file obsync/v1/obsync.proto.
  */
 export const file_obsync_v1_obsync: GenFile = /*@__PURE__*/
-  fileDesc("ChZvYnN5bmMvdjEvb2JzeW5jLnByb3RvEglvYnN5bmMudjEiPAoFRXJyb3ISIgoEY29kZRgBIAEoDjIULm9ic3luYy52MS5FcnJvckNvZGUSDwoHbWVzc2FnZRgCIAEoCSJsCgxMb2dpblJlcXVlc3QSEAoIdXNlcm5hbWUYASABKAkSEAoIcGFzc3dvcmQYAiABKAkSEwoLZGV2aWNlX25hbWUYAyABKAkSEAoIcGxhdGZvcm0YBCABKAkSEQoJdG90cF9jb2RlGAUgASgJIkIKDUxvZ2luUmVzcG9uc2USDQoFdG9rZW4YASABKAkSEQoJZGV2aWNlX2lkGAIgASgJEg8KB3VzZXJfaWQYAyABKAkijQEKBkRldmljZRIRCglkZXZpY2VfaWQYASABKAkSDAoEbmFtZRgCIAEoCRIQCghwbGF0Zm9ybRgDIAEoCRIVCg1jcmVhdGVkX2F0X21zGAQgASgDEhcKD2xhc3Rfc2Vlbl9hdF9tcxgFIAEoAxIPCgdjdXJyZW50GAYgASgIEg8KB3Jldm9rZWQYByABKAgiOQoTTGlzdERldmljZXNSZXNwb25zZRIiCgdkZXZpY2VzGAEgAygLMhEub2JzeW5jLnYxLkRldmljZSJiChBHZXRVc2FnZVJlc3BvbnNlEhIKCnVzZWRfYnl0ZXMYASABKAMSEwoLcXVvdGFfYnl0ZXMYAiABKAMSJQoGdmF1bHRzGAMgAygLMhUub2JzeW5jLnYxLlZhdWx0VXNhZ2UiMgoKVmF1bHRVc2FnZRIQCgh2YXVsdF9pZBgBIAEoCRISCgp1c2VkX2J5dGVzGAIgASgDIksKDEFyZ29uMlBhcmFtcxISCgptZW1vcnlfa2liGAEgASgNEhIKCml0ZXJhdGlvbnMYAiABKA0SEwoLcGFyYWxsZWxpc20YAyABKA0ixwEKCUtleUJ1bmRsZRIWCg5wdWJsaWNfZW5jX2tleRgBIAEoDBIXCg9wdWJsaWNfc2lnbl9rZXkYAiABKAwSEQoJcGFzc19zYWx0GAMgASgMEiwKC3Bhc3NfcGFyYW1zGAQgASgLMhcub2JzeW5jLnYxLkFyZ29uMlBhcmFtcxIUCgxwYXNzX3dyYXBwZWQYBSABKAwSGAoQcmVjb3Zlcnlfd3JhcHBlZBgGIAEoDBIYChBjdXJyZW50X3Bhc3N3b3JkGAcgASgJIi0KCFZhdWx0S2V5Eg0KBWVwb2NoGAEgASgNEhIKCnNlYWxlZF9rZXkYAiABKAwieAoFVmF1bHQSEAoIdmF1bHRfaWQYASABKAkSEAoIZW5jX25hbWUYAiABKAwSFQoNY3VycmVudF9lcG9jaBgDIAEoDRILCgNzZXEYBCABKAQSFQoNY3JlYXRlZF9hdF9tcxgFIAEoAxIQCghvd25lcl9pZBgGIAEoCSJbChJDcmVhdGVWYXVsdFJlcXVlc3QSEAoIdmF1bHRfaWQYASABKAkSEAoIZW5jX25hbWUYAiABKAwSIQoEa2V5cxgDIAMoCzITLm9ic3luYy52MS5WYXVsdEtleSI2ChJMaXN0VmF1bHRzUmVzcG9uc2USIAoGdmF1bHRzGAEgAygLMhAub2JzeW5jLnYxLlZhdWx0IjYKEVZhdWx0S2V5c1Jlc3BvbnNlEiEKBGtleXMYASADKAsyEy5vYnN5bmMudjEuVmF1bHRLZXkimQEKBkNvbW1pdBIPCgdmaWxlX2lkGAEgASgMEhIKCnZlcnNpb25faWQYAiABKAwSFwoPYmFzZV92ZXJzaW9uX2lkGAMgASgMEg0KBWVwb2NoGAQgASgNEhAKCGVuY19tZXRhGAUgASgMEhEKCWNodW5rX2lkcxgGIAMoDBIMCgRzaXplGAcgASgEEg8KB2RlbGV0ZWQYCCABKAgiMwoNQ29tbWl0UmVxdWVzdBIiCgdjb21taXRzGAEgAygLMhEub2JzeW5jLnYxLkNvbW1pdCJyCgxDb21taXRSZXN1bHQSDwoHZmlsZV9pZBgBIAEoDBIKCgJvaxgCIAEoCBILCgNzZXEYAyABKAQSHwoFZXJyb3IYBCABKAsyEC5vYnN5bmMudjEuRXJyb3ISFwoPaGVhZF92ZXJzaW9uX2lkGAUgASgMIk0KDkNvbW1pdFJlc3BvbnNlEigKB3Jlc3VsdHMYASADKAsyFy5vYnN5bmMudjEuQ29tbWl0UmVzdWx0EhEKCXZhdWx0X3NlcRgCIAEoBCLRAQoHVmVyc2lvbhIPCgdmaWxlX2lkGAEgASgMEhIKCnZlcnNpb25faWQYAiABKAwSFwoPYmFzZV92ZXJzaW9uX2lkGAMgASgMEg0KBWVwb2NoGAQgASgNEhAKCGVuY19tZXRhGAUgASgMEhEKCWNodW5rX2lkcxgGIAMoDBIMCgRzaXplGAcgASgEEg8KB2RlbGV0ZWQYCCABKAgSEQoJZGV2aWNlX2lkGAkgASgJEhUKDWNyZWF0ZWRfYXRfbXMYCiABKAMSCwoDc2VxGAsgASgEIlgKD0NoYW5nZXNSZXNwb25zZRIkCgh2ZXJzaW9ucxgBIAMoCzISLm9ic3luYy52MS5WZXJzaW9uEhEKCXZhdWx0X3NlcRgCIAEoBBIMCgRtb3JlGAMgASgIIkkKBEhlYWQSDwoHZmlsZV9pZBgBIAEoDBISCgp2ZXJzaW9uX2lkGAIgASgMEgsKA3NlcRgDIAEoBBIPCgdkZWxldGVkGAQgASgIIj0KDUhlYWRzUmVzcG9uc2USHgoFaGVhZHMYASADKAsyDy5vYnN5bmMudjEuSGVhZBIMCgRtb3JlGAIgASgIIjgKEFZlcnNpb25zUmVzcG9uc2USJAoIdmVyc2lvbnMYASADKAsyEi5vYnN5bmMudjEuVmVyc2lvbiInChJDaHVua0V4aXN0c1JlcXVlc3QSEQoJY2h1bmtfaWRzGAEgAygMIiUKE0NodW5rRXhpc3RzUmVzcG9uc2USDgoGZXhpc3RzGAEgAygIIhUKBEF1dGgSDQoFdG9rZW4YASABKAkiHgoJU3Vic2NyaWJlEhEKCXZhdWx0X2lkcxgBIAMoCSIVCgRQaW5nEg0KBW5vbmNlGAEgASgEIoMBCgtDbGllbnRGcmFtZRIfCgRhdXRoGAEgASgLMg8ub2JzeW5jLnYxLkF1dGhIABIpCglzdWJzY3JpYmUYAiABKAsyFC5vYnN5bmMudjEuU3Vic2NyaWJlSAASHwoEcGluZxgDIAEoCzIPLm9ic3luYy52MS5QaW5nSABCBwoFZnJhbWUiGwoGQXV0aE9rEhEKCWRldmljZV9pZBgBIAEoCSInCgZOb3RpZnkSEAoIdmF1bHRfaWQYASABKAkSCwoDc2VxGAIgASgEIhUKBFBvbmcSDQoFbm9uY2UYASABKAQipQEKC1NlcnZlckZyYW1lEiQKB2F1dGhfb2sYASABKAsyES5vYnN5bmMudjEuQXV0aE9rSAASIwoGbm90aWZ5GAIgASgLMhEub2JzeW5jLnYxLk5vdGlmeUgAEh8KBHBvbmcYAyABKAsyDy5vYnN5bmMudjEuUG9uZ0gAEiEKBWVycm9yGAQgASgLMhAub2JzeW5jLnYxLkVycm9ySABCBwoFZnJhbWUieQoIRmlsZU1ldGESDAoEcGF0aBgBIAEoCRIQCghtdGltZV9tcxgCIAEoAxIMCgRzaXplGAMgASgEEhQKDGNvbnRlbnRfaGFzaBgEIAEoDBIUCgxyZW5hbWVkX2Zyb20YBSABKAkSEwoLZGV2aWNlX25hbWUYBiABKAkqvQMKCUVycm9yQ29kZRIaChZFUlJPUl9DT0RFX1VOU1BFQ0lGSUVEEAASFwoTRVJST1JfQ09ERV9DT05GTElDVBABEh0KGUVSUk9SX0NPREVfUVVPVEFfRVhDRUVERUQQAhIbChdFUlJPUl9DT0RFX1VOQVVUSE9SSVpFRBADEh0KGUVSUk9SX0NPREVfREVWSUNFX1JFVk9LRUQQBBIaChZFUlJPUl9DT0RFX1NUQUxFX0VQT0NIEAUSGwoXRVJST1JfQ09ERV9SQVRFX0xJTUlURUQQBhIYChRFUlJPUl9DT0RFX1RPT19MQVJHRRAHEhgKFEVSUk9SX0NPREVfTk9UX0ZPVU5EEAgSFwoTRVJST1JfQ09ERV9JTlRFUk5BTBAJEhYKEkVSUk9SX0NPREVfSU5WQUxJRBAKEhwKGEVSUk9SX0NPREVfTUlTU0lOR19DSFVOSxALEh0KGUVSUk9SX0NPREVfV1JPTkdfUEFTU1dPUkQQDBIeChpFUlJPUl9DT0RFX1ZBVUxUX05PVF9GT1VORBANEiUKIUVSUk9SX0NPREVfU0VDT05EX0ZBQ1RPUl9SRVFVSVJFRBAOQkhaRmdpdGh1Yi5jb20vamZtczdzL29ic2lkaWFuLXN5bmMvc2VydmVyL2ludGVybmFsL2dlbi9vYnN5bmMvdjE7b2JzeW5jdjFiBnByb3RvMw");
+  fileDesc("ChZvYnN5bmMvdjEvb2JzeW5jLnByb3RvEglvYnN5bmMudjEiPAoFRXJyb3ISIgoEY29kZRgBIAEoDjIULm9ic3luYy52MS5FcnJvckNvZGUSDwoHbWVzc2FnZRgCIAEoCSJsCgxMb2dpblJlcXVlc3QSEAoIdXNlcm5hbWUYASABKAkSEAoIcGFzc3dvcmQYAiABKAkSEwoLZGV2aWNlX25hbWUYAyABKAkSEAoIcGxhdGZvcm0YBCABKAkSEQoJdG90cF9jb2RlGAUgASgJIkIKDUxvZ2luUmVzcG9uc2USDQoFdG9rZW4YASABKAkSEQoJZGV2aWNlX2lkGAIgASgJEg8KB3VzZXJfaWQYAyABKAkijQEKBkRldmljZRIRCglkZXZpY2VfaWQYASABKAkSDAoEbmFtZRgCIAEoCRIQCghwbGF0Zm9ybRgDIAEoCRIVCg1jcmVhdGVkX2F0X21zGAQgASgDEhcKD2xhc3Rfc2Vlbl9hdF9tcxgFIAEoAxIPCgdjdXJyZW50GAYgASgIEg8KB3Jldm9rZWQYByABKAgiOQoTTGlzdERldmljZXNSZXNwb25zZRIiCgdkZXZpY2VzGAEgAygLMhEub2JzeW5jLnYxLkRldmljZSJCChJUb3RwU3RhdHVzUmVzcG9uc2USDwoHZW5hYmxlZBgBIAEoCBIbChNyZWNvdmVyeV9jb2Rlc19sZWZ0GAIgASgNIiwKEFRvdHBCZWdpblJlcXVlc3QSGAoQY3VycmVudF9wYXNzd29yZBgBIAEoCSI4ChFUb3RwQmVnaW5SZXNwb25zZRIOCgZzZWNyZXQYASABKAkSEwoLb3RwYXV0aF91cmkYAiABKAkiIgoSVG90cENvbmZpcm1SZXF1ZXN0EgwKBGNvZGUYASABKAkiMwoZVG90cFJlY292ZXJ5Q29kZXNSZXNwb25zZRIWCg5yZWNvdmVyeV9jb2RlcxgBIAMoCSI7ChFUb3RwVmVyaWZ5UmVxdWVzdBIYChBjdXJyZW50X3Bhc3N3b3JkGAEgASgJEgwKBGNvZGUYAiABKAkiYgoQR2V0VXNhZ2VSZXNwb25zZRISCgp1c2VkX2J5dGVzGAEgASgDEhMKC3F1b3RhX2J5dGVzGAIgASgDEiUKBnZhdWx0cxgDIAMoCzIVLm9ic3luYy52MS5WYXVsdFVzYWdlIjIKClZhdWx0VXNhZ2USEAoIdmF1bHRfaWQYASABKAkSEgoKdXNlZF9ieXRlcxgCIAEoAyJLCgxBcmdvbjJQYXJhbXMSEgoKbWVtb3J5X2tpYhgBIAEoDRISCgppdGVyYXRpb25zGAIgASgNEhMKC3BhcmFsbGVsaXNtGAMgASgNIscBCglLZXlCdW5kbGUSFgoOcHVibGljX2VuY19rZXkYASABKAwSFwoPcHVibGljX3NpZ25fa2V5GAIgASgMEhEKCXBhc3Nfc2FsdBgDIAEoDBIsCgtwYXNzX3BhcmFtcxgEIAEoCzIXLm9ic3luYy52MS5BcmdvbjJQYXJhbXMSFAoMcGFzc193cmFwcGVkGAUgASgMEhgKEHJlY292ZXJ5X3dyYXBwZWQYBiABKAwSGAoQY3VycmVudF9wYXNzd29yZBgHIAEoCSItCghWYXVsdEtleRINCgVlcG9jaBgBIAEoDRISCgpzZWFsZWRfa2V5GAIgASgMIngKBVZhdWx0EhAKCHZhdWx0X2lkGAEgASgJEhAKCGVuY19uYW1lGAIgASgMEhUKDWN1cnJlbnRfZXBvY2gYAyABKA0SCwoDc2VxGAQgASgEEhUKDWNyZWF0ZWRfYXRfbXMYBSABKAMSEAoIb3duZXJfaWQYBiABKAkiWwoSQ3JlYXRlVmF1bHRSZXF1ZXN0EhAKCHZhdWx0X2lkGAEgASgJEhAKCGVuY19uYW1lGAIgASgMEiEKBGtleXMYAyADKAsyEy5vYnN5bmMudjEuVmF1bHRLZXkiNgoSTGlzdFZhdWx0c1Jlc3BvbnNlEiAKBnZhdWx0cxgBIAMoCzIQLm9ic3luYy52MS5WYXVsdCI2ChFWYXVsdEtleXNSZXNwb25zZRIhCgRrZXlzGAEgAygLMhMub2JzeW5jLnYxLlZhdWx0S2V5IpkBCgZDb21taXQSDwoHZmlsZV9pZBgBIAEoDBISCgp2ZXJzaW9uX2lkGAIgASgMEhcKD2Jhc2VfdmVyc2lvbl9pZBgDIAEoDBINCgVlcG9jaBgEIAEoDRIQCghlbmNfbWV0YRgFIAEoDBIRCgljaHVua19pZHMYBiADKAwSDAoEc2l6ZRgHIAEoBBIPCgdkZWxldGVkGAggASgIIjMKDUNvbW1pdFJlcXVlc3QSIgoHY29tbWl0cxgBIAMoCzIRLm9ic3luYy52MS5Db21taXQicgoMQ29tbWl0UmVzdWx0Eg8KB2ZpbGVfaWQYASABKAwSCgoCb2sYAiABKAgSCwoDc2VxGAMgASgEEh8KBWVycm9yGAQgASgLMhAub2JzeW5jLnYxLkVycm9yEhcKD2hlYWRfdmVyc2lvbl9pZBgFIAEoDCJNCg5Db21taXRSZXNwb25zZRIoCgdyZXN1bHRzGAEgAygLMhcub2JzeW5jLnYxLkNvbW1pdFJlc3VsdBIRCgl2YXVsdF9zZXEYAiABKAQi0QEKB1ZlcnNpb24SDwoHZmlsZV9pZBgBIAEoDBISCgp2ZXJzaW9uX2lkGAIgASgMEhcKD2Jhc2VfdmVyc2lvbl9pZBgDIAEoDBINCgVlcG9jaBgEIAEoDRIQCghlbmNfbWV0YRgFIAEoDBIRCgljaHVua19pZHMYBiADKAwSDAoEc2l6ZRgHIAEoBBIPCgdkZWxldGVkGAggASgIEhEKCWRldmljZV9pZBgJIAEoCRIVCg1jcmVhdGVkX2F0X21zGAogASgDEgsKA3NlcRgLIAEoBCJYCg9DaGFuZ2VzUmVzcG9uc2USJAoIdmVyc2lvbnMYASADKAsyEi5vYnN5bmMudjEuVmVyc2lvbhIRCgl2YXVsdF9zZXEYAiABKAQSDAoEbW9yZRgDIAEoCCJJCgRIZWFkEg8KB2ZpbGVfaWQYASABKAwSEgoKdmVyc2lvbl9pZBgCIAEoDBILCgNzZXEYAyABKAQSDwoHZGVsZXRlZBgEIAEoCCI9Cg1IZWFkc1Jlc3BvbnNlEh4KBWhlYWRzGAEgAygLMg8ub2JzeW5jLnYxLkhlYWQSDAoEbW9yZRgCIAEoCCI4ChBWZXJzaW9uc1Jlc3BvbnNlEiQKCHZlcnNpb25zGAEgAygLMhIub2JzeW5jLnYxLlZlcnNpb24iJwoSQ2h1bmtFeGlzdHNSZXF1ZXN0EhEKCWNodW5rX2lkcxgBIAMoDCIlChNDaHVua0V4aXN0c1Jlc3BvbnNlEg4KBmV4aXN0cxgBIAMoCCIVCgRBdXRoEg0KBXRva2VuGAEgASgJIh4KCVN1YnNjcmliZRIRCgl2YXVsdF9pZHMYASADKAkiFQoEUGluZxINCgVub25jZRgBIAEoBCKDAQoLQ2xpZW50RnJhbWUSHwoEYXV0aBgBIAEoCzIPLm9ic3luYy52MS5BdXRoSAASKQoJc3Vic2NyaWJlGAIgASgLMhQub2JzeW5jLnYxLlN1YnNjcmliZUgAEh8KBHBpbmcYAyABKAsyDy5vYnN5bmMudjEuUGluZ0gAQgcKBWZyYW1lIhsKBkF1dGhPaxIRCglkZXZpY2VfaWQYASABKAkiJwoGTm90aWZ5EhAKCHZhdWx0X2lkGAEgASgJEgsKA3NlcRgCIAEoBCIVCgRQb25nEg0KBW5vbmNlGAEgASgEIqUBCgtTZXJ2ZXJGcmFtZRIkCgdhdXRoX29rGAEgASgLMhEub2JzeW5jLnYxLkF1dGhPa0gAEiMKBm5vdGlmeRgCIAEoCzIRLm9ic3luYy52MS5Ob3RpZnlIABIfCgRwb25nGAMgASgLMg8ub2JzeW5jLnYxLlBvbmdIABIhCgVlcnJvchgEIAEoCzIQLm9ic3luYy52MS5FcnJvckgAQgcKBWZyYW1lInkKCEZpbGVNZXRhEgwKBHBhdGgYASABKAkSEAoIbXRpbWVfbXMYAiABKAMSDAoEc2l6ZRgDIAEoBBIUCgxjb250ZW50X2hhc2gYBCABKAwSFAoMcmVuYW1lZF9mcm9tGAUgASgJEhMKC2RldmljZV9uYW1lGAYgASgJKr0DCglFcnJvckNvZGUSGgoWRVJST1JfQ09ERV9VTlNQRUNJRklFRBAAEhcKE0VSUk9SX0NPREVfQ09ORkxJQ1QQARIdChlFUlJPUl9DT0RFX1FVT1RBX0VYQ0VFREVEEAISGwoXRVJST1JfQ09ERV9VTkFVVEhPUklaRUQQAxIdChlFUlJPUl9DT0RFX0RFVklDRV9SRVZPS0VEEAQSGgoWRVJST1JfQ09ERV9TVEFMRV9FUE9DSBAFEhsKF0VSUk9SX0NPREVfUkFURV9MSU1JVEVEEAYSGAoURVJST1JfQ09ERV9UT09fTEFSR0UQBxIYChRFUlJPUl9DT0RFX05PVF9GT1VORBAIEhcKE0VSUk9SX0NPREVfSU5URVJOQUwQCRIWChJFUlJPUl9DT0RFX0lOVkFMSUQQChIcChhFUlJPUl9DT0RFX01JU1NJTkdfQ0hVTksQCxIdChlFUlJPUl9DT0RFX1dST05HX1BBU1NXT1JEEAwSHgoaRVJST1JfQ09ERV9WQVVMVF9OT1RfRk9VTkQQDRIlCiFFUlJPUl9DT0RFX1NFQ09ORF9GQUNUT1JfUkVRVUlSRUQQDkJIWkZnaXRodWIuY29tL2pmbXM3cy9vYnNpZGlhbi1zeW5jL3NlcnZlci9pbnRlcm5hbC9nZW4vb2JzeW5jL3YxO29ic3luY3YxYgZwcm90bzM");
 
 /**
  * @generated from message obsync.v1.Error
@@ -166,6 +166,140 @@ export const ListDevicesResponseSchema: GenMessage<ListDevicesResponse> = /*@__P
   messageDesc(file_obsync_v1_obsync, 4);
 
 /**
+ * GET /v1/account/totp
+ *
+ * @generated from message obsync.v1.TotpStatusResponse
+ */
+export type TotpStatusResponse = Message<"obsync.v1.TotpStatusResponse"> & {
+  /**
+   * @generated from field: bool enabled = 1;
+   */
+  enabled: boolean;
+
+  /**
+   * @generated from field: uint32 recovery_codes_left = 2;
+   */
+  recoveryCodesLeft: number;
+};
+
+/**
+ * Describes the message obsync.v1.TotpStatusResponse.
+ * Use `create(TotpStatusResponseSchema)` to create a new message.
+ */
+export const TotpStatusResponseSchema: GenMessage<TotpStatusResponse> = /*@__PURE__*/
+  messageDesc(file_obsync_v1_obsync, 5);
+
+/**
+ * POST /v1/account/totp/begin
+ *
+ * @generated from message obsync.v1.TotpBeginRequest
+ */
+export type TotpBeginRequest = Message<"obsync.v1.TotpBeginRequest"> & {
+  /**
+   * @generated from field: string current_password = 1;
+   */
+  currentPassword: string;
+};
+
+/**
+ * Describes the message obsync.v1.TotpBeginRequest.
+ * Use `create(TotpBeginRequestSchema)` to create a new message.
+ */
+export const TotpBeginRequestSchema: GenMessage<TotpBeginRequest> = /*@__PURE__*/
+  messageDesc(file_obsync_v1_obsync, 6);
+
+/**
+ * @generated from message obsync.v1.TotpBeginResponse
+ */
+export type TotpBeginResponse = Message<"obsync.v1.TotpBeginResponse"> & {
+  /**
+   * base32, for typing into an authenticator app
+   *
+   * @generated from field: string secret = 1;
+   */
+  secret: string;
+
+  /**
+   * otpauth://totp/obsync:<username>?secret=…&issuer=obsync
+   *
+   * @generated from field: string otpauth_uri = 2;
+   */
+  otpauthUri: string;
+};
+
+/**
+ * Describes the message obsync.v1.TotpBeginResponse.
+ * Use `create(TotpBeginResponseSchema)` to create a new message.
+ */
+export const TotpBeginResponseSchema: GenMessage<TotpBeginResponse> = /*@__PURE__*/
+  messageDesc(file_obsync_v1_obsync, 7);
+
+/**
+ * POST /v1/account/totp/confirm
+ *
+ * @generated from message obsync.v1.TotpConfirmRequest
+ */
+export type TotpConfirmRequest = Message<"obsync.v1.TotpConfirmRequest"> & {
+  /**
+   * @generated from field: string code = 1;
+   */
+  code: string;
+};
+
+/**
+ * Describes the message obsync.v1.TotpConfirmRequest.
+ * Use `create(TotpConfirmRequestSchema)` to create a new message.
+ */
+export const TotpConfirmRequestSchema: GenMessage<TotpConfirmRequest> = /*@__PURE__*/
+  messageDesc(file_obsync_v1_obsync, 8);
+
+/**
+ * The new recovery codes, each usable once in place of a code. The server
+ * keeps only their hashes: this is the only time they are shown.
+ *
+ * @generated from message obsync.v1.TotpRecoveryCodesResponse
+ */
+export type TotpRecoveryCodesResponse = Message<"obsync.v1.TotpRecoveryCodesResponse"> & {
+  /**
+   * @generated from field: repeated string recovery_codes = 1;
+   */
+  recoveryCodes: string[];
+};
+
+/**
+ * Describes the message obsync.v1.TotpRecoveryCodesResponse.
+ * Use `create(TotpRecoveryCodesResponseSchema)` to create a new message.
+ */
+export const TotpRecoveryCodesResponseSchema: GenMessage<TotpRecoveryCodesResponse> = /*@__PURE__*/
+  messageDesc(file_obsync_v1_obsync, 9);
+
+/**
+ * POST /v1/account/totp/disable (204), and POST /v1/account/totp/recovery-codes
+ * (new codes, TotpRecoveryCodesResponse): both need the password and a code
+ * or a recovery code.
+ *
+ * @generated from message obsync.v1.TotpVerifyRequest
+ */
+export type TotpVerifyRequest = Message<"obsync.v1.TotpVerifyRequest"> & {
+  /**
+   * @generated from field: string current_password = 1;
+   */
+  currentPassword: string;
+
+  /**
+   * @generated from field: string code = 2;
+   */
+  code: string;
+};
+
+/**
+ * Describes the message obsync.v1.TotpVerifyRequest.
+ * Use `create(TotpVerifyRequestSchema)` to create a new message.
+ */
+export const TotpVerifyRequestSchema: GenMessage<TotpVerifyRequest> = /*@__PURE__*/
+  messageDesc(file_obsync_v1_obsync, 10);
+
+/**
  * GET /v1/account/usage. Sizes are stored (ciphertext) chunk bytes, the unit
  * the quota counts.
  *
@@ -198,7 +332,7 @@ export type GetUsageResponse = Message<"obsync.v1.GetUsageResponse"> & {
  * Use `create(GetUsageResponseSchema)` to create a new message.
  */
 export const GetUsageResponseSchema: GenMessage<GetUsageResponse> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 5);
+  messageDesc(file_obsync_v1_obsync, 11);
 
 /**
  * @generated from message obsync.v1.VaultUsage
@@ -220,7 +354,7 @@ export type VaultUsage = Message<"obsync.v1.VaultUsage"> & {
  * Use `create(VaultUsageSchema)` to create a new message.
  */
 export const VaultUsageSchema: GenMessage<VaultUsage> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 6);
+  messageDesc(file_obsync_v1_obsync, 12);
 
 /**
  * @generated from message obsync.v1.Argon2Params
@@ -247,7 +381,7 @@ export type Argon2Params = Message<"obsync.v1.Argon2Params"> & {
  * Use `create(Argon2ParamsSchema)` to create a new message.
  */
 export const Argon2ParamsSchema: GenMessage<Argon2Params> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 7);
+  messageDesc(file_obsync_v1_obsync, 13);
 
 /**
  * @generated from message obsync.v1.KeyBundle
@@ -306,7 +440,7 @@ export type KeyBundle = Message<"obsync.v1.KeyBundle"> & {
  * Use `create(KeyBundleSchema)` to create a new message.
  */
 export const KeyBundleSchema: GenMessage<KeyBundle> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 8);
+  messageDesc(file_obsync_v1_obsync, 14);
 
 /**
  * epoch 0 is the vault's naming key; epochs >= 1 are content epoch keys.
@@ -330,7 +464,7 @@ export type VaultKey = Message<"obsync.v1.VaultKey"> & {
  * Use `create(VaultKeySchema)` to create a new message.
  */
 export const VaultKeySchema: GenMessage<VaultKey> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 9);
+  messageDesc(file_obsync_v1_obsync, 15);
 
 /**
  * @generated from message obsync.v1.Vault
@@ -372,7 +506,7 @@ export type Vault = Message<"obsync.v1.Vault"> & {
  * Use `create(VaultSchema)` to create a new message.
  */
 export const VaultSchema: GenMessage<Vault> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 10);
+  messageDesc(file_obsync_v1_obsync, 16);
 
 /**
  * @generated from message obsync.v1.CreateVaultRequest
@@ -399,7 +533,7 @@ export type CreateVaultRequest = Message<"obsync.v1.CreateVaultRequest"> & {
  * Use `create(CreateVaultRequestSchema)` to create a new message.
  */
 export const CreateVaultRequestSchema: GenMessage<CreateVaultRequest> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 11);
+  messageDesc(file_obsync_v1_obsync, 17);
 
 /**
  * @generated from message obsync.v1.ListVaultsResponse
@@ -416,7 +550,7 @@ export type ListVaultsResponse = Message<"obsync.v1.ListVaultsResponse"> & {
  * Use `create(ListVaultsResponseSchema)` to create a new message.
  */
 export const ListVaultsResponseSchema: GenMessage<ListVaultsResponse> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 12);
+  messageDesc(file_obsync_v1_obsync, 18);
 
 /**
  * @generated from message obsync.v1.VaultKeysResponse
@@ -433,7 +567,7 @@ export type VaultKeysResponse = Message<"obsync.v1.VaultKeysResponse"> & {
  * Use `create(VaultKeysResponseSchema)` to create a new message.
  */
 export const VaultKeysResponseSchema: GenMessage<VaultKeysResponse> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 13);
+  messageDesc(file_obsync_v1_obsync, 19);
 
 /**
  * @generated from message obsync.v1.Commit
@@ -487,7 +621,7 @@ export type Commit = Message<"obsync.v1.Commit"> & {
  * Use `create(CommitSchema)` to create a new message.
  */
 export const CommitSchema: GenMessage<Commit> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 14);
+  messageDesc(file_obsync_v1_obsync, 20);
 
 /**
  * @generated from message obsync.v1.CommitRequest
@@ -504,7 +638,7 @@ export type CommitRequest = Message<"obsync.v1.CommitRequest"> & {
  * Use `create(CommitRequestSchema)` to create a new message.
  */
 export const CommitRequestSchema: GenMessage<CommitRequest> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 15);
+  messageDesc(file_obsync_v1_obsync, 21);
 
 /**
  * @generated from message obsync.v1.CommitResult
@@ -543,7 +677,7 @@ export type CommitResult = Message<"obsync.v1.CommitResult"> & {
  * Use `create(CommitResultSchema)` to create a new message.
  */
 export const CommitResultSchema: GenMessage<CommitResult> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 16);
+  messageDesc(file_obsync_v1_obsync, 22);
 
 /**
  * @generated from message obsync.v1.CommitResponse
@@ -565,7 +699,7 @@ export type CommitResponse = Message<"obsync.v1.CommitResponse"> & {
  * Use `create(CommitResponseSchema)` to create a new message.
  */
 export const CommitResponseSchema: GenMessage<CommitResponse> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 17);
+  messageDesc(file_obsync_v1_obsync, 23);
 
 /**
  * @generated from message obsync.v1.Version
@@ -632,7 +766,7 @@ export type Version = Message<"obsync.v1.Version"> & {
  * Use `create(VersionSchema)` to create a new message.
  */
 export const VersionSchema: GenMessage<Version> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 18);
+  messageDesc(file_obsync_v1_obsync, 24);
 
 /**
  * @generated from message obsync.v1.ChangesResponse
@@ -659,7 +793,7 @@ export type ChangesResponse = Message<"obsync.v1.ChangesResponse"> & {
  * Use `create(ChangesResponseSchema)` to create a new message.
  */
 export const ChangesResponseSchema: GenMessage<ChangesResponse> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 19);
+  messageDesc(file_obsync_v1_obsync, 25);
 
 /**
  * @generated from message obsync.v1.Head
@@ -691,7 +825,7 @@ export type Head = Message<"obsync.v1.Head"> & {
  * Use `create(HeadSchema)` to create a new message.
  */
 export const HeadSchema: GenMessage<Head> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 20);
+  messageDesc(file_obsync_v1_obsync, 26);
 
 /**
  * @generated from message obsync.v1.HeadsResponse
@@ -713,7 +847,7 @@ export type HeadsResponse = Message<"obsync.v1.HeadsResponse"> & {
  * Use `create(HeadsResponseSchema)` to create a new message.
  */
 export const HeadsResponseSchema: GenMessage<HeadsResponse> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 21);
+  messageDesc(file_obsync_v1_obsync, 27);
 
 /**
  * History of one file, or the vault's trash (tombstone heads), newest first.
@@ -732,7 +866,7 @@ export type VersionsResponse = Message<"obsync.v1.VersionsResponse"> & {
  * Use `create(VersionsResponseSchema)` to create a new message.
  */
 export const VersionsResponseSchema: GenMessage<VersionsResponse> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 22);
+  messageDesc(file_obsync_v1_obsync, 28);
 
 /**
  * @generated from message obsync.v1.ChunkExistsRequest
@@ -749,7 +883,7 @@ export type ChunkExistsRequest = Message<"obsync.v1.ChunkExistsRequest"> & {
  * Use `create(ChunkExistsRequestSchema)` to create a new message.
  */
 export const ChunkExistsRequestSchema: GenMessage<ChunkExistsRequest> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 23);
+  messageDesc(file_obsync_v1_obsync, 29);
 
 /**
  * @generated from message obsync.v1.ChunkExistsResponse
@@ -766,7 +900,7 @@ export type ChunkExistsResponse = Message<"obsync.v1.ChunkExistsResponse"> & {
  * Use `create(ChunkExistsResponseSchema)` to create a new message.
  */
 export const ChunkExistsResponseSchema: GenMessage<ChunkExistsResponse> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 24);
+  messageDesc(file_obsync_v1_obsync, 30);
 
 /**
  * @generated from message obsync.v1.Auth
@@ -783,7 +917,7 @@ export type Auth = Message<"obsync.v1.Auth"> & {
  * Use `create(AuthSchema)` to create a new message.
  */
 export const AuthSchema: GenMessage<Auth> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 25);
+  messageDesc(file_obsync_v1_obsync, 31);
 
 /**
  * @generated from message obsync.v1.Subscribe
@@ -800,7 +934,7 @@ export type Subscribe = Message<"obsync.v1.Subscribe"> & {
  * Use `create(SubscribeSchema)` to create a new message.
  */
 export const SubscribeSchema: GenMessage<Subscribe> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 26);
+  messageDesc(file_obsync_v1_obsync, 32);
 
 /**
  * @generated from message obsync.v1.Ping
@@ -817,7 +951,7 @@ export type Ping = Message<"obsync.v1.Ping"> & {
  * Use `create(PingSchema)` to create a new message.
  */
 export const PingSchema: GenMessage<Ping> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 27);
+  messageDesc(file_obsync_v1_obsync, 33);
 
 /**
  * @generated from message obsync.v1.ClientFrame
@@ -852,7 +986,7 @@ export type ClientFrame = Message<"obsync.v1.ClientFrame"> & {
  * Use `create(ClientFrameSchema)` to create a new message.
  */
 export const ClientFrameSchema: GenMessage<ClientFrame> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 28);
+  messageDesc(file_obsync_v1_obsync, 34);
 
 /**
  * @generated from message obsync.v1.AuthOk
@@ -869,7 +1003,7 @@ export type AuthOk = Message<"obsync.v1.AuthOk"> & {
  * Use `create(AuthOkSchema)` to create a new message.
  */
 export const AuthOkSchema: GenMessage<AuthOk> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 29);
+  messageDesc(file_obsync_v1_obsync, 35);
 
 /**
  * @generated from message obsync.v1.Notify
@@ -891,7 +1025,7 @@ export type Notify = Message<"obsync.v1.Notify"> & {
  * Use `create(NotifySchema)` to create a new message.
  */
 export const NotifySchema: GenMessage<Notify> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 30);
+  messageDesc(file_obsync_v1_obsync, 36);
 
 /**
  * @generated from message obsync.v1.Pong
@@ -908,7 +1042,7 @@ export type Pong = Message<"obsync.v1.Pong"> & {
  * Use `create(PongSchema)` to create a new message.
  */
 export const PongSchema: GenMessage<Pong> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 31);
+  messageDesc(file_obsync_v1_obsync, 37);
 
 /**
  * @generated from message obsync.v1.ServerFrame
@@ -949,7 +1083,7 @@ export type ServerFrame = Message<"obsync.v1.ServerFrame"> & {
  * Use `create(ServerFrameSchema)` to create a new message.
  */
 export const ServerFrameSchema: GenMessage<ServerFrame> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 32);
+  messageDesc(file_obsync_v1_obsync, 38);
 
 /**
  * FileMeta is the plaintext of Commit.enc_meta and Version.enc_meta.
@@ -1005,7 +1139,7 @@ export type FileMeta = Message<"obsync.v1.FileMeta"> & {
  * Use `create(FileMetaSchema)` to create a new message.
  */
 export const FileMetaSchema: GenMessage<FileMeta> = /*@__PURE__*/
-  messageDesc(file_obsync_v1_obsync, 33);
+  messageDesc(file_obsync_v1_obsync, 39);
 
 /**
  * @generated from enum obsync.v1.ErrorCode

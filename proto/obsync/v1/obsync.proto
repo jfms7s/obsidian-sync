@@ -70,6 +70,47 @@ message ListDevicesResponse {
   repeated Device devices = 1;
 }
 
+// ---------- Two-step sign-in (TOTP) ----------
+// The account's own device sets it up: begin (with the account password)
+// returns a new secret, confirm (with a code from it) turns it on and returns
+// the recovery codes, shown once. Wrong passwords and codes answer
+// WRONG_PASSWORD and spend the account's login attempts.
+
+// GET /v1/account/totp
+message TotpStatusResponse {
+  bool enabled = 1;
+  uint32 recovery_codes_left = 2;
+}
+
+// POST /v1/account/totp/begin
+message TotpBeginRequest {
+  string current_password = 1;
+}
+
+message TotpBeginResponse {
+  string secret = 1;      // base32, for typing into an authenticator app
+  string otpauth_uri = 2; // otpauth://totp/obsync:<username>?secret=…&issuer=obsync
+}
+
+// POST /v1/account/totp/confirm
+message TotpConfirmRequest {
+  string code = 1;
+}
+
+// The new recovery codes, each usable once in place of a code. The server
+// keeps only their hashes: this is the only time they are shown.
+message TotpRecoveryCodesResponse {
+  repeated string recovery_codes = 1;
+}
+
+// POST /v1/account/totp/disable (204), and POST /v1/account/totp/recovery-codes
+// (new codes, TotpRecoveryCodesResponse): both need the password and a code
+// or a recovery code.
+message TotpVerifyRequest {
+  string current_password = 1;
+  string code = 2;
+}
+
 // GET /v1/account/usage. Sizes are stored (ciphertext) chunk bytes, the unit
 // the quota counts.
 message GetUsageResponse {
