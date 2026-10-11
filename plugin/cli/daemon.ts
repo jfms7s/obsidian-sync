@@ -1,7 +1,7 @@
 // `obsync-cli sync`: the engine over the vault folder, once or as a daemon.
 // The state is saved after every cycle that changed it (and once a minute
 // at most otherwise), and on the way out.
-import { realpath } from 'node:fs/promises';
+import { readdir, realpath } from 'node:fs/promises';
 import { relative, sep } from 'node:path';
 import { openSyncSession, type EngineEvent, type FetchLike, type SyncEngine, type SyncStatus, type WebSocketFactory } from '../src/index';
 import { CliError, EXIT_ERROR, EXIT_NEEDS_SETUP, EXIT_OK } from './exit';
@@ -47,24 +47,42 @@ const inside = (child: string, parent: string): boolean => {
  * make the CLI upload some other folder.
  */
 async function boundFolder(o: SyncOptions): Promise<string> {
+  // Each of these needs a person (exit 2): restarting the unit would not help.
   let dir: string;
   try {
     dir = await realpath(o.vaultDir);
   } catch {
-    throw new CliError(`the vault folder ${o.vaultDir} does not exist`);
+    throw new CliError(`the vault folder ${o.vaultDir} does not exist (a disk not mounted?)`, EXIT_NEEDS_SETUP);
   }
   const stateDir = await realpath(o.ps.dir);
-  if (inside(stateDir, dir)) throw new CliError(`the state directory ${o.ps.dir} is inside the vault folder: it holds the keys and must not be synced`);
+  if (inside(stateDir, dir)) throw new CliError(`the state directory ${o.ps.dir} is inside the vault folder: it holds the keys and must not be synced`, EXIT_NEEDS_SETUP);
   const bound = await o.ps.state.getSetting<string | null>(VAULT_DIR_SETTING, null);
   if (bound === null) {
-    if (!o.init) throw new CliError(`this state has not synced a folder yet: check that ${dir} is the vault folder, then run the first sync with --init`);
+    if (!o.init) throw new CliError(`this state has not synced a folder yet: check that ${dir} is the vault folder, then run the first sync with --init`, EXIT_NEEDS_SETUP);
     await o.ps.state.setSetting(VAULT_DIR_SETTING, dir);
     await o.ps.save();
     o.log.info(`syncing ${dir} from now on`);
     return dir;
   }
-  if (bound !== dir) throw new CliError(`this state syncs ${bound}, not ${dir}; use --name for another vault folder`);
+  if (bound !== dir) throw new CliError(`this state syncs ${bound}, not ${dir}; use --name for another vault folder`, EXIT_NEEDS_SETUP);
+  await checkNotEmptied(o.ps, dir);
   return dir;
+}
+
+/**
+ * An empty folder where files were synced is far more likely a disk that
+ * is not mounted (its mount point is an empty folder) than a vault emptied
+ * on purpose; syncing it would delete those files on every device, and a
+ * small vault stays under the deletion hold's threshold.
+ */
+async function checkNotEmptied(ps: PersistentState, dir: string): Promise<void> {
+  if ((await readdir(dir)).length > 0) return;
+  const synced = (await ps.state.allFiles()).filter((r) => !r.deleted && r.contentHash !== null && !r.ignored && !r.shadowed).length;
+  if (synced === 0) return;
+  throw new CliError(
+    `${dir} is empty, but ${synced} files were synced from it: is its disk mounted? Nothing was deleted. To empty the vault on purpose, delete the files in Obsidian or on another device.`,
+    EXIT_NEEDS_SETUP,
+  );
 }
 
 /** What openSyncSession will refuse, said before the folder is looked at. */

@@ -13,7 +13,7 @@ import { runSync, VAULT_DIR_SETTING } from './daemon';
 import { CliError, EXIT_ERROR, EXIT_NEEDS_SETUP, EXIT_OK } from './exit';
 import { acquireLock, lockHolder, StateLockedError } from './lock';
 import type { Logger } from './log';
-import { secret } from './prompt';
+import { NoTerminalError, secret } from './prompt';
 import { PersistentState, SNAPSHOT_FILE, StateFileError } from './state';
 import { readStatus, STATUS_FILE } from './status';
 
@@ -53,7 +53,8 @@ Options for every command:
   --verbose          Log debug lines too.
   --help, --version
 
-Exit codes: 0 ok, 1 error, 2 needs login, unlock or a vault choice.`;
+Exit codes: 0 ok, 1 error, 2 a person must act (log in, unlock, choose a
+vault, or check the folder: --init, or a folder missing or empty).`;
 
 export interface Io {
   env: NodeJS.ProcessEnv;
@@ -153,7 +154,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
 }
 
 function describe(err: unknown): string {
-  if (err instanceof CliError || err instanceof StateLockedError || err instanceof StateFileError || err instanceof InsecureServerUrlError) return err.message;
+  if (err instanceof CliError || err instanceof StateLockedError || err instanceof StateFileError || err instanceof InsecureServerUrlError || err instanceof NoTerminalError) return err.message;
   if (isAuthFailure(err)) return `the server refused this device (${(err as Error).message}): obsync-cli logout, then obsync-cli login`;
   if (err instanceof NetworkError) return `cannot reach the server: ${err.message}`;
   if (err instanceof ApiError) return `the server said: ${err.message}`;
