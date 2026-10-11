@@ -35,22 +35,82 @@ describe('requestUrl transport', () => {
   it('gives up on a request that never answers (requestUrl cannot be aborted), and ignores a late answer', async () => {
     const clock = new ManualClock();
     let answer!: (r: RequestResult) => void;
-    const send = createRequestUrlTransport({ clock, request: () => new Promise((resolve) => (answer = resolve)) });
-    const result = send('https://s/v1/auth/login', { method: 'POST', headers: {} }).then(() => 'answered', (e: unknown) => e);
+    let fail!: (e: unknown) => void;
+    const send = createRequestUrlTransport({ clock, request: () => new Promise((resolve, reject) => ((answer = resolve), (fail = reject))) });
+    const settled: unknown[] = [];
+    const result = send('https://s/v1/auth/login', { method: 'POST', headers: {} }).then((r) => (settled.push(r), 'answered'), (e: unknown) => (settled.push(e), e));
     clock.advance(59_000);
-    await Promise.resolve();
+    await flush();
+    expect(settled).toEqual([]);
     clock.advance(1_000);
     expect(await result).toMatchObject({ message: expect.stringMatching(/timed out after 60 s/) });
-    answer(ok()); // the abandoned request finishes later: nothing happens
-    await Promise.resolve();
+    // The abandoned request finishes later, either way: the caller already has its answer and nothing else happens.
+    answer(ok());
+    fail(new Error('late failure'));
+    await flush();
+    expect(settled).toHaveLength(1);
+  });
+
+  it('clears its timer when the answer comes in time', async () => {
+    const clock = new ManualClock();
+    const send = createRequestUrlTransport({ clock, request: async () => ok() });
+    await send('https://s/v1/x', { method: 'GET', headers: {} });
+    expect(clock.pendingTimers()).toBe(0);
+  });
+
+  it('passes a failure of requestUrl through unchanged', async () => {
+    const clock = new ManualClock();
+    const boom = Object.assign(new Error('net::ERR_CONNECTION_REFUSED'), { code: 'ECONNREFUSED' });
+    const send = createRequestUrlTransport({ clock, request: () => Promise.reject(boom) });
+    await expect(send('https://s/v1/x', { method: 'GET', headers: {} })).rejects.toBe(boom);
+    expect(clock.pendingTimers()).toBe(0);
+  });
+
+  it('wraps a failure that is not an Error, keeping what was thrown as the cause', async () => {
+    const thrown = { status: 0, text: 'net::ERR_INTERNET_DISCONNECTED' };
+    const send = createRequestUrlTransport({ clock: new ManualClock(), request: () => Promise.reject(thrown) });
+    const err = await send('https://s/v1/x', { method: 'GET', headers: {} }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).cause).toBe(thrown);
+  });
+
+  it('sends a request without a body as just that', async () => {
+    const request = vi.fn<RequestFn>(async () => ok());
+    const send = createRequestUrlTransport({ request });
+    await send('https://s/v1/x', { method: 'GET', headers: { Authorization: 'Bearer t' } });
+    const p = request.mock.calls[0]![0];
+    expect(p.body).toBeUndefined();
+    expect(p.contentType).toBeUndefined();
+    expect(p.headers).toEqual({ Authorization: 'Bearer t' });
+  });
+
+  it('takes its timeouts from the options', async () => {
+    for (const [url, after] of [['https://s/v1/x', 5_000], ['https://s/v1/vaults/0123456789abcdef0123456789abcdef/chunks/aa', 20_000]] as const) {
+      const clock = new ManualClock();
+      const send = createRequestUrlTransport({ clock, timeoutMs: 5_000, longTimeoutMs: 20_000, request: () => new Promise(() => undefined) });
+      const outcome: unknown[] = [];
+      void send(url, { method: 'GET', headers: {} }).catch((e: unknown) => outcome.push(e));
+      clock.advance(after - 1);
+      await flush();
+      expect(outcome).toEqual([]);
+      clock.advance(1);
+      await flush();
+      expect(outcome).toHaveLength(1);
+    }
   });
 
   it('allows chunk transfers and big bodies much longer', async () => {
-    for (const [url, body] of [['https://s/v1/vaults/0123456789abcdef0123456789abcdef/chunks/aa', undefined], ['https://s/v1/vaults/0123456789abcdef0123456789abcdef/commit', new Uint8Array(2 << 20)]] as const) {
+    const chunk = 'https://s/v1/vaults/0123456789abcdef0123456789abcdef/chunks/aa';
+    for (const [method, url, body] of [
+      ['PUT', chunk, undefined],
+      ['GET', chunk, undefined],
+      ['GET', `${chunk}?v=1`, undefined],
+      ['POST', 'https://s/v1/vaults/0123456789abcdef0123456789abcdef/commit', new Uint8Array(2 << 20)],
+    ] as const) {
       const clock = new ManualClock();
       const send = createRequestUrlTransport({ clock, request: () => new Promise(() => undefined) });
       const outcome: unknown[] = [];
-      void send(url, { method: 'PUT', headers: {}, ...(body ? { body: body as Uint8Array<ArrayBuffer> } : {}) }).catch((e: unknown) => outcome.push(e));
+      void send(url, { method, headers: {}, ...(body ? { body: body as Uint8Array<ArrayBuffer> } : {}) }).catch((e: unknown) => outcome.push(e));
       clock.advance(299_000);
       await flush();
       expect(outcome).toEqual([]);
