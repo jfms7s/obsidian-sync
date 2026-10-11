@@ -118,7 +118,7 @@ export async function holdLargeDeletions(ctx: SyncContext, mem: HoldMemory, entr
   if (next.held.length > 0 && next.held.length !== mem.heldNotified) {
     mem.heldNotified = next.held.length;
     ctx.emit({
-      type: 'notice', code: 'DELETIONS_HELD', persistent: true,
+      type: 'notice', code: 'DELETIONS_HELD', persistent: true, count: next.held.length,
       message: `${next.held.length} files deleted on this device are on hold: they stay on your other devices until you choose, in the Obsync settings, to delete them everywhere or restore them here.`,
     });
   }

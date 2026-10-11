@@ -1,9 +1,13 @@
 // Vault paths: vault-relative, '/'-separated, NFC (spec §5.1).
 
 export class InvalidPathError extends Error {
+  /** Why the name is refused, without the path (e.g. '"a:b" contains ":"'). */
+  readonly why: string;
+
   constructor(path: string, why: string) {
     super(`invalid path ${JSON.stringify(path)}: ${why}`);
     this.name = 'InvalidPathError';
+    this.why = why;
   }
 }
 

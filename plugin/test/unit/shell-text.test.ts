@@ -9,6 +9,7 @@ import { NotInTrashError, PathOccupiedError, UnsyncedChangesError } from '../../
 import { diffLines, MAX_DIFF_LINES } from '../../src/shell/diff';
 import { describeError } from '../../src/shell/errors';
 import { noticeFor } from '../../src/shell/notices';
+import type { EngineEvent } from '../../src/sync/events';
 import { statusLabel } from '../../src/shell/status';
 
 describe('diffLines', () => {
@@ -66,7 +67,37 @@ describe('statusLabel', () => {
 describe('noticeFor', () => {
   it('keeps persistent notices until dismissed and times the others out', () => {
     expect(noticeFor({ type: 'notice', code: 'QUOTA_EXCEEDED', persistent: true, message: 'x' })).toMatchObject({ timeoutMs: 0, message: expect.stringContaining('storage quota') });
-    expect(noticeFor({ type: 'notice', code: 'FILE_FAILED', persistent: false, path: 'a.md', message: 'a.md: disk error' })).toEqual({ message: 'Obsync: a.md: disk error', timeoutMs: 8000 });
+    expect(noticeFor({ type: 'notice', code: 'FILE_FAILED', persistent: false, path: 'a.md', reason: 'Error', message: 'a.md: disk error' })).toMatchObject({ timeoutMs: 8000 });
+  });
+
+  // One case per NoticeCode: the words come from the structured fields, never from the engine's log message.
+  const LOG = 'the engine log text, never shown';
+  const view = (e: Omit<Extract<EngineEvent, { type: 'notice' }>, 'type' | 'message' | 'persistent'> & { persistent?: boolean }) =>
+    noticeFor({ type: 'notice', persistent: false, message: LOG, ...e })!.message;
+  it.each<[string, () => string, RegExp]>([
+    ['QUOTA_EXCEEDED', () => view({ code: 'QUOTA_EXCEEDED' }), /storage quota is used up/],
+    ['DEVICE_REVOKED', () => view({ code: 'DEVICE_REVOKED' }), /signed out/],
+    ['UNAUTHORIZED', () => view({ code: 'UNAUTHORIZED' }), /signed out/],
+    ['VAULT_LOST', () => view({ code: 'VAULT_LOST' }), /vault was deleted/],
+    ['TOO_LARGE download', () => view({ code: 'TOO_LARGE', path: 'big.bin', size: 300 << 20, limit: 256 << 20, reason: 'download' }), /^Obsync: big\.bin \(300 MiB\) is larger than this device syncs \(256 MiB\) and was not downloaded\.$/],
+    ['TOO_LARGE download, local copy kept', () => view({ code: 'TOO_LARGE', path: 'big.bin', size: 300 << 20, limit: 256 << 20, reason: 'download', conflictPath: 'big (conflict).bin' }), /Your local changes were saved as big \(conflict\)\.bin/],
+    ['TOO_LARGE upload', () => view({ code: 'TOO_LARGE', path: 'big.bin', size: 300 << 20, limit: 256 << 20, reason: 'upload' }), /was not uploaded/],
+    ['TOO_LARGE on the server', () => view({ code: 'TOO_LARGE', path: 'big.bin', reason: 'remote' }), /server's version is larger than this device syncs/],
+    ['TOO_LARGE refused by the server', () => view({ code: 'TOO_LARGE', path: 'big.bin', reason: 'server' }), /larger than the server accepts/],
+    ['CASE_COLLISION with a copy', () => view({ code: 'CASE_COLLISION', path: 'a.md', conflictPath: 'a (conflict).md' }), /saved as a \(conflict\)\.md/],
+    ['CASE_COLLISION shadowed', () => view({ code: 'CASE_COLLISION', path: 'a.md' }), /differs from it only in letter case/],
+    ['PATH_COLLISION shadowed', () => view({ code: 'PATH_COLLISION', path: 'docs' }), /folder/],
+    ['DECRYPT_FAILED', () => view({ code: 'DECRYPT_FAILED', path: 'a.md', reason: 'CryptoError' }), /could not be decrypted/],
+    ['SERVER_ROLLBACK', () => view({ code: 'SERVER_ROLLBACK' }), /restored from a backup/],
+    ['COMMIT_REJECTED', () => view({ code: 'COMMIT_REJECTED', path: 'a.md', reason: 'bad meta' }), /^Obsync: the server refused a\.md \(bad meta\); it is not synced until it changes\.$/],
+    ['INVALID_PATH', () => view({ code: 'INVALID_PATH', path: 'a:b.md', reason: 'contains ":"' }), /^Obsync: a:b\.md cannot be synced \(contains ":"\): rename it to sync it\.$/],
+    ['CONTENT_MISSING', () => view({ code: 'CONTENT_MISSING', path: 'a.md' }), /server is missing part of a\.md/],
+    ['DELETIONS_HELD', () => view({ code: 'DELETIONS_HELD', count: 120 }), /^Obsync: 120 files deleted on this device are on hold/],
+    ['FILE_FAILED', () => view({ code: 'FILE_FAILED', path: 'a.md', reason: 'Error' }), /a\.md could not be synced just now/],
+  ])('words %s from its fields', (_name, show, expected) => {
+    const message = show();
+    expect(message).toMatch(expected);
+    expect(message).not.toContain(LOG);
   });
 
   it('says what to do when the device is signed out or loses the vault', () => {
@@ -132,11 +163,11 @@ describe('describeError', () => {
     expect(describeError(empty)).toEqual({ kind: 'fix-input', message: 'This account already has keys.' });
   });
 
-  it('shows the engine\'s own text for a collision without a copy', () => {
-    for (const code of ['CASE_COLLISION', 'PATH_COLLISION'] as const) {
-      expect(noticeFor({ type: 'notice', code, persistent: false, path: 'a.md', message: 'a.md is not synced from this device' }))
-        .toEqual({ message: 'Obsync: a.md is not synced from this device', timeoutMs: 8000 });
-    }
+  it('words a collision without a copy itself, naming what holds the name', () => {
+    expect(noticeFor({ type: 'notice', code: 'CASE_COLLISION', persistent: false, path: 'a.md', message: 'log text' }))
+      .toEqual({ message: 'Obsync: a.md is not synced from this device: the server has a file that differs from it only in letter case.', timeoutMs: 8000 });
+    expect(noticeFor({ type: 'notice', code: 'PATH_COLLISION', persistent: false, path: 'a.md', message: 'log text' })!.message)
+      .toMatch(/^Obsync: a\.md is not synced from this device: .*folder/);
   });
 
   it('keeps the wording of history errors and shows unknown errors', () => {

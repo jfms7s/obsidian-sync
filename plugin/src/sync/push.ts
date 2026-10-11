@@ -101,7 +101,7 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
     path = normalizePath(entry.path);
   } catch (err) {
     if (!(err instanceof InvalidPathError)) throw err;
-    ctx.emit({ type: 'notice', code: 'INVALID_PATH', persistent: false, path: entry.path, message: err.message });
+    ctx.emit({ type: 'notice', code: 'INVALID_PATH', persistent: false, path: entry.path, reason: err.why, message: err.message });
     await state.clearDirty(entry.path, entry.gen);
     return null;
   }
@@ -139,7 +139,7 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
     const st = await ctx.adapter.stat(path);
     if (st && st.path === path) {
       ctx.emit(rec.tooLarge
-        ? { type: 'notice', code: 'TOO_LARGE', persistent: true, path, message: `${path} is not synced from this device: the server's version is larger than this device syncs` }
+        ? { type: 'notice', code: 'TOO_LARGE', persistent: true, path, reason: 'remote', message: `${path} is not synced from this device: the server's version is larger than this device syncs` }
         : rec.shadowedBy === 'folder'
           ? { type: 'notice', code: 'PATH_COLLISION', persistent: false, path, message: `${path} is not synced from this device: the server's file of this name was saved beside a folder that held the name here` }
           : { type: 'notice', code: 'CASE_COLLISION', persistent: false, path, message: `${path} is not synced from this device: the server has a file that differs from it only in letter case` });
@@ -153,7 +153,10 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
     const fingerprint = `stat:${stat.size}:${stat.mtime}`;
     if (refusal?.fingerprint !== fingerprint) {
       await state.putRefusal({ path, fingerprint, message: `larger than ${ctx.maxFileBytes} bytes` });
-      ctx.emit({ type: 'notice', code: 'TOO_LARGE', persistent: true, path, message: `${path} (${stat.size} bytes) is larger than this device syncs and was not uploaded` });
+      ctx.emit({
+        type: 'notice', code: 'TOO_LARGE', persistent: true, path, reason: 'upload', size: stat.size, limit: ctx.maxFileBytes,
+        message: `${path} (${stat.size} bytes) is larger than this device syncs and was not uploaded`,
+      });
     }
     await state.clearDirty(entry.path, entry.gen);
     return null;
@@ -386,7 +389,8 @@ export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<Push
           if (op.matchesLocal) await ctx.state.clearDirty(op.entry.path, op.entry.gen);
           ctx.emit({
             type: 'notice', code: code === ErrorCode.TOO_LARGE ? 'TOO_LARGE' : 'COMMIT_REJECTED', persistent: code === ErrorCode.TOO_LARGE,
-            path: p.path, message: `${p.path} was not synced: ${r.error?.message ?? 'rejected by the server'}`,
+            path: p.path, ...(code === ErrorCode.TOO_LARGE ? { reason: 'server' } : r.error?.message ? { reason: r.error.message } : {}),
+            message: `${p.path} was not synced: ${r.error?.message ?? 'rejected by the server'}`,
           });
           break;
         }

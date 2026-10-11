@@ -36,7 +36,7 @@ it('backs off a failing file from 1 minute, notifying only the first time', asyn
   expect(await isDeferred(c, 'push:a.md')).toBe(false);
   await recordFailure(c, 'push:a.md', 'a.md', new Error('EIO'));
   expect((await c.state.getFailure('push:a.md'))!.attempts).toBe(2);
-  expect(c.events).toEqual([{ type: 'notice', code: 'FILE_FAILED', persistent: false, path: 'a.md', message: 'a.md: EIO' }]);
+  expect(c.events).toEqual([{ type: 'notice', code: 'FILE_FAILED', persistent: false, path: 'a.md', reason: 'Error', message: 'a.md: EIO' }]);
   expect(nextRetryAt(await c.state.allFailures())).toBe((await c.state.getFailure('push:a.md'))!.nextAt);
   await clearFailure(c, 'push:a.md');
   expect(nextRetryAt(await c.state.allFailures())).toBeNull();
