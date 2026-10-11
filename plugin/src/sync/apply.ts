@@ -4,7 +4,7 @@ import { decryptMeta, fileIdFor, type FileMeta } from '../crypto/objects';
 import { CryptoError } from '../crypto/primitives';
 import { merge3 } from '../merge/merge3';
 import type { FileRecord, PendingCommit } from '../state/store';
-import { equalBytes, toHex, utf8 } from '../util/bytes';
+import { equalBytes, fromHex, toHex, utf8 } from '../util/bytes';
 import { caseFold } from '../util/path';
 import { expectFor, isCoarseMtime, type FileStat } from '../vault/adapter';
 import { deviceLabel, evictBlockingFile, freeCopyPath, moveToCopy, saveBeside } from './collisions';
@@ -223,6 +223,19 @@ async function stillAsRead(ctx: SyncContext, path: string, local: { stat: FileSt
   return now !== null && (await hashHex(now)) === localHash;
 }
 
+/**
+ * Whether the server's newest version of rec's file is a deletion. While the
+ * old name of a case-only rename is still live there, the version naming it
+ * in renamedFrom may have renamed some other file of that name (one that
+ * another device created and renamed before it ever synced, say). Taking it
+ * for a rename of the file here would overwrite that file with other content
+ * and then delete its name everywhere; the collision rule keeps both instead.
+ */
+async function deletedOnServer(ctx: SyncContext, rec: FileRecord): Promise<boolean> {
+  const [newest] = await ctx.api.history(ctx.ring.vaultId, fromHex(rec.fileId));
+  return newest?.deleted === true;
+}
+
 /** One attempt; false when a write precondition failed because the local file changed meanwhile. */
 async function tryApply(
   ctx: SyncContext, v: RemoteVersion, meta: FileMeta, rec: FileRecord | undefined, fileId: string, versionId: string,
@@ -253,14 +266,18 @@ async function tryApply(
     if (st && st.path !== path) {
       // A case-only rename on another device (todo.md → TODO.md) whose
       // create arrives before its delete: rename the unchanged local file.
+      // Only when that loses nothing: the new name holds the same content,
+      // or the server shows the old name gone. A renamed_from names a path,
+      // not a version, so it may stand for an older file of that name.
       if (meta.renamedFrom && caseFold(meta.renamedFrom) === caseFold(st.path)) {
         const old = (await state.filesByPath(st.path)).find(isSyncedHere);
         const local = await adapter.read(st.path);
-        if (old && !old.deleted && local && (await hashHex(local)) === old.contentHash) {
+        const localHash = local ? await hashHex(local) : null;
+        if (old && !old.deleted && localHash !== null && localHash === old.contentHash && (contentHash === localHash || (await deletedOnServer(ctx, old)))) {
           if (!(await adapter.rename(st.path, path, expectFor(st)))) return false;
           const data = await remote();
           const renamed = await adapter.stat(path);
-          if (!renamed || !(await stillAsRead(ctx, path, { stat: renamed }, old.contentHash))) return false;
+          if (!renamed || !(await stillAsRead(ctx, path, { stat: renamed }, localHash))) return false;
           const writtenAt = ctx.clock.now();
           if (!(await adapter.write(path, data, expectFor(renamed)))) return false;
           await state.recordSynced(await recordWritten(ctx, path, writtenAt, record(fileId, path, versionId, v, contentHash, -1)), decodeText(path, data));
