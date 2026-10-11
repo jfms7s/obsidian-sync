@@ -14,7 +14,7 @@ import { formatBytes } from './format-bytes';
 import { ConfirmModal, TrashModal } from './history-modal';
 import { formatIgnoreText, parseIgnoreText } from './ignore-text';
 import { describePlatform } from './platform';
-import { SetupController, type RemoteVaults, type StorageUsage } from './setup-controller';
+import { isSecondFactorRequired, SetupController, type RemoteVaults, type StorageUsage } from './setup-controller';
 import type { SetupStep } from './steps';
 import { statusLabel } from './status';
 
@@ -36,7 +36,16 @@ interface Form {
   recoveryWords: string;
   vaultName: string;
   ignoreText: string | null;
+  /** The second factor at sign-in, asked for once the server says the account needs it. */
+  totpCode: string;
+  needsCode: boolean;
+  /** The password and code fields of the two-step sign-in section. */
+  twoStepPassword: string;
+  twoStepCode: string;
 }
+
+/** What the two-step sign-in section shows besides its status: a set-up in progress, or new recovery codes. Memory only. */
+type TwoStepView = { kind: 'status' } | { kind: 'enrolling'; secret: string; uri: string } | { kind: 'codes'; codes: string[] };
 
 /** A text area for typed text that is not prose (recovery words, ignore rules): no spell check or autocorrect. */
 /** The storage lines are refreshed after a sync cycle at most this often. */
@@ -60,13 +69,14 @@ export class ObsyncSettingTab extends PluginSettingTab {
   private stopUsageRefresh: (() => void) | null = null;
   private usageTimer: TimerHandle | null = null;
   private lastUsageFetchMs = Number.NEGATIVE_INFINITY;
+  private twoStep: TwoStepView = { kind: 'status' };
 
   constructor(app: App, plugin: Plugin, private readonly shell: ShellController, state: LocalState, fetch: FetchLike, private readonly clock: Clock = systemClock) {
     super(app, plugin);
     this.setup = new SetupController({ state, fetch, shell });
     this.form = {
       server: '', username: '', password: '', deviceName: describePlatform().name, passphrase: '', passphrase2: '', recoveryWords: '',
-      vaultName: app.vault.getName(), ignoreText: null,
+      vaultName: app.vault.getName(), ignoreText: null, totpCode: '', needsCode: false, twoStepPassword: '', twoStepCode: '',
     };
   }
 
@@ -78,6 +88,10 @@ export class ObsyncSettingTab extends PluginSettingTab {
     this.renderToken++;
     this.endUsageRefresh();
     this.form.password = this.form.passphrase = this.form.passphrase2 = this.form.recoveryWords = '';
+    this.form.totpCode = this.form.twoStepPassword = this.form.twoStepCode = '';
+    this.form.needsCode = false;
+    // A secret on screen or recovery codes not confirmed as saved are not kept once the tab closes.
+    this.twoStep = { kind: 'status' };
   }
 
   private async render(): Promise<void> {
@@ -167,9 +181,25 @@ export class ObsyncSettingTab extends PluginSettingTab {
     this.text('Username', '', () => f.username, (v) => (f.username = v), { autocomplete: 'username' });
     this.text('Password', 'The account password the server\'s administrator gave you.', () => f.password, (v) => (f.password = v), { secret: true, autocomplete: 'current-password' });
     this.text('Device name', 'Shown in your device list and in the names of conflict copies.', () => f.deviceName, (v) => (f.deviceName = v));
+    if (f.needsCode) {
+      this.text('Code', 'This account uses two-step sign-in: the 6-digit code from your authenticator app, or one of your recovery codes.',
+        () => f.totpCode, (v) => (f.totpCode = v), { autocomplete: 'one-time-code' });
+    }
     new Setting(this.containerEl).addButton((b) => b.setButtonText('Sign in').setCta().onClick(this.action(b, async () => {
-      await this.setup.login(f.server, f.username, f.password, f.deviceName.trim() || describePlatform().name, describePlatform().platform);
-      f.password = '';
+      try {
+        await this.setup.login(f.server, f.username, f.password, f.deviceName.trim() || describePlatform().name, describePlatform().platform,
+          f.needsCode ? f.totpCode : '');
+      } catch (err) {
+        // The password was right; the account also needs a code. Ask for it, keeping what was typed.
+        if (isSecondFactorRequired(err) && !f.needsCode) {
+          f.needsCode = true;
+          await this.render();
+          return;
+        }
+        throw err;
+      }
+      f.password = f.totpCode = '';
+      f.needsCode = false;
       await this.render();
     })));
   }
@@ -321,6 +351,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
     new Setting(this.containerEl).setName('Deleted files').setDesc('Restore a file that was deleted. To see the earlier versions of a note, use the history command or the note\'s menu.')
       .addButton((b) => b.setButtonText('Show deleted files').onClick(() => new TrashModal(this.app, this.shell).open()));
     await this.renderDevices();
+    await this.renderTwoStep();
     if (token !== this.renderToken) return;
     this.showUsage(await usage);
     this.startUsageRefresh(token);
@@ -444,6 +475,94 @@ export class ObsyncSettingTab extends PluginSettingTab {
         }));
         if (cta) b.setCta();
       });
+  }
+
+  /**
+   * Two-step sign-in: its status and the way to turn it on (password, then
+   * the secret to add to an authenticator app and its first code, then the
+   * recovery codes once) or off. Hidden on a server without it.
+   */
+  private async renderTwoStep(): Promise<void> {
+    const f = this.form;
+    const view = this.twoStep;
+    if (view.kind === 'enrolling') {
+      this.heading('Two-step sign-in');
+      this.containerEl.createEl('p', { text: 'Add this account to an authenticator app: open the set-up link on this device, or type the key into the app. Then enter the code it shows.' });
+      new Setting(this.containerEl).setName('Set-up link').setDesc(view.uri)
+        .addButton((b) => b.setButtonText('Copy link').onClick(() => void this.copy(view.uri, 'set-up link')));
+      new Setting(this.containerEl).setName('Key').setDesc(view.secret.replace(/(.{4})(?=.)/g, '$1 '))
+        .addButton((b) => b.setButtonText('Copy key').onClick(() => void this.copy(view.secret, 'key')));
+      this.text('Code from the app', '', () => f.twoStepCode, (v) => (f.twoStepCode = v), { autocomplete: 'one-time-code' });
+      new Setting(this.containerEl)
+        .addButton((b) => b.setButtonText('Cancel').onClick(() => {
+          this.twoStep = { kind: 'status' };
+          void this.render();
+        }))
+        .addButton((b) => b.setButtonText('Turn on').setCta().onClick(this.action(b, async () => {
+          const codes = await this.setup.twoStepConfirm(f.twoStepCode);
+          f.twoStepCode = '';
+          this.twoStep = { kind: 'codes', codes };
+          await this.render();
+        })));
+      return;
+    }
+    if (view.kind === 'codes') {
+      this.heading('Two-step sign-in');
+      this.containerEl.createEl('p', { text: 'These recovery codes sign you in if you lose the authenticator app, each one once. Keep them somewhere safe. They are shown only now.' });
+      const grid = this.containerEl.createDiv({ cls: 'obsync-recovery-words' });
+      for (const c of view.codes) grid.createSpan({ text: c });
+      new Setting(this.containerEl)
+        .addButton((b) => b.setButtonText('Copy codes').onClick(() => void this.copy(view.codes.join('\n'), 'recovery codes')))
+        .addButton((b) => b.setButtonText('I have saved them').setCta().onClick(() => {
+          this.twoStep = { kind: 'status' };
+          void this.render();
+        }));
+      return;
+    }
+    let status;
+    try {
+      status = await this.setup.twoStepStatus();
+    } catch {
+      return; // information only: a failure hides the section
+    }
+    if (!status) return;
+    this.heading('Two-step sign-in');
+    this.text('Account password', '', () => f.twoStepPassword, (v) => (f.twoStepPassword = v), { secret: true, autocomplete: 'current-password' });
+    if (!status.enabled) {
+      new Setting(this.containerEl).setName('Off')
+        .setDesc('Turn it on to need a code from an authenticator app, as well as the password, whenever a device signs in. Devices signed in now stay signed in.')
+        .addButton((b) => b.setButtonText('Set up').onClick(this.action(b, async () => {
+          const setup = await this.setup.twoStepBegin(f.twoStepPassword);
+          f.twoStepPassword = '';
+          this.twoStep = { kind: 'enrolling', secret: setup.secret, uri: setup.uri };
+          await this.render();
+        })));
+      return;
+    }
+    this.text('Code', 'From your authenticator app, or a recovery code.', () => f.twoStepCode, (v) => (f.twoStepCode = v), { autocomplete: 'one-time-code' });
+    new Setting(this.containerEl).setName('On')
+      .setDesc(`New devices need a code to sign in. ${status.recoveryCodesLeft} recovery codes left.`)
+      .addButton((b) => b.setButtonText('New recovery codes').onClick(this.action(b, async () => {
+        const codes = await this.setup.twoStepNewRecoveryCodes(f.twoStepPassword, f.twoStepCode);
+        f.twoStepPassword = f.twoStepCode = '';
+        this.twoStep = { kind: 'codes', codes };
+        await this.render();
+      })))
+      .addButton((b) => b.setButtonText('Turn off').setWarning().onClick(this.action(b, async () => {
+        await this.setup.twoStepDisable(f.twoStepPassword, f.twoStepCode);
+        f.twoStepPassword = f.twoStepCode = '';
+        new Notice('Obsync: two-step sign-in is off.');
+        await this.render();
+      })));
+  }
+
+  private async copy(text: string, what: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text);
+      new Notice(`Obsync: ${what} copied.`);
+    } catch {
+      new Notice(`Obsync: could not copy the ${what}.`);
+    }
   }
 
   private async renderDevices(): Promise<void> {

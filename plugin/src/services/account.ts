@@ -24,12 +24,19 @@ export function apiFor(session: Pick<Session, 'serverUrl' | 'token'>, deps: Clie
 }
 
 /** Logs this device in and stores the session. */
+/**
+ * Signs this device in. totpCode is the second factor (an authenticator's
+ * code or a recovery code) for an account with two-step sign-in; without
+ * one, such an account fails with SECOND_FACTOR_REQUIRED.
+ */
 export async function login(
-  state: LocalState, serverUrl: string, username: string, password: string, deviceName: string, platform: string, deps: ClientDeps = {},
+  state: LocalState, serverUrl: string, username: string, password: string, deviceName: string, platform: string,
+  deps: ClientDeps & { totpCode?: string } = {},
 ): Promise<Session> {
   const baseUrl = normalizeServerUrl(serverUrl);
-  const api = new ApiClient({ baseUrl, ...deps });
-  const r = await api.login(username, password, deviceName, platform);
+  const { totpCode = '', ...clientDeps } = deps;
+  const api = new ApiClient({ baseUrl, ...clientDeps });
+  const r = await api.login(username, password, deviceName, platform, totpCode);
   const session: Session = { serverUrl: baseUrl, username, userId: r.userId, deviceId: r.deviceId, deviceName, token: r.token };
   await state.setSession(session);
   return session;

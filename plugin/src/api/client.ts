@@ -6,7 +6,8 @@ import { create, fromBinary, toBinary, type DescMessage, type MessageShape } fro
 import {
   ChangesResponseSchema, ChunkExistsRequestSchema, ChunkExistsResponseSchema, CommitRequestSchema, CommitResponseSchema,
   CreateVaultRequestSchema, ErrorCode, ErrorSchema, GetUsageResponseSchema, HeadsResponseSchema, KeyBundleSchema, ListDevicesResponseSchema,
-  ListVaultsResponseSchema, LoginRequestSchema, LoginResponseSchema, VaultKeysResponseSchema, VaultSchema,
+  ListVaultsResponseSchema, LoginRequestSchema, LoginResponseSchema, TotpBeginRequestSchema, TotpBeginResponseSchema,
+  TotpConfirmRequestSchema, TotpRecoveryCodesResponseSchema, TotpStatusResponseSchema, TotpVerifyRequestSchema, VaultKeysResponseSchema, VaultSchema,
   VersionsResponseSchema, type Vault, type Version,
 } from '../gen/obsync/v1/obsync_pb';
 import { bs, toHex, utf8 } from '../util/bytes';
@@ -20,7 +21,7 @@ import {
 } from './limits';
 import type {
   AccountUsage, ChangesPage, CommitInput, CommitReply, DeviceInfo, HeadsPage, KeyBundleFields, LoginResult, RemoteVersion,
-  SealedVaultKey, VaultInfo,
+  SealedVaultKey, TotpSetup, TotpStatus, VaultInfo,
 } from './types';
 
 export const PROTO = 'application/x-protobuf';
@@ -213,9 +214,14 @@ export class ApiClient {
 
   // ---------- accounts and devices ----------
 
-  async login(username: string, password: string, deviceName: string, platform: string): Promise<LoginResult> {
+  /**
+   * Signs in. For an account with two-step sign-in, a first call without
+   * totpCode fails with SECOND_FACTOR_REQUIRED; call again with the
+   * authenticator's code or a recovery code.
+   */
+  async login(username: string, password: string, deviceName: string, platform: string, totpCode = ''): Promise<LoginResult> {
     checkPassword(password);
-    const body = toBinary(LoginRequestSchema, create(LoginRequestSchema, { username, password, deviceName, platform }));
+    const body = toBinary(LoginRequestSchema, create(LoginRequestSchema, { username, password, deviceName, platform, totpCode }));
     if (body.length > LOGIN_BODY_LIMIT) throw new ApiError(ErrorCode.INVALID, `the login request is over ${LOGIN_BODY_LIMIT} bytes`, 0);
     const r = await this.decode(LoginResponseSchema, await this.send('POST', '/v1/auth/login', { body, auth: false }), 'login');
     this.token = r.token;
@@ -253,6 +259,40 @@ export class ApiClient {
       usedBytes: num(r.usedBytes, 'used_bytes'), quotaBytes: num(r.quotaBytes, 'quota_bytes'),
       vaults: new Map(r.vaults.map((v) => [v.vaultId, num(v.usedBytes, 'used_bytes')])),
     };
+  }
+
+  // ---------- two-step sign-in ----------
+
+  async totpStatus(): Promise<TotpStatus> {
+    const r = await this.decode(TotpStatusResponseSchema, await this.send('GET', '/v1/account/totp'), 'two-step status');
+    return { enabled: r.enabled, recoveryCodesLeft: r.recoveryCodesLeft };
+  }
+
+  /** A new secret to add to an authenticator app; two-step sign-in is on only after totpConfirm. */
+  async totpBegin(currentPassword: string): Promise<TotpSetup> {
+    checkPassword(currentPassword);
+    const body = toBinary(TotpBeginRequestSchema, create(TotpBeginRequestSchema, { currentPassword }));
+    const r = await this.decode(TotpBeginResponseSchema, await this.send('POST', '/v1/account/totp/begin', { body }), 'two-step set-up');
+    return { secret: r.secret, uri: r.otpauthUri };
+  }
+
+  /** Turns two-step sign-in on with a code from the new secret; returns the recovery codes, shown only now. */
+  async totpConfirm(code: string): Promise<string[]> {
+    const body = toBinary(TotpConfirmRequestSchema, create(TotpConfirmRequestSchema, { code }));
+    return (await this.decode(TotpRecoveryCodesResponseSchema, await this.send('POST', '/v1/account/totp/confirm', { body }), 'two-step confirm')).recoveryCodes;
+  }
+
+  async totpDisable(currentPassword: string, code: string): Promise<void> {
+    checkPassword(currentPassword);
+    const body = toBinary(TotpVerifyRequestSchema, create(TotpVerifyRequestSchema, { currentPassword, code }));
+    await this.send('POST', '/v1/account/totp/disable', { body });
+  }
+
+  /** Replaces the recovery codes; the old ones stop working. */
+  async totpNewRecoveryCodes(currentPassword: string, code: string): Promise<string[]> {
+    checkPassword(currentPassword);
+    const body = toBinary(TotpVerifyRequestSchema, create(TotpVerifyRequestSchema, { currentPassword, code }));
+    return (await this.decode(TotpRecoveryCodesResponseSchema, await this.send('POST', '/v1/account/totp/recovery-codes', { body }), 'recovery codes')).recoveryCodes;
   }
 
   // ---------- key bundle ----------

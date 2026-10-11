@@ -187,6 +187,16 @@ Sign in with the same account, **unlock** with the passphrase (or the recovery w
 - **Ignored files** in the settings are patterns of files and folders this device does not sync, one per line (`Private/`, `*.pdf`, `drafts/**/*.md`). `.trash/`, `.git/`, the vault's configuration folder and operating-system junk files are never synced.
 - Files deleted by another device are moved the way Obsidian's **Files and links → Deleted files** setting says (system trash by default). The server keeps the content for the history view either way.
 
+### Two-step sign-in
+
+An account can ask for a code from an authenticator app (any app that supports TOTP, such as Aegis, 2FAS, Google Authenticator or 1Password) as well as the password, whenever a device signs in:
+
+1. In **Settings → Obsync → Two-step sign-in**, enter the account password and choose **Set up**.
+2. Open the set-up link on the device that has the authenticator app, or type the key into the app. Enter the code the app shows and choose **Turn on**.
+3. Save the ten recovery codes somewhere safe. Each one signs a device in once if the app is lost. They are shown only then; **New recovery codes** (password and a code) replaces them.
+
+Devices signed in already stay signed in. A new sign-in asks for the code after the password. **Turn off** needs the password and a code or a recovery code. If both the app and the recovery codes are lost, the server's administrator can turn it off: `obsync admin user totp disable --username NAME`.
+
 ### Good to know
 
 - **Mobile apps sync only while Obsidian is open.** iOS and Android suspend apps in the background. When you come back, the plugin compares everything with the server.

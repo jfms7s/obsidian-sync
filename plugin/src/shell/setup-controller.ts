@@ -3,7 +3,8 @@
 // create the vault, confirm which files not to sync (which starts syncing),
 // and the device list. The tab only calls this and renders what it returns.
 import type { ApiClient, FetchLike } from '../api/client';
-import type { DeviceInfo } from '../api/types';
+import { ApiError, ErrorCode } from '../api/errors';
+import type { DeviceInfo, TotpSetup, TotpStatus } from '../api/types';
 import * as account from '../services/account';
 import { KeysAlreadySetUpError, PassphraseIsPasswordError, WeakPassphraseError, type PasswordFingerprint } from '../services/account';
 import * as vaults from '../services/vaults';
@@ -36,6 +37,11 @@ export interface StorageUsage {
 /** The vaults on the server, or locked: this device has no keys (unlock first). */
 export type RemoteVaults = { locked: true } | { locked: false; vaults: vaults.RemoteVaultSummary[] };
 
+/** The server asks for the second factor: show the code field and sign in again with it. */
+export function isSecondFactorRequired(err: unknown): boolean {
+  return err instanceof ApiError && err.code === ErrorCode.SECOND_FACTOR_REQUIRED;
+}
+
 export class SetupController {
   /**
    * A salted digest of the password of the last sign-in, to refuse it as
@@ -62,8 +68,9 @@ export class SetupController {
     return (await this.o.state.getVault())?.name ?? null;
   }
 
-  async login(server: string, username: string, password: string, deviceName: string, platform: string): Promise<void> {
-    await account.login(this.o.state, server, username, password, deviceName, platform, { fetch: this.o.fetch });
+  /** Signs in; totpCode is needed only for an account with two-step sign-in (see isSecondFactorRequired). */
+  async login(server: string, username: string, password: string, deviceName: string, platform: string, totpCode = ''): Promise<void> {
+    await account.login(this.o.state, server, username, password, deviceName, platform, { fetch: this.o.fetch, totpCode: totpCode.trim() });
     this.passwordFingerprint = await account.passwordFingerprint(password);
   }
 
@@ -146,6 +153,34 @@ export class SetupController {
     if (!u) return null;
     const vaultBytes = u.vaults.size > 1 && vault ? u.vaults.get(vault.vaultId) ?? null : null;
     return { usedBytes: u.usedBytes, quotaBytes: u.quotaBytes, vaultBytes };
+  }
+
+  /** Whether the account has two-step sign-in on, or null from a server without it (any 404). */
+  async twoStepStatus(): Promise<TotpStatus | null> {
+    try {
+      return await this.api(await this.session()).totpStatus();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /** Starts turning two-step sign-in on: a new secret for the authenticator app. */
+  async twoStepBegin(password: string): Promise<TotpSetup> {
+    return this.api(await this.session()).totpBegin(password);
+  }
+
+  /** Turns two-step sign-in on with the first code; returns the recovery codes, shown only now. */
+  async twoStepConfirm(code: string): Promise<string[]> {
+    return this.api(await this.session()).totpConfirm(code.trim());
+  }
+
+  async twoStepDisable(password: string, code: string): Promise<void> {
+    await this.api(await this.session()).totpDisable(password, code.trim());
+  }
+
+  async twoStepNewRecoveryCodes(password: string, code: string): Promise<string[]> {
+    return this.api(await this.session()).totpNewRecoveryCodes(password, code.trim());
   }
 
   async removeDevice(deviceId: string): Promise<void> {
