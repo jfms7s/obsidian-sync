@@ -16,6 +16,7 @@ import { cryptoRandom, type Random } from '../util/random';
 import type { AdapterEvent, VaultAdapter } from '../vault/adapter';
 import { IgnoreRules } from '../vault/ignore';
 import { DEFAULT_MAX_FILE_BYTES, ServerRollbackError, type SyncContext } from './context';
+import { pathOfPushKey } from '../state/failure-keys';
 import { nextRetryAt } from './failures';
 import type { EngineEvent, EngineListener, SyncStatus } from './events';
 import { pull } from './pull';
@@ -397,7 +398,7 @@ export class SyncEngine {
       // Paths waiting out a per-file failure do not keep the status at
       // "syncing"; their notice was shown and a retry is scheduled.
       const failures = await this.ctx.state.allFailures();
-      const waiting = new Set(failures.filter((f) => f.key.startsWith('push:')).map((f) => f.key.slice(5)));
+      const waiting = new Set(failures.flatMap((f) => pathOfPushKey(f.key) ?? []));
       const dirty = (await this.ctx.state.dirtyEntries()).filter((e) => !waiting.has(e.path)).length;
       const cursor = await this.ctx.state.getCursor();
       this.setStatus(dirty === 0 && cursor >= this.knownSeq ? 'synced' : 'syncing');
@@ -405,9 +406,9 @@ export class SyncEngine {
       // Local files are retried by push, remote versions by reconcile:
       // that one is asked for only when the earliest retry is due, so
       // cycles before then (local edits, notifications) stay cheap.
-      const pushRetryAt = await nextRetryAt(this.ctx, 'push:');
+      const pushRetryAt = nextRetryAt(failures, 'push');
       if (pushRetryAt !== null) this.schedule(Math.max(0, pushRetryAt - this.clock.now()));
-      const applyRetryAt = await nextRetryAt(this.ctx, 'apply:');
+      const applyRetryAt = nextRetryAt(failures, 'apply');
       if (applyRetryAt !== null) this.scheduleApplyRetry(applyRetryAt);
     } catch (err) {
       try {

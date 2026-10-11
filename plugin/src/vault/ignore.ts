@@ -90,8 +90,7 @@ export class IgnoreRules {
   private readonly res: RegExp[];
 
   /** Throws InvalidIgnorePatternError for a glob that uses unsupported syntax ('!', '['). */
-  constructor(readonly userGlobs: readonly string[] = [], opts: IgnoreOptions | readonly string[] = {}) {
-    const o: IgnoreOptions = Array.isArray(opts) ? { defaults: opts as readonly string[] } : (opts as IgnoreOptions);
+  constructor(readonly userGlobs: readonly string[] = [], o: IgnoreOptions = {}) {
     const ci = o.caseInsensitive ?? false;
     const config = o.configDir?.replace(/^\/+|\/+$/g, '');
     this.res = [...(o.defaults ?? DEFAULT_IGNORES), ...(config ? [`${config}/`] : []), ...userGlobs]

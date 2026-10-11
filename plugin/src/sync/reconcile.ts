@@ -1,15 +1,15 @@
 // Reconcile (spec §5.6): compare the server's heads and the local file
 // system with local state, and queue whatever events missed.
 import { fileIdFor } from '../crypto/objects';
-import { equalBytes, toHex } from '../util/bytes';
+import { toHex } from '../util/bytes';
 import { normalizePath } from '../util/path';
 import { isCoarseMtime, type FileStat } from '../vault/adapter';
-import { alreadyApplied, applyHead, isSyncedHere } from './apply';
+import { ensureHeadApplied, isSyncedHere } from './apply';
 import { hashHex } from './content';
 import type { FileRecord } from '../state/store';
 import { ServerRollbackError, type SyncContext } from './context';
 import { forgetHeldPresent, heldDeletions } from './deletion-hold';
-import { applyKey, isCycleError, isDeferred } from './failures';
+import { isCycleError } from './failures';
 import { pull, remoteHeads, serverLostHistory } from './pull';
 
 export interface ReconcileResult {
@@ -81,15 +81,7 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
   // backoff). The records from before step 1 do: each head is another file,
   // and one applied here is not looked at again in this step.
   for (const head of heads) {
-    const fileId = toHex(head.fileId);
-    if (alreadyApplied(before.get(fileId), toHex(head.versionId), ctx) || (await isDeferred(ctx, applyKey(fileId)))) continue;
-    const history = await ctx.api.history(ctx.ring.vaultId, head.fileId);
-    const v = history.find((x) => equalBytes(x.versionId, head.versionId));
-    if (v) {
-      // The history also reveals a landed pending commit the head overtook (applyHead).
-      await applyHead(ctx, v, history);
-      fetched++;
-    }
+    if (await ensureHeadApplied(ctx, head.fileId, head.versionId, before.get(toHex(head.fileId)))) fetched++;
   }
 
   // 2. Local files that are new or changed without an event. Step 1 changed

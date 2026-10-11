@@ -10,7 +10,7 @@
 // name and mtime, in UTC), not from this device's clock or time zone.
 import { decryptMeta, type FileMeta } from '../crypto/objects';
 import { fromHex, toHex } from '../util/bytes';
-import { conflictCopyName } from '../util/path';
+import { conflictCopyName, UNKNOWN_DEVICE } from '../util/path';
 import type { FileRecord } from '../state/store';
 import { expectFor, type FileStat } from '../vault/adapter';
 import { hashHex } from './content';
@@ -18,27 +18,41 @@ import type { SyncContext } from './context';
 import { isCycleError } from './failures';
 import { isSyncedHere } from './local';
 
-interface Stamp {
+export interface Stamp {
   device: string;
   mtimeMs: number;
 }
 
+/** The device a version's metadata names, for a conflict copy's name. */
+export function deviceLabel(meta: Pick<FileMeta, 'deviceName'>): string {
+  return meta.deviceName || UNKNOWN_DEVICE;
+}
+
 /**
- * Where a file that lost a collision is saved. Another file with the same
- * content may already be there (another device saved it first and it
- * synced): that one is reused. A file with other content takes the name
- * first, so this one gets the next number.
+ * The first conflict-copy name for path (numbered 1, 2, …) that no file or
+ * folder here holds and no record knows. utc: a name every device must
+ * derive alike (collisions); otherwise local time (a conflict while
+ * applying). With reuseContentHash, a file already there with that content
+ * is reused (exists: true): another device saved the same copy first and it
+ * synced. A tombstone record blocks a name only for local-time names, so
+ * devices with different histories still derive the same UTC names.
  */
-async function copyPathFor(ctx: SyncContext, path: string, stamp: Stamp, contentHash: string): Promise<{ path: string; exists: boolean }> {
+export async function freeCopyPath(
+  ctx: SyncContext, path: string, stamp: Stamp, opts: { utc: boolean; reuseContentHash?: string },
+): Promise<{ path: string; exists: boolean }> {
   for (let n = 1; ; n++) {
-    const candidate = conflictCopyName(path, stamp.device, stamp.mtimeMs, n, true);
+    const candidate = conflictCopyName(path, stamp.device, stamp.mtimeMs, n, opts.utc);
     const st = await ctx.adapter.stat(candidate);
-    if (!st) {
-      if (await ctx.adapter.hasFolder(candidate)) continue;
-      return { path: candidate, exists: false };
+    if (st) {
+      if (opts.reuseContentHash !== undefined) {
+        const data = await ctx.adapter.read(candidate);
+        if (data && (await hashHex(data)) === opts.reuseContentHash) return { path: st.path, exists: true };
+      }
+      continue;
     }
-    const data = await ctx.adapter.read(candidate);
-    if (data && (await hashHex(data)) === contentHash) return { path: st.path, exists: true };
+    if (await ctx.adapter.hasFolder(candidate)) continue;
+    if ((await ctx.state.filesByPath(candidate)).some((r) => !opts.utc || !r.deleted)) continue;
+    return { path: candidate, exists: false };
   }
 }
 
@@ -48,7 +62,7 @@ async function copyPathFor(ctx: SyncContext, path: string, stamp: Stamp, content
  * copy; returns the copy's path, or null if the target changed meanwhile.
  */
 export async function saveBeside(ctx: SyncContext, meta: FileMeta, contentHash: string, data: Uint8Array): Promise<string | null> {
-  const target = await copyPathFor(ctx, meta.path, { device: meta.deviceName || 'unknown device', mtimeMs: meta.mtimeMs }, contentHash);
+  const target = await freeCopyPath(ctx, meta.path, { device: deviceLabel(meta), mtimeMs: meta.mtimeMs }, { utc: true, reuseContentHash: contentHash });
   if (!target.exists && !(await ctx.adapter.write(target.path, data, { absent: true }))) return null;
   await ctx.state.markDirty(target.path);
   return target.path;
@@ -61,7 +75,7 @@ async function stampOf(ctx: SyncContext, rec: FileRecord): Promise<Stamp | null>
   if (!v) return null;
   try {
     const meta = await decryptMeta(ctx.ring, v.epoch, v.fileId, v.versionId, v.encMeta);
-    return { device: meta.deviceName || 'unknown device', mtimeMs: meta.mtimeMs };
+    return { device: deviceLabel(meta), mtimeMs: meta.mtimeMs };
   } catch (err) {
     if (isCycleError(err)) throw err;
     return null;
@@ -83,7 +97,7 @@ export async function moveToCopy(ctx: SyncContext, st: FileStat, code: 'PATH_COL
   const rec = (await ctx.state.filesByPath(st.path)).find(isSyncedHere);
   const unchanged = !!rec && !rec.deleted && rec.contentHash === hash;
   const stamp = (unchanged ? await stampOf(ctx, rec) : null) ?? { device: ctx.deviceName, mtimeMs: st.mtime };
-  const target = await copyPathFor(ctx, st.path, stamp, hash);
+  const target = await freeCopyPath(ctx, st.path, stamp, { utc: true, reuseContentHash: hash });
   const moved = target.exists
     ? await ctx.adapter.remove(st.path, expectFor(st))
     : await ctx.adapter.rename(st.path, target.path, expectFor(st));

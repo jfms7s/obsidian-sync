@@ -254,7 +254,7 @@ export class ShellController {
   }
 
   async ignoreGlobs(): Promise<string[]> {
-    return this.o.state.getSetting<string[]>('ignoreGlobs', []);
+    return this.o.state.getIgnoreGlobs();
   }
 
   /**
@@ -265,7 +265,7 @@ export class ShellController {
    */
   async setIgnoreGlobs(globs: string[]): Promise<void> {
     assertValidIgnorePatterns(globs);
-    await this.o.state.setSetting('ignoreGlobs', globs);
+    await this.o.state.setIgnoreGlobs(globs);
     if (this.wanted && (this.phase === 'starting' || this.phase === 'running')) await this.restart();
   }
 

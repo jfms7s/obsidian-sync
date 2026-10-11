@@ -47,7 +47,7 @@ export async function openSyncSession(o: SyncSessionOptions): Promise<SyncSessio
   const ring = await keyringFromStored(vault);
   const engine = new SyncEngine({
     api, state: o.state, adapter: o.adapter, ring, deviceName: session.deviceName,
-    configDir: o.configDir, ignoreGlobs: await o.state.getSetting<string[]>('ignoreGlobs', []),
+    configDir: o.configDir, ignoreGlobs: await o.state.getIgnoreGlobs(),
     webSocket: o.webSocket === undefined ? defaultWebSocketFactory : o.webSocket,
     refreshKeyring: () => refreshKeyring(o.state, api, session, keys),
     ...(o.random ? { random: o.random } : {}),

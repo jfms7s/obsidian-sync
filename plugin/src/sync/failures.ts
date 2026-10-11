@@ -12,6 +12,8 @@
 // RangeError) are not per-file: they fail the cycle. A missing epoch key
 // that a keyring refresh did not provide either is per-file after all
 // (isFileError), so one unreadable version cannot block the vault.
+import { FAILURE_PREFIX, type FailureKind } from '../state/failure-keys';
+import type { Failure } from '../state/store';
 import { ApiError, NetworkError } from '../api/errors';
 import { CryptoError } from '../crypto/primitives';
 import { MissingEpochKeyError } from '../crypto/vaultkeys';
@@ -45,8 +47,7 @@ export function isFileError(ctx: SyncContext, err: unknown): boolean {
   return !isCycleError(err) || (err instanceof MissingEpochKeyError && !!ctx.unavailableEpochs?.has(err.epoch));
 }
 
-export { pushFailureKey as pushKey } from '../state/store';
-export const applyKey = (fileId: string) => `apply:${fileId}`;
+export { applyKey, pushKey } from '../state/failure-keys';
 
 /** True while key's last failure is still backing off. */
 export async function isDeferred(ctx: SyncContext, key: string): Promise<boolean> {
@@ -70,11 +71,12 @@ export async function recordFailure(ctx: SyncContext, key: string, path: string,
   }
 }
 
-/** The earliest time a failed file (of one kind, with keyPrefix 'push:' or 'apply:') is due again, or null. */
-export async function nextRetryAt(ctx: SyncContext, keyPrefix = ''): Promise<number | null> {
+/** The earliest time one of failures (of one kind, or any) is due again, or null. */
+export function nextRetryAt(failures: readonly Failure[], kind?: FailureKind): number | null {
+  const prefix = kind ? FAILURE_PREFIX[kind] : '';
   let earliest: number | null = null;
-  for (const f of await ctx.state.allFailures()) {
-    if (f.key.startsWith(keyPrefix) && (earliest === null || f.nextAt < earliest)) earliest = f.nextAt;
+  for (const f of failures) {
+    if (f.key.startsWith(prefix) && (earliest === null || f.nextAt < earliest)) earliest = f.nextAt;
   }
   return earliest;
 }

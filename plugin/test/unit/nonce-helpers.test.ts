@@ -42,6 +42,7 @@ it('nonce-taking helpers are used only inside their defining module', () => {
 it('each nonce-taking helper is marked @internal', () => {
   for (const [name, home] of Object.entries(HELPERS)) {
     const text = readFileSync(join(SRC, home), 'utf8');
-    expect(text, name).toMatch(new RegExp(`/\\*\\* @internal test-only: caller supplies nonce \\*/\\s*export (async )?function ${name}\\b`));
+    // The tag ends the function's doc block (one block, so editors show its description too).
+    expect(text, name).toMatch(new RegExp(`@internal test-only: caller supplies nonce\\s*\\*/\\s*export (async )?function ${name}\\b`));
   }
 });

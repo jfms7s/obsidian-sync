@@ -65,6 +65,12 @@ export async function listRemoteVaults(api: ApiClient, session: Session, keys: U
   return out;
 }
 
+/** How the setup chooses a vault. */
+export interface ChooseOptions {
+  /** Store the vault with ignoresUnconfirmed, so it syncs only after confirmIgnores (the setup's ignore step). */
+  ignoresUnconfirmed?: boolean;
+}
+
 /**
  * Creates a remote vault (naming key + epoch 1, sealed to this user) and
  * makes it this device's vault. The id and keys are stored before the
@@ -73,12 +79,6 @@ export async function listRemoteVaults(api: ApiClient, session: Session, keys: U
  * refuses the id as taken and the vault it holds is adopted (after checking
  * its keys), so no second vault appears.
  */
-/** How the setup chooses a vault. */
-export interface ChooseOptions {
-  /** Store the vault with ignoresUnconfirmed, so it syncs only after confirmIgnores (the setup's ignore step). */
-  ignoresUnconfirmed?: boolean;
-}
-
 export async function createVault(
   state: LocalState, api: ApiClient, session: Session, keys: UserKeys, name: string, random: Random = cryptoRandom, opts: ChooseOptions = {},
 ): Promise<StoredVault> {
