@@ -23,6 +23,9 @@ const (
 	MissingChunk  = obsyncv1.ErrorCode_ERROR_CODE_MISSING_CHUNK
 	WrongPassword = obsyncv1.ErrorCode_ERROR_CODE_WRONG_PASSWORD
 	VaultNotFound = obsyncv1.ErrorCode_ERROR_CODE_VAULT_NOT_FOUND
+	// SecondFactorRequired: the password was right and the account also
+	// needs a TOTP or recovery code.
+	SecondFactorRequired = obsyncv1.ErrorCode_ERROR_CODE_SECOND_FACTOR_REQUIRED
 )
 
 // ErrVaultNotFound answers every request for a vault that does not exist or

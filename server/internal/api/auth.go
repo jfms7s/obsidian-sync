@@ -17,7 +17,7 @@ func (h *handlers) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := h.auth.Login(r.Context(), auth.LoginRequest{
-		Username: req.Username, Password: req.Password, DeviceName: req.DeviceName, Platform: req.Platform,
+		Username: req.Username, Password: req.Password, DeviceName: req.DeviceName, Platform: req.Platform, TOTPCode: req.TotpCode,
 	})
 	if err != nil {
 		h.writeError(w, r, err)

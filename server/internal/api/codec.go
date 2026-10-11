@@ -150,7 +150,7 @@ func statusFor(code obsyncv1.ErrorCode) int {
 	switch code {
 	case apperr.Invalid, apperr.MissingChunk:
 		return http.StatusBadRequest
-	case apperr.Unauthorized, apperr.DeviceRevoked:
+	case apperr.Unauthorized, apperr.DeviceRevoked, apperr.SecondFactorRequired:
 		return http.StatusUnauthorized
 	case apperr.WrongPassword:
 		// Not 401: the token is fine, only the password was refused.

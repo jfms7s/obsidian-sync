@@ -25,6 +25,10 @@ var (
 	ErrDeviceRevoked      = apperr.New(apperr.DeviceRevoked, "this device has been revoked")
 	ErrPasswordRequired   = apperr.New(apperr.WrongPassword, "the account password is required")
 	ErrWrongPassword      = apperr.New(apperr.WrongPassword, "wrong account password")
+	// ErrSecondFactorRequired answers a login with the right password and no
+	// code for an account with TOTP on. It tells the caller the password was
+	// right (the usual two-step form), so it counts as a failed attempt.
+	ErrSecondFactorRequired = apperr.New(apperr.SecondFactorRequired, "enter the code from your authenticator app, or a recovery code")
 )
 
 // touchInterval bounds how often a device's last-seen time is written.
@@ -36,6 +40,9 @@ type Store interface {
 	CreateDevice(ctx context.Context, d store.Device, tokenHash []byte) error
 	DeviceByTokenHash(ctx context.Context, tokenHash []byte) (store.Device, error)
 	TouchDevice(ctx context.Context, deviceID string) error
+	TOTP(ctx context.Context, userID string) (store.TOTPState, error)
+	UseTOTPStep(ctx context.Context, userID string, step int64) (bool, error)
+	UseRecoveryCode(ctx context.Context, userID string, hash []byte) (bool, error)
 }
 
 type Session struct {
@@ -105,6 +112,9 @@ type LoginRequest struct {
 	Password   string
 	DeviceName string
 	Platform   string
+	// TOTPCode is the authenticator's code or a recovery code, for an
+	// account with TOTP on; ignored otherwise.
+	TOTPCode string
 }
 
 type LoginResult struct {
@@ -173,6 +183,25 @@ func (s *Service) login(ctx context.Context, req LoginRequest) (LoginResult, err
 	}
 	if !ok {
 		return LoginResult{}, ErrInvalidCredentials
+	}
+	// The second factor, only once the password is known right: a code sent
+	// with a wrong password is neither checked nor spent. Both failures give
+	// the same answer, and neither gives the attempt back.
+	totp, err := s.st.TOTP(ctx, user.ID)
+	if err != nil {
+		return LoginResult{}, fmt.Errorf("load second factor: %w", err)
+	}
+	if totp.Secret != nil {
+		if strings.TrimSpace(req.TOTPCode) == "" {
+			return LoginResult{}, ErrSecondFactorRequired
+		}
+		ok, err := s.checkSecondFactor(ctx, user.ID, totp, req.TOTPCode)
+		if err != nil {
+			return LoginResult{}, err
+		}
+		if !ok {
+			return LoginResult{}, ErrInvalidCredentials
+		}
 	}
 	s.limiter.Reset(key)
 
