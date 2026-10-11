@@ -1,18 +1,18 @@
-// The plugin's settings tab: the setup steps (nextStep decides which one is
-// shown), then the day-to-day settings. All logic is in the services and the
-// controller; this file only builds the screens and shows errors.
+// The plugin's settings tab: the setup steps (SetupController.step decides
+// which one is shown), then the day-to-day settings. All logic is in the
+// setup controller and the shell controller; this file only builds the
+// screens and shows errors.
 import { Notice, PluginSettingTab, Setting, type App, type ButtonComponent, type Plugin } from 'obsidian';
 import type { FetchLike } from '../api/client';
-import * as account from '../services/account';
-import { KeysAlreadySetUpError, PASSPHRASE_MIN_CHARS, PASSPHRASE_MIN_WORDS, PassphraseIsPasswordError, WeakPassphraseError, type PasswordFingerprint } from '../services/account';
-import * as vaults from '../services/vaults';
-import type { LocalState, Session } from '../state/store';
-import type { ShellController } from './controller';
+import { PASSPHRASE_MIN_CHARS, PASSPHRASE_MIN_WORDS } from '../services/account';
+import type { LocalState } from '../state/store';
+import type { ShellController, StartResult } from './controller';
 import { describeError } from './errors';
 import { ConfirmModal, TrashModal } from './history-modal';
 import { formatIgnoreText, parseIgnoreText } from './ignore-text';
 import { describePlatform } from './platform';
-import { nextStep, type SetupStep } from './steps';
+import { SetupController, type RemoteVaults } from './setup-controller';
+import type { SetupStep } from './steps';
 import { statusLabel } from './status';
 
 const START_FAILURES: Record<Extract<Awaited<ReturnType<ShellController['start']>>, { ok: false }>['reason'], string> = {
@@ -32,23 +32,20 @@ interface Form {
   recoveryWords: string;
   vaultName: string;
   ignoreText: string | null;
-  /**
-   * A salted digest of the password of the last sign-in in this tab, to
-   * refuse it as the passphrase. Memory only; null after a plugin reload.
-   */
-  passwordFingerprint: PasswordFingerprint | null;
 }
 
 export class ObsyncSettingTab extends PluginSettingTab {
   private readonly form: Form;
   private renderToken = 0;
   private errorEl: HTMLElement | null = null;
+  private readonly setup: SetupController;
 
-  constructor(app: App, plugin: Plugin, private readonly shell: ShellController, private readonly state: LocalState, private readonly fetch: FetchLike) {
+  constructor(app: App, plugin: Plugin, private readonly shell: ShellController, state: LocalState, fetch: FetchLike) {
     super(app, plugin);
+    this.setup = new SetupController({ state, fetch, shell });
     this.form = {
       server: '', username: '', password: '', deviceName: describePlatform().name, passphrase: '', passphrase2: '', recoveryWords: '',
-      vaultName: app.vault.getName(), ignoreText: null, passwordFingerprint: null,
+      vaultName: app.vault.getName(), ignoreText: null,
     };
   }
 
@@ -69,7 +66,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
     containerEl.createEl('p', { text: 'Loading…' });
     let step: SetupStep;
     try {
-      step = await nextStep(this.state, { fetch: this.fetch });
+      step = await this.setup.step();
     } catch (err) {
       if (token !== this.renderToken) return;
       containerEl.empty();
@@ -147,8 +144,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
     this.text('Password', 'The account password the server\'s administrator gave you.', () => f.password, (v) => (f.password = v), { secret: true, autocomplete: 'current-password' });
     this.text('Device name', 'Shown in your device list and in the names of conflict copies.', () => f.deviceName, (v) => (f.deviceName = v));
     new Setting(this.containerEl).addButton((b) => b.setButtonText('Sign in').setCta().onClick(this.action(b, async () => {
-      await account.login(this.state, f.server, f.username, f.password, f.deviceName.trim() || describePlatform().name, describePlatform().platform, { fetch: this.fetch });
-      f.passwordFingerprint = await account.passwordFingerprint(f.password);
+      await this.setup.login(f.server, f.username, f.password, f.deviceName.trim() || describePlatform().name, describePlatform().platform);
       f.password = '';
       await this.render();
     })));
@@ -168,21 +164,10 @@ export class ObsyncSettingTab extends PluginSettingTab {
     this.text('Passphrase', `At least ${PASSPHRASE_MIN_WORDS} words or ${PASSPHRASE_MIN_CHARS} characters.`, () => f.passphrase, (v) => (f.passphrase = v), { secret: true, autocomplete: 'new-password' });
     this.text('Repeat the passphrase', '', () => f.passphrase2, (v) => (f.passphrase2 = v), { secret: true, autocomplete: 'new-password' });
     new Setting(this.containerEl).setDesc('Creating the keys takes a few seconds, longer on a phone.').addButton((b) => b.setButtonText('Create keys').setCta().onClick(this.action(b, async () => {
-      // Without a fingerprint (the plugin was reloaded between signing in and this step) the check is skipped: the password is never stored.
-      if (f.passwordFingerprint && await account.matchesPassword(f.passwordFingerprint, f.passphrase)) throw new PassphraseIsPasswordError();
-      if (!account.isStrongPassphrase(f.passphrase)) throw new WeakPassphraseError();
-      if (f.passphrase !== f.passphrase2) throw new Error('The two passphrases are not the same.');
-      const session = await this.session();
-      try {
-        const { recoveryWords } = await account.setupKeys(this.state, account.apiFor(session, { fetch: this.fetch }), session, f.passphrase);
-        f.recoveryWords = recoveryWords;
-      } catch (err) {
-        // Another device finished the setup first: unlock with its passphrase instead.
-        if (!(err instanceof KeysAlreadySetUpError)) throw err;
-        new Notice(`Obsync: ${err.message}`, 10000);
-      }
+      const result = await this.setup.setupKeys(f.passphrase, f.passphrase2);
+      // Another device finished the setup first: the next screen offers unlocking with its passphrase.
+      if ('alreadySetUp' in result) new Notice(`Obsync: ${result.alreadySetUp.message}`, 10000);
       f.passphrase = f.passphrase2 = '';
-      f.passwordFingerprint = null;
       await this.render();
     })));
   }
@@ -202,7 +187,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
         }
       }))
       .addButton((b) => b.setButtonText('I have saved them').setCta().onClick(this.action(b, async () => {
-        await account.acknowledgeRecoveryWords(this.state);
+        await this.setup.acknowledgeRecoveryWords();
         await this.render();
       })));
   }
@@ -213,8 +198,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
     this.containerEl.createEl('p', { text: 'Your account already has encryption keys. Enter your passphrase to use them on this device.' });
     this.text('Passphrase', '', () => f.passphrase, (v) => (f.passphrase = v), { secret: true, autocomplete: 'current-password' });
     new Setting(this.containerEl).addButton((b) => b.setButtonText('Unlock').setCta().onClick(this.action(b, async () => {
-      const session = await this.session();
-      await account.unlockWithPassphraseService(this.state, account.apiFor(session, { fetch: this.fetch }), session, f.passphrase);
+      await this.setup.unlockWithPassphrase(f.passphrase);
       f.passphrase = '';
       await this.render();
     })));
@@ -226,8 +210,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
       a.inputEl.setAttr('autocomplete', 'off');
       a.setPlaceholder('Type or paste the 24 words').onChange((v) => (f.recoveryWords = v));
     }).addButton((b) => b.setButtonText('Unlock with recovery words').onClick(this.action(b, async () => {
-      const session = await this.session();
-      await account.unlockWithRecoveryService(this.state, account.apiFor(session, { fetch: this.fetch }), session, f.recoveryWords);
+      await this.setup.unlockWithRecoveryWords(f.recoveryWords);
       f.recoveryWords = '';
       await this.render();
     })));
@@ -235,24 +218,23 @@ export class ObsyncSettingTab extends PluginSettingTab {
 
   private async renderChooseVault(): Promise<void> {
     const f = this.form;
-    const session = await this.session();
-    const keys = await account.loadUserKeys(this.state, session.userId);
-    const api = account.apiFor(session, { fetch: this.fetch });
-    if (!keys) {
+    let remote: RemoteVaults;
+    try {
+      remote = await this.setup.remoteVaults();
+    } catch (err) {
+      this.heading('Choose the vault to sync');
+      this.containerEl.createEl('p', { text: 'Files in this vault that are not on the server yet are uploaded. A file that exists on both sides is merged, or both versions are kept.' });
+      this.containerEl.createEl('p', { text: describeError(err).message });
+      return;
+    }
+    if (remote.locked) {
       this.containerEl.createEl('p', { text: 'This device is locked. Open the settings again to unlock it.' });
       return;
     }
     this.heading('Choose the vault to sync');
     this.containerEl.createEl('p', { text: 'Files in this vault that are not on the server yet are uploaded. A file that exists on both sides is merged, or both versions are kept.' });
-    let remote: vaults.RemoteVaultSummary[];
-    try {
-      remote = await vaults.listRemoteVaults(api, session, keys);
-    } catch (err) {
-      this.containerEl.createEl('p', { text: describeError(err).message });
-      return;
-    }
-    const begin = async (button: ButtonComponent): Promise<void> => {
-      const started = await this.shell.start({ byUser: true });
+    /** After the vault switch, which also starts syncing: say why it did not start, or move on. */
+    const begin = async (button: ButtonComponent, started: StartResult): Promise<void> => {
       if (!started.ok) {
         const message = `Sync could not start: ${START_FAILURES[started.reason]}`;
         this.errorEl?.setText(message);
@@ -263,34 +245,29 @@ export class ObsyncSettingTab extends PluginSettingTab {
       new Notice('Obsync: sync has started.');
       await this.render();
     };
-    for (const v of remote) {
+    for (const v of remote.vaults) {
       new Setting(this.containerEl)
         .setName(v.name ?? 'A vault this account cannot read')
         .setDesc(`Created ${new Date(v.createdAtMs).toLocaleDateString()}`)
         .addButton((b) => {
           b.setButtonText('Use this vault').onClick(this.action(b, async () => {
-            await this.shell.stopForGood();
-            await vaults.chooseVault(this.state, api, session, keys, v.vaultId);
-            await begin(b);
+            await begin(b, await this.setup.useVault(v.vaultId));
           }));
           if (v.name === null) b.setDisabled(true);
         });
     }
     this.text('New vault name', 'Create a new, empty vault on the server for this one.', () => f.vaultName, (v) => (f.vaultName = v));
     new Setting(this.containerEl).addButton((b) => b.setButtonText('Create vault').setCta().onClick(this.action(b, async () => {
-      if (f.vaultName.trim() === '') throw new Error('Give the vault a name.');
-      await this.shell.stopForGood();
-      await vaults.createVault(this.state, api, session, keys, f.vaultName.trim());
-      await begin(b);
+      await begin(b, await this.setup.createVault(f.vaultName));
     })));
   }
 
   private async renderReady(): Promise<void> {
-    const session = await this.session();
-    const stored = await this.state.getVault();
+    const session = await this.setup.session();
+    const vaultName = await this.setup.vaultName();
     this.heading('Sync');
     new Setting(this.containerEl)
-      .setName(`Syncing ${stored?.name ?? 'your vault'}`)
+      .setName(`Syncing ${vaultName ?? 'your vault'}`)
       .setDesc(`${statusLabel(this.shell.status)}. Signed in as ${session.username} on ${session.deviceName}.`)
       .addButton((b) => b.setButtonText('Sync now').onClick(() => {
         new Notice(this.shell.syncNow() ? 'Obsync: syncing.' : 'Obsync: sync is not running. Use Start to begin.');
@@ -304,7 +281,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
     this.renderIgnore();
     new Setting(this.containerEl).setName('Deleted files').setDesc('Restore a file that was deleted. To see the earlier versions of a note, use the history command or the note\'s menu.')
       .addButton((b) => b.setButtonText('Show deleted files').onClick(() => new TrashModal(this.app, this.shell).open()));
-    await this.renderDevices(session);
+    await this.renderDevices();
     new Setting(this.containerEl).setName('Sign out').setDesc('Stops syncing and removes the account and its keys from this device. Your files stay.')
       .addButton((b) => b.setButtonText('Sign out').setWarning().onClick(() => {
         new ConfirmModal(this.app, 'Sign out of Obsync on this device? Your files stay. You will need your passphrase or recovery words to sign in again.', 'Sign out', async () => {
@@ -341,11 +318,11 @@ export class ObsyncSettingTab extends PluginSettingTab {
       })));
   }
 
-  private async renderDevices(session: Session): Promise<void> {
+  private async renderDevices(): Promise<void> {
     this.heading('Devices');
     let devices;
     try {
-      devices = await account.listDevices(account.apiFor(session, { fetch: this.fetch }));
+      devices = await this.setup.devices();
     } catch (err) {
       this.containerEl.createEl('p', { text: describeError(err).message });
       return;
@@ -356,7 +333,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
         .setDesc(`${d.platform} · last seen ${new Date(d.lastSeenAtMs).toLocaleString()}`);
       if (!d.current) {
         s.addButton((b) => b.setButtonText('Remove').setWarning().onClick(this.action(b, async () => {
-          await account.revokeDevice(account.apiFor(session, { fetch: this.fetch }), d.deviceId);
+          await this.setup.removeDevice(d.deviceId);
           await this.render();
         })));
       }
@@ -368,11 +345,5 @@ export class ObsyncSettingTab extends PluginSettingTab {
       cls: 'obsync-footnote',
       text: 'Your encryption keys are stored in this app\'s local database. Other plugins you install can read them, so install only plugins you trust.',
     });
-  }
-
-  private async session(): Promise<Session> {
-    const s = await this.state.getSession();
-    if (!s) throw new Error('You are not signed in.');
-    return s;
   }
 }

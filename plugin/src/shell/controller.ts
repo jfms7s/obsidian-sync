@@ -1,8 +1,8 @@
 // The plugin's brain, with no Obsidian UI classes in it: it owns the sync
 // engine's life (start, stop, restart on a settings change), the lock that
-// keeps two engines from running on one vault, and the account actions the
-// settings tab calls. The tab and the commands only call this and show
-// what it reports.
+// keeps two engines from running on one vault, the ignore rules and logout.
+// The setup steps live in SetupController. The tab and the commands only
+// call these and show what they report.
 import type { FetchLike } from '../api/client';
 import type { WebSocketFactory } from '../api/hub';
 import * as account from '../services/account';
@@ -72,6 +72,8 @@ export class ShellController {
   private wanted = false;
   /** stopForGood was called and no start({ byUser: true }) since. */
   private held = false;
+  /** The last start that got as far as opening the session found this device not set up. */
+  private lastStartNeedsSetup = false;
   private readonly listeners = new Set<(e: EngineEvent) => void>();
 
   constructor(private readonly o: ShellOptions) {}
@@ -83,6 +85,11 @@ export class ShellController {
 
   get status(): SyncStatus {
     return this.running?.engine.status ?? 'stopped';
+  }
+
+  /** Nothing syncs because the last start found the setup unfinished (not signed in, locked, no vault). */
+  get setupNeeded(): boolean {
+    return this.lastStartNeedsSetup && this.status === 'stopped';
   }
 
   /** Everything the engine reports, across restarts. */
@@ -131,6 +138,7 @@ export class ShellController {
         state: o.state, adapter: o.adapter, webSocket: o.webSocket, fetch: o.fetch, configDir: o.configDir,
         ...(o.clock ? { clock: o.clock } : {}), ...(o.random ? { random: o.random } : {}), ...(o.autoRun !== undefined ? { autoRun: o.autoRun } : {}),
       });
+      this.lastStartNeedsSetup = !r.ok;
       if (!r.ok) {
         this.phase = 'idle';
         release();
