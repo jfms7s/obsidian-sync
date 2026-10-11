@@ -207,6 +207,8 @@ describe('obsync-cli against the real server', () => {
     expect(r.code, r.err).toBe(0);
     expect(r.err).toMatch(/pausing/);
     expect(r.err).toMatch(/resuming with a full check/);
+  });
+
   it('refuses a vault folder that is empty when files were synced from it (a disk not mounted)', async () => {
     const away = `${vaultDir}-away`;
     await rename(vaultDir, away);
