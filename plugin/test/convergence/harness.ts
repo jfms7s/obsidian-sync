@@ -20,9 +20,10 @@
 // (merge conflicts and collisions alike) must still be there unless the
 // harness itself deleted or renamed that name after the copy appeared (the
 // random operations pick any existing file, copies included). Copies are
-// told apart by name and by the step they appeared at on some device: copy
-// names can repeat once a copy is gone, and a file id would not help, since
-// it is derived from the name (fileIdFor).
+// told apart by name and by the step they appeared at: copy names can repeat
+// once a copy is gone, and a file id would not help, since it is derived
+// from the name (fileIdFor). A copy is there while some device holds it or
+// the server holds it live (copies.ts).
 //
 // Coverage. Every operation counts as run (ops) when it was not skipped, and
 // as an effect (effects) only when it changed something: a lost commit
@@ -52,8 +53,9 @@
 import type { ApiClient } from '../../src/api/client';
 import { NetworkError } from '../../src/api/errors';
 import { CHUNK_SIZE } from '../../src/api/limits';
-import { decryptMeta } from '../../src/crypto/objects';
+import { decryptMeta, fileIdFor } from '../../src/crypto/objects';
 import type { VaultKeyring } from '../../src/crypto/vaultkeys';
+import { apiFor } from '../../src/services/account';
 import { fileHistory, listTrash, NotInTrashError, PathOccupiedError, restore, UnsyncedChangesError } from '../../src/services/history';
 import { hashHex } from '../../src/sync/content';
 import { equalBytes, toHex } from '../../src/util/bytes';
@@ -65,6 +67,7 @@ import { CopyTracker } from './copies';
 import type { LostResponse } from '../helpers/net';
 import type { User } from '../helpers/fixture';
 import type { TestServer } from '../helpers/server';
+import { fetchTransport } from '../helpers/setup-transport';
 
 export type Fleet = 'mixed' | 'sensitive' | 'insensitive';
 export const FLEETS: readonly Fleet[] = ['mixed', 'sensitive', 'insensitive'];
@@ -257,10 +260,17 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
         eventsRead[i] = c.events.length;
       });
     };
+    // The server's view, past every device's simulated network (which may be offline or losing responses).
+    const observer = apiFor(clients[0]!.session, { fetch: fetchTransport });
+    const liveOnServer = async (paths: string[]): Promise<boolean> => {
+      const ids = new Set<string>();
+      for (const p of paths) ids.add(toHex(await fileIdFor(clients[0]!.ring.namingKey, p)));
+      return (await liveHeads(observer, clients[0]!.vaultId)).some((id) => ids.has(id));
+    };
     const scanCopies = async (step: number) => {
       const onDevices: string[] = [];
       for (const c of clients) for (const p of await c.adapter.list()) if (CONFLICT_COPY_PATTERN.test(p)) onDevices.push(p);
-      copies.scan(step, onDevices);
+      await copies.scan(step, onDevices, liveOnServer);
     };
     let currentStep = 0;
     const noteRemoval = (p: string) => {
@@ -614,6 +624,28 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
       }
     }
     if (ok && stopError) throw stopError;
+  }
+}
+
+/**
+ * The file ids (hex) of the server's live heads. A pooled connection to a
+ * server that a backup or restore just restarted can be reset, so a network
+ * failure is tried again.
+ */
+async function liveHeads(api: ApiClient, vaultId: string): Promise<string[]> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const out: string[] = [];
+      let after: Uint8Array | null = null;
+      for (;;) {
+        const page = await api.heads(vaultId, after);
+        for (const h of page.heads) if (!h.deleted) out.push(toHex(h.fileId));
+        if (!page.more || page.heads.length === 0) return out;
+        after = page.heads[page.heads.length - 1]!.fileId;
+      }
+    } catch (err) {
+      if (!(err instanceof NetworkError) || attempt >= 3) throw err;
+    }
   }
 }
 
