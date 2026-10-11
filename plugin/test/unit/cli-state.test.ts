@@ -89,6 +89,23 @@ describe('PersistentState', () => {
     await again.close();
   });
 
+  it('saves only when something changed since the last save', async () => {
+    const s = await PersistentState.open(await stateDir());
+    expect(await s.saveIfChanged()).toBeNull(); // nothing yet
+    await s.state.setCursor(3);
+    expect(await s.saveIfChanged()).not.toBeNull();
+    expect(await s.saveIfChanged()).toBeNull();
+    // Reads change nothing.
+    await s.state.getCursor();
+    await s.state.allFiles();
+    await s.state.dirtyEntries();
+    await s.state.maxFileSeq();
+    expect(await s.saveIfChanged()).toBeNull();
+    await s.state.markDirty('a.md');
+    expect(await s.saveIfChanged()).not.toBeNull();
+    await s.close();
+  });
+
   it('refuses a damaged snapshot or one from a newer format instead of starting over', async () => {
     const dir = await stateDir();
     await (await PersistentState.open(dir)).close();
