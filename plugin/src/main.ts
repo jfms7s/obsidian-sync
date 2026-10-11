@@ -43,16 +43,14 @@ export default class ObsyncPlugin extends Plugin {
 
     // A phone has no status bar: the settings tab and the notices show the state there.
     const statusEl = this.addStatusBarItem();
-    let setupNeeded = false;
     const showStatus = (): void => {
-      const label = setupNeeded ? 'not set up' : statusLabel(shell.status).toLowerCase();
+      const label = shell.setupNeeded ? 'not set up' : statusLabel(shell.status).toLowerCase();
       statusEl.setText(`Obsync: ${label}`);
     };
     showStatus();
     shell.on((e) => {
       if (e.type === 'status') {
         statusEl.setAttr('aria-label', e.detail ?? '');
-        setupNeeded = false; // an engine reports only while it runs, so the setup is done
         showStatus();
       }
       const n = noticeFor(e);
@@ -93,8 +91,7 @@ export default class ObsyncPlugin extends Plugin {
     // Not before the layout is ready: until then Obsidian reports every file in the vault as created.
     this.app.workspace.onLayoutReady(() => {
       if (this.shell !== shell) return; // unloaded before the layout was ready
-      void shell.start().then((r) => {
-        setupNeeded = !r.ok && r.reason !== 'stopped';
+      void shell.start().then(() => {
         showStatus();
       }).catch((err: unknown) => {
         new Notice(`Obsync: ${describeError(err).message}`, 10000);
