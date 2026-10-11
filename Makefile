@@ -74,11 +74,14 @@ ci-local: check
 	scripts/check-release-version_test.sh
 	! grep -oE 'require\("[^"]+"\)' plugin/dist/main.js | grep -v 'require("obsidian")'
 
-# make plugin-install VAULT=~/vaults/test
-plugin-install: plugin-build
-	@test -n "$(VAULT)" || { echo "usage: make plugin-install VAULT=/path/to/vault" >&2; exit 1; }
-	mkdir -p "$(VAULT)/.obsidian/plugins/obsync"
-	cp plugin/dist/main.js plugin/dist/manifest.json plugin/dist/styles.css "$(VAULT)/.obsidian/plugins/obsync/"
+# make plugin-install VAULT=~/vaults/test [CONFIG_DIR=.obsidian]
+# CONFIG_DIR is the vault's configuration folder (Obsidian lets you rename it).
+CONFIG_DIR ?= .obsidian
+plugin-install:
+	@test -n "$(VAULT)" || { echo "usage: make plugin-install VAULT=/path/to/vault [CONFIG_DIR=.obsidian]" >&2; exit 1; }
+	$(MAKE) --no-print-directory plugin-build
+	mkdir -p "$(VAULT)/$(CONFIG_DIR)/plugins/obsync"
+	cp plugin/dist/main.js plugin/dist/manifest.json plugin/dist/styles.css "$(VAULT)/$(CONFIG_DIR)/plugins/obsync/"
 
 # Known-answer vectors for the plugin, computed by the Go implementation.
 vectors:
