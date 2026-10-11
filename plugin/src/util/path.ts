@@ -12,6 +12,26 @@ function hasControlCharacter(s: string): boolean {
   return false;
 }
 
+const DEVICE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+const SHORT_NAME = /^[^.~]{1,6}~\d+/;
+
+/**
+ * Why Windows could open another name for seg, or null. NTFS resolves an
+ * 8.3 short name (OBSIDI~1), an alternate stream (name::$INDEX_ALLOCATION)
+ * and a name with trailing dots or spaces to the plain name, and a device
+ * name (CON, nul.txt) to a device; a rule written for `.obsidian/` or
+ * `.git/` would not see `OBSIDI~1/`. The same rule holds on every platform,
+ * so no device commits a name another one would resolve differently
+ * (cf. Git's CVE-2019-1352 and CVE-2019-1353).
+ */
+function windowsAlias(seg: string): string | null {
+  if (seg.includes(':')) return 'contains ":"';
+  if (seg.endsWith('.') || seg.endsWith(' ')) return 'ends in a dot or space';
+  if (SHORT_NAME.test(seg)) return 'has the form of a Windows short name';
+  if (DEVICE_NAME.test(seg.split('.')[0]!)) return 'is a Windows device name';
+  return null;
+}
+
 /** Normalizes a vault path to the form file_id is computed from, or throws. */
 export function normalizePath(path: string): string {
   const p = path.replace(/\\/g, '/').normalize('NFC');
@@ -20,6 +40,8 @@ export function normalizePath(path: string): string {
   if (p.endsWith('/')) throw new InvalidPathError(path, 'names a folder');
   for (const seg of p.split('/')) {
     if (seg === '' || seg === '.' || seg === '..') throw new InvalidPathError(path, `bad segment ${JSON.stringify(seg)}`);
+    const alias = windowsAlias(seg);
+    if (alias) throw new InvalidPathError(path, `${JSON.stringify(seg)} ${alias}`);
   }
   if (hasControlCharacter(p)) throw new InvalidPathError(path, 'contains a control character');
   // UTF-8 encoding would turn a lone surrogate into U+FFFD, so two different
