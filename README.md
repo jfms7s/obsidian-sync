@@ -157,10 +157,69 @@ Sign in with the same account, **unlock** with the passphrase (or the recovery w
 ### Good to know
 
 - **Mobile apps sync only while Obsidian is open.** iOS and Android suspend apps in the background. When you come back, the plugin compares everything with the server.
-- **Edits made while Obsidian was closed** (with another editor, or by `git`) are picked up when it starts.
+- **Edits made while Obsidian was closed** (with another editor, or by `git`) are picked up when it starts, or within seconds by [obsync-cli](#sync-without-obsidian-obsync-cli) running on that machine.
 - **Obsidian's own settings and community plugins are not synced** in this release. They are planned as a separate, per-account layer.
 - A file larger than 256 MiB is skipped, with a notice.
 - If the server is restored from an older backup, devices notice it, keep their newer edits, and upload them again. A copy of the older text is saved next to a file that now differs.
+
+## Sync without Obsidian (obsync-cli)
+
+`obsync-cli` is the plugin's sync engine without Obsidian: one more device on your account that syncs a vault folder on a desktop or server. Run it as a service and files that other programs write into the folder (an editor, a script, an AI agent in a terminal) reach your other devices within seconds, even while Obsidian is closed. Edits from your other devices land in the folder the same way.
+
+It needs Node 22.12 or newer. The account's encryption keys must already be set up in Obsidian (the CLI unlocks them; it does not create them).
+
+### Install it
+
+Download `obsync-cli.mjs` from the [latest release](https://github.com/jfms7s/obsidian-sync/releases/latest) (it is one file, with everything it needs inside), check it, and put it somewhere stable:
+
+```bash
+gh attestation verify obsync-cli.mjs --repo jfms7s/obsidian-sync
+install -D -m 0755 obsync-cli.mjs ~/.local/lib/obsync/obsync-cli.mjs
+```
+
+Or build it from a checkout with `make cli-build` (it lands in `plugin/dist/obsync-cli.mjs`). Below, `obsync-cli` stands for `node ~/.local/lib/obsync/obsync-cli.mjs`.
+
+### Set it up
+
+```bash
+obsync-cli login --server https://sync.example.com --username alice --device-name "desktop (cli)"
+obsync-cli unlock                      # the encryption passphrase; --recovery for the 24 words
+obsync-cli vaults                      # lists the vaults with their ids
+obsync-cli vaults --choose 3f2a…       # the one this folder is a copy of
+obsync-cli sync --vault-dir ~/Documents/Vault --init --once
+```
+
+The password and the passphrase are typed with echo off. A script can pass them on a file descriptor instead (`--password-fd 3 3<password-file`, `--passphrase-fd`); they are never accepted as arguments.
+
+The first `sync` of a folder needs `--init`. It ties this login to that folder, and every later run refuses any other folder, so a typo cannot upload the wrong one. As when you add a device in Obsidian, a folder that already holds the vault is merged with the server's copy; for a clean start, use an empty folder.
+
+### Run it as a service
+
+`sync` without `--once` keeps running: it watches the folder and listens to the server, like the plugin. `deploy/systemd/obsync-cli.service` is a systemd user unit for it:
+
+```bash
+install -D -m 0644 deploy/systemd/obsync-cli.service ~/.config/systemd/user/obsync-cli.service
+# edit ExecStart: the path of node, and --vault-dir
+systemctl --user daemon-reload
+systemctl --user enable --now obsync-cli
+journalctl --user -u obsync-cli -f
+loginctl enable-linger "$USER"         # optional: keep it running while you are logged out
+```
+
+`obsync-cli status` shows the account, the vault, the folder, whether the daemon runs and what it is doing, and recent warnings. Exit codes: 0 ok, 1 error, 2 when you must log in, unlock or choose a vault first (the unit does not restart on 2). For a timer or cron job instead of a service, use `sync --once`.
+
+### With Obsidian on the same folder
+
+Obsidian's plugin and the CLI on one folder would each take the other's writes for new edits. So they take turns: while Obsidian syncs the folder, its plugin keeps a heartbeat file in its own folder (`.obsidian/plugins/obsync/active`), and the daemon pauses. It resumes at most 10 seconds after Obsidian closes (90 seconds if Obsidian was killed), with a full comparison of the folder and the server. If your vault's configuration folder is not `.obsidian`, pass `--config-dir`.
+
+### Good to know
+
+- **The state directory holds this device's keys.** It is `~/.local/state/obsync-cli/default/` (mode 0700; `$XDG_STATE_HOME` moves it, `--name` keeps several apart, `--state-dir` sets it), with the session token and the unlocked keys: the same secrets the plugin keeps in Obsidian's database on that machine. Keep it out of backups you do not trust. `obsync-cli logout` revokes the device on the server and deletes the state.
+- **Deleted files go to the folder's `.trash/`** (never synced), like Obsidian's "Move to Obsidian trash" setting; `--no-trash` deletes them for good. The server keeps the content for the history view either way.
+- **A large deletion waits for you.** If more than 50 files and a fifth of the vault disappear from the folder at once (an unmounted disk, a wrong `git checkout`), the deletion is held instead of reaching your other devices. `obsync-cli deletions` lists it; `--release` deletes the files everywhere, `--restore` brings them back here.
+- **Symbolic links are not synced** (a link to a file is reported as a failed file, never as a deletion), and nothing is read or written through a linked folder.
+- The same files are skipped as in Obsidian: `.trash/`, `.git/`, the configuration folder, operating-system junk files, and whatever the vault's `.obsyncignore` lists.
+- One command at a time per state: `login`, `unlock`, `vaults --choose`, `deletions` and `logout` wait for the daemon to stop (`systemctl --user stop obsync-cli`).
 
 ## Troubleshooting
 
@@ -178,8 +237,8 @@ Sign in with the same account, **unlock** with the passphrase (or the recovery w
 ```
 proto/     Protobuf schema; Go and TypeScript code are generated from it (buf)
 server/    The Go server (module github.com/jfms7s/obsidian-sync/server)
-plugin/    The TypeScript plugin: src/ (engine and shell), test/, lint/ (Obsidian's lint rules)
-deploy/    Compose stack with Caddy, systemd unit
+plugin/    The TypeScript plugin: src/ (engine and shell), cli/ (obsync-cli, Node only), test/, lint/ (Obsidian's lint rules)
+deploy/    Compose stack with Caddy, systemd units (the server, and obsync-cli as a user unit)
 scripts/   Release checks
 ```
 
@@ -191,6 +250,7 @@ make check            # Go tests (-race) and vet, all linters, plugin typecheck,
 make ci-local         # make check plus the rest of CI's checks: generated code and vectors up to date, buf breaking, script tests, bundle check
 make convergence      # the random multi-device suite (not part of make check): CONVERGENCE_SEEDS=1000 for the full run
 make plugin-install VAULT=~/vaults/test    # build and copy the plugin into a vault
+make cli-build        # plugin/dist/obsync-cli.mjs, the headless client
 make docker-build     # image for this machine
 ```
 
@@ -198,7 +258,7 @@ Dependabot proposes grouped updates every week for the workflows' actions, the i
 
 The plugin tests start the real `obsync` server; the convergence suite runs three simulated devices through 60 random operations per seed (edits, edits made while a sync cycle is running, renames, deletes, going offline, crashes, server backups and restores, case-only renames, folder and file clashes, one device with whole-second mtimes in a third of the seeds) and checks that every device ends with the same vault and that no edit is lost. CI runs 100 seeds on every push, 1,000 before every release, and 1,000 new seeds every night. A failing seed prints its whole history and can be replayed with `CONVERGENCE_SEED=<n> make convergence`.
 
-Releases are made by pushing a tag `X.Y.Z` that matches `manifest.json` (no `v`): the release workflow runs 1,000 convergence seeds, builds the binaries, the plugin files and the multi-arch image, and publishes them together.
+Releases are made by pushing a tag `X.Y.Z` that matches `manifest.json` (no `v`): the release workflow runs 1,000 convergence seeds, builds the binaries, the plugin files, `obsync-cli.mjs` and the multi-arch image, and publishes them together.
 
 ## License
 

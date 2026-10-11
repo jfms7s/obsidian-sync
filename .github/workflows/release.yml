@@ -1,8 +1,8 @@
 name: Release
 
 # A tag X.Y.Z (no "v") that matches manifest.json publishes, all together: the
-# plugin files Obsidian installs from, the Linux server binaries, and the container
-# image. Nothing is published until every CI check (checks.yml) and the
+# plugin files Obsidian installs from, the headless client obsync-cli.mjs, the
+# Linux server binaries, and the container image. Nothing is published until every CI check (checks.yml) and the
 # 1,000-seed convergence suite have passed.
 on:
   push:
@@ -78,7 +78,7 @@ jobs:
           if-no-files-found: error
 
   plugin:
-    name: Plugin files
+    name: Plugin files and obsync-cli
     needs: verify
     runs-on: ubuntu-24.04
     steps:
@@ -98,6 +98,15 @@ jobs:
             plugin/dist/main.js
             plugin/dist/manifest.json
             plugin/dist/styles.css
+          if-no-files-found: error
+      # The headless client: one file for Node 22.12+, every dependency inlined.
+      - run: make cli-build
+      - name: obsync-cli starts and carries this version
+        run: test "$(node plugin/dist/obsync-cli.mjs --version)" = "$GITHUB_REF_NAME"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-cli
+          path: plugin/dist/obsync-cli.mjs
           if-no-files-found: error
 
   image:
