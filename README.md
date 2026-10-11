@@ -7,7 +7,7 @@ End-to-end encrypted sync for [Obsidian](https://obsidian.md) vaults, through a 
 - **Desktop and mobile.** The plugin runs on Windows, macOS, Linux, iOS and Android.
 - **No silent data loss.** Concurrent edits are merged line by line, or both versions are kept (the other one as a conflict copy). Earlier versions and deleted files can be restored.
 
-Obsync has two parts: the server `obsync` (this repository's `server/`) and the Obsidian plugin (`plugin/`). This is the first release (0.1): core sync for one account across several devices. Sharing a vault between accounts, single sign-on and a web admin interface are planned for later releases.
+Obsync has two parts: the server `obsync` (this repository's `server/`) and the Obsidian plugin (`plugin/`). Release 0.2 covers sync for one account across several devices, with two-step sign-in, synced Obsidian settings, a vault-wide ignore file and a headless client for machines without Obsidian. Sharing a vault between accounts, single sign-on and a web admin interface are planned for later releases.
 
 ## How it works
 
@@ -55,7 +55,7 @@ docker compose run --rm obsync admin user create --username alice
 
 Everything the server stores (the database and the encrypted chunks) is in the `obsync-data` volume (Docker names it `obsync_obsync-data`), which is also all you need to back up. Either take a backup while the server runs with `obsync admin export` (see [Backups](#backups)), or stop the server while you copy the volume (`docker compose stop obsync`, copy the volume, `docker compose start obsync`): a plain copy taken while the server writes can catch the database half-way through a write. The convergence suite restores both copies of a stopped server and copies of a running one taken between two requests. `docker compose logs -f obsync` shows what it does. The server never logs tokens, keys, passphrases or encrypted payloads.
 
-The image is published as `ghcr.io/jfms7s/obsync` with a tag for every release. Pin a release in `.env` (`OBSYNC_VERSION=0.1.0`) rather than following `latest`.
+The image is published as `ghcr.io/jfms7s/obsync` with a tag for every release. Pin a release in `.env` (`OBSYNC_VERSION=0.2.0`) rather than following `latest`.
 
 ### Without Docker
 
