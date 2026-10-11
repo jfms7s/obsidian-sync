@@ -50,6 +50,20 @@
 // carries on with what it read while the file has already changed under it.
 // Tokens all have the same width within a seed, so replacing one keeps the
 // file's length.
+//
+// Server maintenance. The 'maintenance' operation stops the server, runs
+// one maintenance pass (`obsync admin maintenance run --as-of`) as if the
+// server were older by a per-seed "server age" that each pass advances by
+// half a day to two days, and starts it again. The seed's server keeps
+// little (SERVER_RETENTION: two versions per file, a day of history and
+// trash, an hour of grace for unreferenced chunks), so a pass prunes
+// history, purges the trash and collects chunks while devices are
+// mid-history: a stale cursor over pruned versions, a chunk collected under
+// a pending commit, a trash entry purged while a device is offline. A hot
+// backup taken while the server's own pass ran (it runs one at every start)
+// holds that pass's lease; a server restored from it cannot run maintenance
+// until the lease expires (two jobs intervals), and the admin command is
+// refused meanwhile. Only then is a refusal accepted (and logged).
 import type { ApiClient } from '../../src/api/client';
 import { NetworkError } from '../../src/api/errors';
 import { CHUNK_SIZE } from '../../src/api/limits';
@@ -133,28 +147,29 @@ export function folderCaseVariant(path: string): string {
 /**
  * The fewest effects per 100 seeds each kind of operation must reach, about a
  * fifth of what it reaches on average (measured over seeds 1-1000 on
- * 2026-10-11 with the weights in OPS; re-measure when they change). A kind is only checked when
+ * 2026-10-11 with the weights in OPS and SERVER_RETENTION; re-measure when they change). A kind is only checked when
  * the run's share comes to 2 or more, so that the bound stays far below what
  * any run of that size reaches by chance (a run of 20 seeds checks the common
  * kinds, a release run of 1,000 all of them).
  */
 export const MIN_EFFECTS_PER_100_SEEDS: Readonly<Record<string, number>> = {
-  'backup': 11.1,
-  'case-rename': 21.6,
-  'crash-after-commit': 5.6,
-  'create': 240.3,
-  'delete': 58.3,
-  'edit': 191.5,
-  'edit-mid-cycle': 17.1,
-  'history-restore': 0.9,
-  'hot-backup': 12.5,
-  'ignore': 23.0,
-  'lose-commit': 26.6,
-  'network': 85.3,
-  'rename': 59.8,
-  'restart': 35.4,
-  'restore-backup': 4.8,
-  'sync': 58.5,
+  'backup': 11.5,
+  'case-rename': 21.2,
+  'crash-after-commit': 5.9,
+  'create': 240.1,
+  'delete': 58.8,
+  'edit': 189.4,
+  'edit-mid-cycle': 17.9,
+  'history-restore': 0.8,
+  'hot-backup': 12.2,
+  'ignore': 23.1,
+  'lose-commit': 26.7,
+  'maintenance': 4.3,
+  'network': 84.6,
+  'rename': 60.2,
+  'restart': 35.9,
+  'restore-backup': 4.9,
+  'sync': 53.9,
   'trash-restore': 1.7,
 };
 
@@ -196,8 +211,27 @@ const OPS: ReadonlyArray<readonly [string, number]> = [
   ['create', 0.2], ['edit', 0.22], ['edit-mid-cycle', 0.04], ['rename', 0.07], ['case-rename', 0.04], ['delete', 0.07],
   ['network', 0.07], ['lose-commit', 0.03], ['crash-after-commit', 0.02], ['restart', 0.03],
   ['history-restore', 0.02], ['trash-restore', 0.02], ['ignore', 0.02], ['backup', 0.01], ['hot-backup', 0.01], ['restore-backup', 0.01],
-  ['sync', 0.12],
+  ['maintenance', 0.01], ['sync', 0.11],
 ];
+
+/**
+ * The retention a seed's server runs with (see the header): short, so that
+ * a maintenance pass has something to prune, purge and collect. The
+ * smallest values the server's config accepts for the day and hour counts.
+ */
+export const SERVER_RETENTION: Readonly<Record<string, string>> = {
+  OBSYNC_HISTORY_MAX_VERSIONS: '2',
+  OBSYNC_HISTORY_DAYS: '1',
+  OBSYNC_TRASH_DAYS: '1',
+  OBSYNC_GC_GRACE_HOURS: '1',
+};
+
+const HOUR = 60 * 60_000;
+
+/** Whether a maintenance pass's output reports anything pruned, purged or deleted. */
+export function maintenanceChanged(output: string): boolean {
+  return /\b[1-9]\d* (?:versions? pruned|files? purged|chunks? deleted)/.test(output);
+}
 
 export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedReport> {
   const rnd = seededRandom(o.seed);
@@ -237,6 +271,11 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
     const written = new Set<string>();
     const removed = new Set<string>();
     let backup: string | null = null;
+    /** The backup is a copy of the running server (hot-backup), and the server now runs on such a copy. */
+    let backupIsHot = false;
+    let onHotCopy = false;
+    /** How much older than now the server's data is taken to be at the next maintenance pass. */
+    let serverAgeMs = 0;
     let tokenN = 0;
     const token = (c: number) => {
       // Fixed width, so replacing one token with another keeps a file's length.
@@ -511,17 +550,33 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
           break;
         case 'backup':
           backup = await srv.snapshot();
+          backupIsHot = false;
           did('backup of the server');
           break;
         case 'hot-backup':
           backup = await srv.hotSnapshot();
+          backupIsHot = true;
           did('hot backup of the running server');
           break;
         case 'restore-backup':
           if (backup === null) break;
           await srv.restore(backup);
+          onHotCopy = backupIsHot;
           did('restore of the server from its backup');
           break;
+        case 'maintenance': {
+          serverAgeMs += (12 + rnd.int(37)) * HOUR;
+          let out: string;
+          try {
+            out = await srv.maintenance(new Date(Date.now() + serverAgeMs));
+          } catch (err) {
+            if (!onHotCopy || !/holds the maintenance lease/.test(String(err))) throw err;
+            did('maintenance refused: the restored hot copy holds the lease of the pass it was taken during', false);
+            break;
+          }
+          did(`maintenance ${Math.round(serverAgeMs / HOUR)} h on: ${out.trim().replace(/^maintenance as of \S+: /, '')}`, maintenanceChanged(out));
+          break;
+        }
         default: {
           const commitsBefore = c.net.count('POST', '/commit');
           const eventsBefore = c.events.length;
