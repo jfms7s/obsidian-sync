@@ -16,7 +16,7 @@ func TestMigrateCreatesSchema(t *testing.T) {
 		"users", "devices", "key_bundles", "vaults", "vault_members", "vault_keys",
 		"files", "versions", "version_chunks", "chunks", "job_leases", "schema_migrations",
 	} {
-		if !st.HasTableForTest(context.Background(), table) {
+		if !store.HasTable(t, st, table) {
 			t.Errorf("table %s missing", table)
 		}
 	}
@@ -27,7 +27,7 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := st.Migrate(context.Background()); err != nil {
 		t.Fatalf("second migrate: %v", err)
 	}
-	if n := st.AppliedMigrationsForTest(context.Background()); n != 1 {
+	if n := store.AppliedMigrations(t, st); n != 1 {
 		t.Fatalf("applied migrations = %d, want 1", n)
 	}
 }
@@ -61,7 +61,7 @@ func TestMigrateConcurrently(t *testing.T) {
 				t.Fatalf("round %d: migrate %d: %v", i, j, err)
 			}
 		}
-		if n := stores[0].AppliedMigrationsForTest(context.Background()); n != 1 {
+		if n := store.AppliedMigrations(t, stores[0]); n != 1 {
 			t.Fatalf("applied migrations = %d, want 1", n)
 		}
 	}

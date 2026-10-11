@@ -3,21 +3,8 @@
 set -u
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 script="$here/check-glibc.sh"
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
-failures=0
-
-expect() { # expect <description> <want-exit> <command...>
-  local desc="$1" want="$2"; shift 2
-  local out got
-  out="$("$@" 2>&1)"; got=$?
-  if [ "$got" -ne "$want" ]; then
-    echo "FAIL: $desc: exit $got, want $want"; echo "$out" | sed 's/^/    /'
-    failures=$((failures + 1))
-  else
-    echo "ok:   $desc"
-  fi
-}
+# shellcheck source=lib/expect.sh
+. "$here/lib/expect.sh"
 
 # A real dynamically linked binary of the host: it needs some GLIBC_2.x symbol.
 # On a host whose ls is static or not linked against glibc (Alpine, busybox)

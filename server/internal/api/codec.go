@@ -17,7 +17,11 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/ratelimit"
 )
 
-const protoContentType = "application/x-protobuf"
+const (
+	protoContentType = "application/x-protobuf"
+	// octetContentType is a chunk's body: opaque ciphertext.
+	octetContentType = "application/octet-stream"
+)
 
 // Request body limits, chosen per route so that unauthenticated routes cannot
 // be made to buffer large bodies. Every caller of readProto passes one.
@@ -127,12 +131,18 @@ func writeProto(w http.ResponseWriter, status int, m proto.Message) {
 		status = http.StatusInternalServerError
 		data, _ = proto.Marshal(&obsyncv1.Error{Code: apperr.Internal, Message: "internal error"})
 	}
-	hdr := w.Header()
-	hdr.Set("Content-Type", protoContentType)
-	hdr.Set("Cache-Control", "no-store")
-	hdr.Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Type", protoContentType)
+	noStoreHeaders(w)
 	w.WriteHeader(status)
 	_, _ = w.Write(data)
+}
+
+// noStoreHeaders keeps a response out of caches and stops browsers from
+// sniffing a different content type than the one sent.
+func noStoreHeaders(w http.ResponseWriter) {
+	hdr := w.Header()
+	hdr.Set("Cache-Control", "no-store")
+	hdr.Set("X-Content-Type-Options", "nosniff")
 }
 
 func statusFor(code obsyncv1.ErrorCode) int {
