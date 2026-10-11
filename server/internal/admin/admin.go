@@ -1,4 +1,5 @@
-// Package admin implements `obsync admin`, the operator's user management.
+// Package admin implements `obsync admin`, the operator's user and device
+// management.
 package admin
 
 import (
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
 	"github.com/jfms7s/obsidian-sync/server/internal/blob"
@@ -25,9 +27,12 @@ const (
 	maxPasswordBytes = 1024
 )
 
-var (
-	errUsage = errors.New("usage: obsync admin user create|list|delete|set-password [--username NAME] [--quota-bytes N]")
-)
+var errUsage = errors.New(`usage: obsync admin user create --username NAME [--quota-bytes N]   (password on stdin)
+       obsync admin user list
+       obsync admin user set-password --username NAME [--revoke-devices]   (password on stdin)
+       obsync admin user delete --username NAME [--yes]
+       obsync admin device list --username NAME
+       obsync admin device revoke --username NAME (--id DEVICE_ID | --all)`)
 
 type Store interface {
 	CreateUser(ctx context.Context, u store.User) error
@@ -35,6 +40,10 @@ type Store interface {
 	ListUsers(ctx context.Context) ([]store.User, error)
 	SetPassword(ctx context.Context, userID, hash string) error
 	DeleteUser(ctx context.Context, userID string) ([]string, error)
+	UserFootprint(ctx context.Context, userID string) (store.Footprint, error)
+	ListDevices(ctx context.Context, userID string) ([]store.Device, error)
+	RevokeDevice(ctx context.Context, userID, deviceID string) error
+	RevokeAllDevices(ctx context.Context, userID string) (int, error)
 }
 
 type Deps struct {
@@ -47,18 +56,22 @@ type Deps struct {
 }
 
 func Run(ctx context.Context, args []string, d Deps) error {
-	if len(args) < 2 || args[0] != "user" {
+	if len(args) < 2 {
 		return errUsage
 	}
-	switch args[1] {
-	case "create":
+	switch args[0] + " " + args[1] {
+	case "user create":
 		return userCreate(ctx, args[2:], d)
-	case "list":
+	case "user list":
 		return userList(ctx, d)
-	case "delete":
+	case "user delete":
 		return userDelete(ctx, args[2:], d)
-	case "set-password":
+	case "user set-password":
 		return userSetPassword(ctx, args[2:], d)
+	case "device list":
+		return deviceList(ctx, args[2:], d)
+	case "device revoke":
+		return deviceRevoke(ctx, args[2:], d)
 	}
 	return errUsage
 }
@@ -114,10 +127,24 @@ func userList(ctx context.Context, d Deps) error {
 	return tw.Flush()
 }
 
+// userDelete removes a user and everything they own. It cannot be undone,
+// so without --yes it only says what it would delete. It never prompts:
+// stdin carries passwords, and `kubectl exec` without -it has none.
 func userDelete(ctx context.Context, args []string, d Deps) error {
-	u, err := lookup(ctx, args, "user delete", d)
+	fs, username := userFlags("user delete")
+	yes := fs.Bool("yes", false, "")
+	u, err := lookup(ctx, fs, args, username, d)
 	if err != nil {
 		return err
+	}
+	if !*yes {
+		fp, err := d.Store.UserFootprint(ctx, u.ID)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(d.Stdout, "user %s has %s, %s, %s and %s; deleting them cannot be undone\n", u.Username,
+			plural(fp.Devices, "device"), plural(fp.Vaults, "vault"), plural(fp.Versions, "version"), plural(fp.Blobs, "blob"))
+		return errors.New("nothing deleted: re-run with --yes to delete")
 	}
 	keys, err := d.Store.DeleteUser(ctx, u.ID)
 	if err != nil {
@@ -129,7 +156,7 @@ func userDelete(ctx context.Context, args []string, d Deps) error {
 			failed++
 		}
 	}
-	fmt.Fprintf(d.Stdout, "deleted user %s (%d blobs removed", u.Username, len(keys)-failed)
+	fmt.Fprintf(d.Stdout, "deleted user %s (%s removed", u.Username, plural(len(keys)-failed, "blob"))
 	if failed > 0 {
 		fmt.Fprintf(d.Stdout, ", %d could not be removed and are now orphaned", failed)
 	}
@@ -138,7 +165,9 @@ func userDelete(ctx context.Context, args []string, d Deps) error {
 }
 
 func userSetPassword(ctx context.Context, args []string, d Deps) error {
-	u, err := lookup(ctx, args, "user set-password", d)
+	fs, username := userFlags("user set-password")
+	revoke := fs.Bool("revoke-devices", false, "")
+	u, err := lookup(ctx, fs, args, username, d)
 	if err != nil {
 		return err
 	}
@@ -149,15 +178,81 @@ func userSetPassword(ctx context.Context, args []string, d Deps) error {
 	if err := d.Store.SetPassword(ctx, u.ID, hash); err != nil {
 		return err
 	}
-	fmt.Fprintf(d.Stdout, "password changed for %s (existing devices stay signed in; revoke them from a device if needed)\n", u.Username)
+	if !*revoke {
+		fmt.Fprintf(d.Stdout, "password changed for %s (existing devices stay signed in; add --revoke-devices to sign them all out)\n", u.Username)
+		return nil
+	}
+	n, err := d.Store.RevokeAllDevices(ctx, u.ID)
+	if err != nil {
+		return fmt.Errorf("password changed, but revoking the devices failed: %w", err)
+	}
+	fmt.Fprintf(d.Stdout, "password changed for %s; revoked %s\n", u.Username, plural(n, "device"))
 	return nil
 }
 
-func lookup(ctx context.Context, args []string, name string, d Deps) (store.User, error) {
+func deviceList(ctx context.Context, args []string, d Deps) error {
+	fs, username := userFlags("device list")
+	u, err := lookup(ctx, fs, args, username, d)
+	if err != nil {
+		return err
+	}
+	devices, err := d.Store.ListDevices(ctx, u.ID)
+	if err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(d.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tNAME\tPLATFORM\tCREATED\tLAST_SEEN\tREVOKED")
+	for _, dev := range devices {
+		revoked := "-"
+		if dev.Revoked() {
+			revoked = formatMs(dev.RevokedAtMs)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", dev.ID, dev.Name, dev.Platform,
+			formatMs(dev.CreatedAtMs), formatMs(dev.LastSeenAtMs), revoked)
+	}
+	return tw.Flush()
+}
+
+func deviceRevoke(ctx context.Context, args []string, d Deps) error {
+	fs, username := userFlags("device revoke")
+	id := fs.String("id", "", "")
+	all := fs.Bool("all", false, "")
+	u, err := lookup(ctx, fs, args, username, d)
+	if err != nil {
+		return err
+	}
+	if (*id == "") == !*all {
+		return errors.New("give either --id DEVICE_ID or --all")
+	}
+	if *all {
+		n, err := d.Store.RevokeAllDevices(ctx, u.ID)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(d.Stdout, "revoked %s of %s\n", plural(n, "device"), u.Username)
+		return nil
+	}
+	err = d.Store.RevokeDevice(ctx, u.ID, *id)
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("user %s has no device %q", u.Username, *id)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(d.Stdout, "revoked 1 device of %s\n", u.Username)
+	return nil
+}
+
+// userFlags starts a command's flag set with --username.
+func userFlags(name string) (*flag.FlagSet, *string) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	username := fs.String("username", "", "")
-	if err := fs.Parse(args); err != nil {
+	return fs, fs.String("username", "", "")
+}
+
+// lookup parses args with fs and finds the user named by --username.
+func lookup(ctx context.Context, fs *flag.FlagSet, args []string, username *string, d Deps) (store.User, error) {
+	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		return store.User{}, errUsage
 	}
 	if *username == "" {
@@ -168,6 +263,15 @@ func lookup(ctx context.Context, args []string, name string, d Deps) (store.User
 		return store.User{}, fmt.Errorf("no user named %q", *username)
 	}
 	return u, err
+}
+
+func formatMs(ms int64) string { return time.UnixMilli(ms).UTC().Format(time.RFC3339) }
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 func checkUsername(s string) (string, error) {

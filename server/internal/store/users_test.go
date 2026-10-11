@@ -199,3 +199,56 @@ func TestPutKeyBundleConcurrentFirstUpload(t *testing.T) {
 		}
 	}
 }
+
+func TestRevokeAllDevices(t *testing.T) {
+	st, _ := storetest.New(t)
+	alice := storetest.SeedUser(t, st, "alice")
+	bob := storetest.SeedUser(t, st, "bob")
+	for i, u := range []store.User{alice, alice, alice, bob} {
+		dev := store.Device{ID: ids.New(), UserID: u.ID, Name: "d", Platform: "p"}
+		if err := st.CreateDevice(ctx, dev, bytes.Repeat([]byte{byte(i + 1)}, 32)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	devices, _ := st.ListDevices(ctx, alice.ID)
+	if err := st.RevokeDevice(ctx, alice.ID, devices[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	n, err := st.RevokeAllDevices(ctx, alice.ID)
+	if err != nil || n != 2 {
+		t.Fatalf("revoked %d, err %v; want the 2 still active", n, err)
+	}
+	devices, _ = st.ListDevices(ctx, alice.ID)
+	for _, d := range devices {
+		if !d.Revoked() {
+			t.Fatalf("device %s still active", d.ID)
+		}
+	}
+	if bobs, _ := st.ListDevices(ctx, bob.ID); bobs[0].Revoked() {
+		t.Fatal("another user's device was revoked")
+	}
+	if n, err := st.RevokeAllDevices(ctx, alice.ID); err != nil || n != 0 {
+		t.Fatalf("second revoke-all = %d, err %v; want 0", n, err)
+	}
+}
+
+func TestUserFootprint(t *testing.T) {
+	st, _ := storetest.New(t)
+	alice := storetest.SeedUser(t, st, "alice")
+	bob := storetest.SeedUser(t, st, "bob")
+	if err := st.CreateDevice(ctx, store.Device{ID: ids.New(), UserID: alice.ID, Name: "d", Platform: "p"}, bytes.Repeat([]byte{1}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []store.User{alice, alice, bob} {
+		v := storetest.SeedVault(t, st, u.ID)
+		storetest.SeedChunk(t, st, v.ID, storetest.ChunkID(1), 10)
+		storetest.MustCommit(t, st, storetest.NewVersion(v.ID, storetest.FileID(1), nil, storetest.ChunkID(1)))
+	}
+	fp, err := st.UserFootprint(ctx, alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp != (store.Footprint{Devices: 1, Vaults: 2, Versions: 2, Blobs: 2}) {
+		t.Fatalf("footprint = %+v", fp)
+	}
+}

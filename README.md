@@ -80,6 +80,19 @@ Put a reverse proxy with TLS in front of it (the compose example's `Caddyfile` i
 
 - The server is built for Linux. On any other system (macOS, Windows) run the Docker image.
 
+### Managing accounts and devices
+
+`obsync admin` runs against the same data as the server (prefix it with `docker compose run --rm obsync` or `sudo -u obsync env OBSYNC_DATA_DIR=/var/lib/obsync` as above):
+
+| Command | What it does |
+|---|---|
+| `admin user create --username NAME [--quota-bytes N]` | Creates an account; the password is read from the terminal or standard input |
+| `admin user list` | Lists accounts |
+| `admin user set-password --username NAME [--revoke-devices]` | Sets a new password. Signed-in devices stay signed in unless `--revoke-devices` signs them all out (do that after a suspected compromise) |
+| `admin device list --username NAME` | Lists the account's devices, when they were last seen and whether they are revoked |
+| `admin device revoke --username NAME (--id DEVICE_ID \| --all)` | Signs one device, or all of them, out for good |
+| `admin user delete --username NAME --yes` | Deletes the account with all its vaults and their history. Without `--yes` it only says what it would delete. It cannot be undone |
+
 ### Configuration
 
 Settings come from environment variables (or a YAML file named by `OBSYNC_CONFIG` or `--config`; variables win). Nothing needs to be set for a single-node setup besides how it is reached.

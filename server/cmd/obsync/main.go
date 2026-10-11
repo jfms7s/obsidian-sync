@@ -31,7 +31,8 @@ const usage = `usage: obsync [--config PATH] <command> [args]
 commands:
   serve     run the sync server
   migrate   apply database migrations and exit
-  admin     manage users: obsync admin user create|list|delete|set-password
+  admin     manage users and devices: obsync admin user create|list|delete|set-password,
+            obsync admin device list|revoke
   version   print the build version
   health    probe GET /readyz on the server's own listen address; exit 0 only on 200
 
