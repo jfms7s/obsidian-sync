@@ -125,6 +125,9 @@ export class SyncEngine {
       maxFileBytes: opts.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES,
       unavailableEpochs: this.unavailableEpochs,
       emit: (e) => this.emit(e),
+      onShadowed: () => {
+        this.hasShadowed = true;
+      },
     };
   }
 
@@ -138,7 +141,6 @@ export class SyncEngine {
   }
 
   private emit(e: EngineEvent): void {
-    if (e.type === 'notice' && (e.code === 'CASE_COLLISION' || e.code === 'PATH_COLLISION')) this.hasShadowed = true;
     for (const l of [...this.listeners]) {
       try {
         l(e);

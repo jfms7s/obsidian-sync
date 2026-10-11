@@ -128,14 +128,17 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
     await state.deletePending(fileId);
   }
   if (rec?.shadowed || rec?.tooLarge) {
-    // Not written here (case collision, or the remote version is over this
-    // device's size limit): never push this device's state over it. A
-    // local file at exactly this path is then not synced: say so.
+    // Not written here (a case collision or a folder holds the name, or the
+    // remote version is over this device's size limit): never push this
+    // device's state over it. A local file at exactly this path is then not
+    // synced: say so, and why.
     const st = await ctx.adapter.stat(path);
     if (st && st.path === path) {
       ctx.emit(rec.tooLarge
         ? { type: 'notice', code: 'TOO_LARGE', persistent: true, path, message: `${path} is not synced from this device: the server's version is larger than this device syncs` }
-        : { type: 'notice', code: 'CASE_COLLISION', persistent: false, path, message: `${path} is not synced from this device: the server has a file that differs from it only in letter case` });
+        : rec.shadowedBy === 'folder'
+          ? { type: 'notice', code: 'PATH_COLLISION', persistent: false, path, message: `${path} is not synced from this device: the server's file of this name was saved beside a folder that held the name here` }
+          : { type: 'notice', code: 'CASE_COLLISION', persistent: false, path, message: `${path} is not synced from this device: the server has a file that differs from it only in letter case` });
     }
     await state.clearDirty(entry.path, entry.gen);
     return null;

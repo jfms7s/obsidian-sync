@@ -26,6 +26,12 @@ export interface SyncContext {
    */
   unavailableEpochs?: ReadonlySet<number>;
   emit(e: EngineEvent): void;
+  /**
+   * A version was recorded as shadowed (a folder or a case collision holds
+   * its name here): the engine then watches for deletes and renames that
+   * could free the name.
+   */
+  onShadowed?(): void;
 }
 
 /** 256 MiB: the engine reads whole files into memory, which a phone can afford at this size. */
