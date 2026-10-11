@@ -151,6 +151,11 @@ export class IgnoreRules {
     return this.res.some((re) => re.test(path));
   }
 
+  /** A file in the config folder that the settings policy syncs (it merges as settings, never into a conflict copy). */
+  isSettingsFile(path: string): boolean {
+    return !!this.configRe?.test(path) && !!this.configSync?.syncs(path);
+  }
+
   /**
    * Whether a walk of the vault can skip the folder and everything in it.
    * The config folder (and its plugins/ and plugins/<id>/ folders) is
