@@ -21,6 +21,8 @@ import type { AdapterEvent, Expect, FileStat, VaultAdapter } from '../vault/adap
 
 /** A renamed file waits under this suffix between the two steps of a case-only rename; recover() finishes an interrupted one. */
 export const TEMP_SUFFIX = '.obsync.tmp';
+/** The case-sensitivity probe is written as this name plus TEMP_SUFFIX (and looked for in lower case). */
+const PROBE_NAME = 'Case-Probe';
 
 const hidden = (path: string): boolean => path.split('/').some((s) => s.startsWith('.'));
 const fold = (s: string): string => s.normalize('NFC').toLowerCase();
@@ -58,10 +60,10 @@ interface Resolved {
 export async function probeCaseInsensitive(vault: Vault, probeDir: string): Promise<boolean> {
   const a = vault.adapter;
   if (!(await a.exists(probeDir))) await a.mkdir(probeDir);
-  const probe = `${probeDir}/Case-Probe${TEMP_SUFFIX}`;
+  const probe = `${probeDir}/${PROBE_NAME}${TEMP_SUFFIX}`;
   await a.writeBinary(probe, new ArrayBuffer(1));
   try {
-    return await a.exists(`${probeDir}/case-probe${TEMP_SUFFIX}`);
+    return await a.exists(`${probeDir}/${PROBE_NAME.toLowerCase()}${TEMP_SUFFIX}`);
   } finally {
     await a.remove(probe).catch(() => undefined);
   }
@@ -178,12 +180,17 @@ export class ObsidianAdapter implements VaultAdapter {
   /** Finishes a case-only rename that was interrupted between its two steps; null if f is not one (or its target is taken). */
   private async recoverTemp(f: string): Promise<string | null> {
     const target = f.slice(0, -TEMP_SUFFIX.length);
-    // Another program's *.obsync.tmp is not ours to touch, and the probe file is deleted by its owner.
-    if (target === '' || (await this.vault.adapter.exists(target))) return null;
+    // Another program's *.obsync.tmp is not ours to touch, and a case probe
+    // left by a crash in probeCaseInsensitive is the probe's, not a file.
+    if (target === '' || target.slice(target.lastIndexOf('/') + 1) === PROBE_NAME || (await this.vault.adapter.exists(target))) return null;
     const stat = await this.vault.adapter.stat(f);
     if (stat?.type !== 'file') return null;
     try {
-      await this.vault.adapter.rename(f, target);
+      // An indexed file moves through the Vault API, so Obsidian's index
+      // follows even where it has no file watcher (mobile).
+      const indexed = this.vault.getFileByPath(f);
+      if (indexed) await this.vault.rename(indexed, target);
+      else await this.vault.adapter.rename(f, target);
     } catch {
       return null;
     }
@@ -271,14 +278,30 @@ export class ObsidianAdapter implements VaultAdapter {
     }
   }
 
-  /** An empty folder (no files at any depth) where a file is to go is replaced; one with files is an error. */
-  private async clearFolderAt(path: string): Promise<void> {
+  /**
+   * An empty folder (no files at any depth) where a file is to go is
+   * replaced; one with files is an error. Returns the folder removed (as
+   * spelled on disk), or null, so a failed write or rename can put it back.
+   */
+  private async clearFolderAt(path: string): Promise<string | null> {
     const dir = await this.folderAt(path);
-    if (dir === null) return;
+    if (dir === null) return null;
     if (await this.holdsFile(dir)) throw new Error(`EISDIR: ${path} is a folder`);
     const folder = hidden(dir) ? null : this.vault.getFolderByPath(dir);
     if (folder) await this.fileManager.trashFile(folder);
     else await this.vault.adapter.rmdir(dir, true);
+    return dir;
+  }
+
+  /** Runs move, which puts a file where clearFolderAt(path) removed an empty folder; if it throws, the folder comes back. */
+  private async replacingFolder<T>(path: string, move: () => Promise<T>): Promise<T> {
+    const removed = await this.clearFolderAt(path);
+    try {
+      return await move();
+    } catch (err) {
+      if (removed !== null && !(await this.vault.adapter.exists(removed))) await this.makeFolder(removed).catch(() => undefined);
+      throw err;
+    }
   }
 
   async write(path: string, data: Uint8Array, expect?: Expect): Promise<boolean> {
@@ -291,20 +314,21 @@ export class ObsidianAdapter implements VaultAdapter {
       else await this.vault.adapter.writeBinary(cur.disk, buf);
       return true;
     }
-    await this.clearFolderAt(path);
-    const target = await this.prepareParent(path);
-    if (hidden(target)) {
-      await this.vault.adapter.writeBinary(target, buf);
+    return this.replacingFolder(path, async () => {
+      const target = await this.prepareParent(path);
+      if (hidden(target)) {
+        await this.vault.adapter.writeBinary(target, buf);
+        return true;
+      }
+      try {
+        await this.vault.createBinary(target, buf);
+      } catch (err) {
+        // The file exists on disk but the index has not caught up: write through the disk.
+        if (!(await this.vault.adapter.exists(target))) throw err;
+        await this.vault.adapter.writeBinary(target, buf);
+      }
       return true;
-    }
-    try {
-      await this.vault.createBinary(target, buf);
-    } catch (err) {
-      // The file exists on disk but the index has not caught up: write through the disk.
-      if (!(await this.vault.adapter.exists(target))) throw err;
-      await this.vault.adapter.writeBinary(target, buf);
-    }
-    return true;
+    });
   }
 
   async remove(path: string, expect?: Expect): Promise<boolean> {
@@ -324,24 +348,36 @@ export class ObsidianAdapter implements VaultAdapter {
     await this.checkFolderNames(newPath);
     const cur = await this.resolve(oldPath);
     if (!cur || !this.holds(cur, expect)) return false;
+    if (oldPath === newPath) return true; // nothing to do, and a round trip through a temp name would only cost events
     const target = await this.resolve(newPath);
-    // The same file under another case (or normalization) is a rename in place; any other file in the way refuses it.
-    const sameFile = target !== null && (target.disk === cur.disk || (this.caseInsensitive ? fold(target.disk) === fold(cur.disk) : target.disk.normalize('NFC') === cur.disk.normalize('NFC')));
-    if (target && !sameFile) return false;
-    if (!sameFile) await this.clearFolderAt(newPath);
-    const to = sameFile ? this.sameFileTarget(cur.disk, newPath) : await this.prepareParent(newPath);
-    if (cur.file) {
-      try {
-        await this.vault.rename(cur.file, to);
-      } catch (err) {
-        if (!sameFile) throw err;
-        await this.caseOnlyRename(cur, to); // Obsidian refuses a change of case on a case-insensitive disk
+    if (target && this.isSameFile(cur, target)) {
+      // The same file under another case (or normalization): a rename in place.
+      const to = this.sameFileTarget(cur.disk, newPath);
+      if (cur.file) {
+        try {
+          await this.vault.rename(cur.file, to);
+        } catch {
+          await this.caseOnlyRename(cur, to); // Obsidian refuses a change of case on a case-insensitive disk
+        }
+      } else {
+        await this.vault.adapter.rename(cur.disk, `${to}${TEMP_SUFFIX}`);
+        await this.vault.adapter.rename(`${to}${TEMP_SUFFIX}`, to);
       }
-    } else {
-      if (sameFile) await this.vault.adapter.rename(cur.disk, `${to}${TEMP_SUFFIX}`);
-      await this.vault.adapter.rename(sameFile ? `${to}${TEMP_SUFFIX}` : cur.disk, to);
+      return true;
     }
-    return true;
+    if (target) return false; // another file is in the way
+    return this.replacingFolder(newPath, async () => {
+      const to = await this.prepareParent(newPath);
+      if (cur.file) await this.vault.rename(cur.file, to);
+      else await this.vault.adapter.rename(cur.disk, to);
+      return true;
+    });
+  }
+
+  /** Whether target, found at a rename's new path, is the file being renamed itself (spelled in another case or normalization). */
+  private isSameFile(cur: Resolved, target: Resolved): boolean {
+    if (target.disk === cur.disk) return true;
+    return this.caseInsensitive ? fold(target.disk) === fold(cur.disk) : target.disk.normalize('NFC') === cur.disk.normalize('NFC');
   }
 
   /** The folder part stays as it is on disk; only the file name (its case or normalization) changes. */

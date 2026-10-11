@@ -178,6 +178,64 @@ describe('ObsidianAdapter', () => {
     });
   });
 
+  describe('edge cases', () => {
+    it('leaves a case probe that a crash left behind alone instead of adopting it as a file', async () => {
+      const { vault, adapter, outside } = await build();
+      const probe = `${PROBE_DIR}/Case-Probe${TEMP_SUFFIX}`;
+      outside.write(probe, new Uint8Array(1));
+      expect(await adapter.list()).toContain(probe);
+      expect(vault.fs.get(probe)).toBeDefined();
+      expect(vault.fs.get(`${PROBE_DIR}/Case-Probe`)).toBeUndefined();
+    });
+
+    it('finishes an interrupted case-only rename of an indexed file through the Vault API, so the index follows', async () => {
+      const { vault, adapter } = await build({ caseInsensitive: true, index: 'none' });
+      await adapter.write(`TODO.md${TEMP_SUFFIX}`, bytes('- milk')); // indexed under the temp name
+      expect(vault.getFileByPath(`TODO.md${TEMP_SUFFIX}`)).not.toBeNull();
+      expect(await adapter.list()).toEqual(['TODO.md']);
+      expect(vault.getFileByPath('TODO.md')).not.toBeNull();
+      expect(vault.getFileByPath(`TODO.md${TEMP_SUFFIX}`)).toBeNull();
+    });
+
+    for (const caseInsensitive of [false, true]) {
+      it(`does nothing for a rename to the very same path (${caseInsensitive ? 'case-insensitive' : 'case-sensitive'} disk)`, async () => {
+        const { vault, adapter } = await build({ caseInsensitive });
+        await adapter.write('a.md', bytes('a'));
+        const hidden = await adapter.write('.hidden/b.md', bytes('b'));
+        expect(hidden).toBe(true);
+        const events: AdapterEvent[] = [];
+        adapter.watch((e) => events.push(e));
+        const renames = vi.spyOn(vault, 'rename');
+        const diskRenames = vi.spyOn(vault.adapter, 'rename');
+        expect(await adapter.rename('a.md', 'a.md')).toBe(true);
+        expect(await adapter.rename('.hidden/b.md', '.hidden/b.md')).toBe(true);
+        expect(renames).not.toHaveBeenCalled();
+        expect(diskRenames).not.toHaveBeenCalled();
+        vault.flushWatcher();
+        expect(events).toEqual([]);
+        expect(await adapter.list()).toEqual(['.hidden/b.md', 'a.md']);
+      });
+    }
+
+    it('keeps the empty folder a rename was to replace when the rename fails', async () => {
+      const { vault, adapter } = await build();
+      await vault.createFolder('target');
+      await adapter.write('src.md', bytes('s'));
+      vi.spyOn(vault, 'rename').mockRejectedValue(new Error('EIO'));
+      await expect(adapter.rename('src.md', 'target')).rejects.toThrow('EIO');
+      expect(vault.fs.get('target')?.kind).toBe('folder');
+      expect(await adapter.list()).toEqual(['src.md']);
+    });
+
+    it('keeps the empty folder a write was to replace when the write fails', async () => {
+      const { vault, adapter } = await build();
+      await vault.createFolder('target');
+      vi.spyOn(vault, 'createBinary').mockRejectedValue(new Error('EIO'));
+      await expect(adapter.write('target', bytes('t'))).rejects.toThrow('EIO');
+      expect(vault.fs.get('target')?.kind).toBe('folder');
+    });
+  });
+
   it('refuses a rename onto another file that differs only in case on a case-sensitive disk', async () => {
     for (const o of [{}, { index: 'lagging' as const }]) {
       const { adapter, outside } = await build(o);
