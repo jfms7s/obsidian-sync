@@ -14,6 +14,8 @@ export interface MemoryAdapterOptions {
    * mtime than the one before.
    */
   coarseMtime?: boolean;
+  /** Report no events for hidden paths (a segment starting with '.'), as Obsidian does: only a walk or a stat finds their changes. */
+  hiddenUnwatched?: boolean;
 }
 
 interface Entry {
@@ -45,6 +47,8 @@ export class MemoryAdapter implements VaultAdapter {
   }
 
   private emit(ev: AdapterEvent): void {
+    const hidden = (p: string): boolean => p.split('/').some((s) => s.startsWith('.'));
+    if (this.options.hiddenUnwatched && hidden(ev.path) && (ev.type !== 'rename' || hidden(ev.oldPath))) return;
     for (const l of [...this.listeners]) l(ev);
   }
 

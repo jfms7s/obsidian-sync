@@ -53,6 +53,8 @@ export interface DeviceOptions {
   caseInsensitive?: boolean;
   /** Whole-second mtimes (MemoryAdapterOptions.coarseMtime). */
   coarseMtime?: boolean;
+  /** No events for hidden paths, as in Obsidian (MemoryAdapterOptions.hiddenUnwatched). */
+  hiddenUnwatched?: boolean;
   ignoreGlobs?: string[];
   maxFileBytes?: number;
   /** The device's LocalState (default: a fresh one over fake-indexeddb). */
@@ -82,7 +84,7 @@ export async function newDevice(srv: TestServer, user: User, o: DeviceOptions): 
     ? await createVault(state, api, session, keys, `vault of ${user.username}`, random)
     : await chooseVault(state, api, session, keys, o.vault);
   const ring = await keyringFromStored(stored);
-  const adapter = new MemoryAdapter(o.caseInsensitive ?? false, clock, { coarseMtime: o.coarseMtime ?? false });
+  const adapter = new MemoryAdapter(o.caseInsensitive ?? false, clock, { coarseMtime: o.coarseMtime ?? false, hiddenUnwatched: o.hiddenUnwatched ?? false });
   const events: EngineEvent[] = [];
   const ctx: SyncContext = {
     api, state, adapter, ring, deviceName: o.name, clock, random,
