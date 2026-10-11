@@ -41,6 +41,23 @@ it('backs off a failing file from 1 minute, notifying only the first time', asyn
   expect(await nextRetryAt(c)).toBeNull();
 });
 
+it('finds the earliest retry of each kind of failure on its own', async () => {
+  const c = await ctx();
+  await recordFailure(c, 'push:a.md', 'a.md', new Error('EIO'));
+  c.clock.advance(10 * 60_000);
+  await recordFailure(c, 'apply:01', 'b.md', new Error('EIO'));
+  c.clock.advance(10 * 60_000);
+  await recordFailure(c, 'push:c.md', 'c.md', new Error('EIO'));
+  const at = async (key: string) => (await c.state.getFailure(key))!.nextAt;
+  expect(await nextRetryAt(c, 'push:')).toBe(await at('push:a.md'));
+  expect(await nextRetryAt(c, 'apply:')).toBe(await at('apply:01'));
+  expect(await nextRetryAt(c)).toBe(await at('push:a.md'));
+  await clearFailure(c, 'push:a.md');
+  expect(await nextRetryAt(c, 'push:')).toBe(await at('push:c.md'));
+  await clearFailure(c, 'apply:01');
+  expect(await nextRetryAt(c, 'apply:')).toBeNull();
+});
+
 it('uses the error to pick the notice code', async () => {
   const c = await ctx();
   await recordFailure(c, 'apply:1', 'x.md', new CryptoError('bad'));

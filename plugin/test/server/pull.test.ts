@@ -1,7 +1,7 @@
 // Pull and the apply table of spec §5.5, against the real server.
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
 import { fileIdFor } from '../../src/crypto/objects';
 import { fromHex, toHex } from '../../src/util/bytes';
 import { ServerRollbackError } from '../../src/sync/context';
@@ -183,6 +183,15 @@ describe('pull', () => {
     expect(files(d.adapter)).toEqual({ '.obsidian/community-plugins.json': '[]', 'ok.md': 'fine\n' });
     expect(await d.state.getCursor()).toBe(2);
     expect(await d.state.allFailures()).toHaveLength(1); // a per-file failure, not a stuck vault
+  });
+
+  it('checks a whole page of versions for a reused seq with one state read', async () => {
+    const d = await device();
+    for (let i = 0; i < 10; i++) await remoteCommit(d, `n${i}.md`, text(`${i}\n`));
+    const reads = vi.spyOn(d.state, 'filesAtSeqs');
+    await pull(d.ctx);
+    expect(reads).toHaveBeenCalledTimes(1);
+    expect(Object.keys(files(d.adapter))).toHaveLength(10);
   });
 
   it('does not download versions over the device size limit', async () => {

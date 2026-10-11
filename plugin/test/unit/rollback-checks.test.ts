@@ -9,7 +9,7 @@ import type { ChangesPage, HeadsPage, RemoteHead, RemoteVersion } from '../../sr
 import { buildKeyring } from '../../src/crypto/vaultkeys';
 import { LocalState } from '../../src/state/store';
 import { DEFAULT_MAX_FILE_BYTES, ServerRollbackError, type SyncContext } from '../../src/sync/context';
-import { pull } from '../../src/sync/pull';
+import { pull, serverLostHistory } from '../../src/sync/pull';
 import { reconcile } from '../../src/sync/reconcile';
 import { ManualClock } from '../../src/util/clock';
 import { seededRandom } from '../../src/util/random';
@@ -41,8 +41,16 @@ it('detects a rollback from a version at the seq of a different synced version',
     chunkIds: [], size: 0, deleted: false, deviceId: 'd', createdAtMs: 1, seq: 9,
   };
   // The record says version 01 of file aa sits at seq 9; the server has a different version there.
+  // It belongs to another file (id 07) on purpose: the seq alone must reveal the reuse, whichever file the version is of.
   const ctx = await context('reused', { changes: async (): Promise<ChangesPage> => ({ versions: [other], vaultSeq: 9, more: false }) });
   await expect(pull(ctx)).rejects.toBeInstanceOf(ServerRollbackError);
+});
+
+it('calls a server rolled back when a synced file\'s head sits at the same seq with another version, and not when it is the same', async () => {
+  const ctx = await context('heads-at-seq', {});
+  const head = (versionId: number): RemoteHead => ({ fileId: new Uint8Array([0xaa]), versionId: new Uint8Array([versionId]), seq: 9, deleted: false });
+  expect(await serverLostHistory(ctx, [head(2)])).toBe(true); // seq 9 reused by a version this device never synced
+  expect(await serverLostHistory(ctx, [head(1)])).toBe(false); // version 01 at seq 9, as recorded
 });
 
 it('does not call a server rolled back when its seq is at or above every synced version', async () => {
