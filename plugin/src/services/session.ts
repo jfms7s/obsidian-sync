@@ -8,7 +8,6 @@ import { SyncEngine } from '../sync/engine';
 import type { Clock } from '../util/clock';
 import type { Random } from '../util/random';
 import type { VaultAdapter } from '../vault/adapter';
-import { IgnoreRules } from '../vault/ignore';
 import { apiFor, loadUserKeys, type ClientDeps } from './account';
 import { keyringFromStored, refreshKeyring } from './vaults';
 
@@ -48,7 +47,7 @@ export async function openSyncSession(o: SyncSessionOptions): Promise<SyncSessio
   const ring = await keyringFromStored(vault);
   const engine = new SyncEngine({
     api, state: o.state, adapter: o.adapter, ring, deviceName: session.deviceName,
-    ignore: new IgnoreRules(await o.state.getSetting<string[]>('ignoreGlobs', []), { caseInsensitive: o.adapter.caseInsensitive, configDir: o.configDir }),
+    configDir: o.configDir, ignoreGlobs: await o.state.getSetting<string[]>('ignoreGlobs', []),
     webSocket: o.webSocket === undefined ? defaultWebSocketFactory : o.webSocket,
     refreshKeyring: () => refreshKeyring(o.state, api, session, keys),
     ...(o.random ? { random: o.random } : {}),

@@ -37,6 +37,14 @@ export function validateIgnorePattern(pattern: string): string | null {
   return null;
 }
 
+/** Throws InvalidIgnorePatternError for the first pattern that uses unsupported syntax ('!', '['). */
+export function assertValidIgnorePatterns(patterns: readonly string[]): void {
+  for (const p of patterns) {
+    const why = validateIgnorePattern(p);
+    if (why !== null) throw new InvalidIgnorePatternError(p, why);
+  }
+}
+
 function escape(ch: string): string {
   return /[\\^$.*+?()[\]{}|]/.test(ch) ? `\\${ch}` : ch;
 }

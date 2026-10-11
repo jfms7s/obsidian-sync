@@ -16,7 +16,6 @@ import type { EngineEvent } from '../../src/sync/events';
 import { toHex } from '../../src/util/bytes';
 import { ManualClock } from '../../src/util/clock';
 import { seededRandom } from '../../src/util/random';
-import { IgnoreRules } from '../../src/vault/ignore';
 import { MemoryAdapter } from '../../src/vault/memory';
 
 type Step = ChangesPage | Error;
@@ -41,7 +40,7 @@ async function setup(script: Step[], opts: { autoRun?: boolean; webSocket?: WebS
   const state = await LocalState.open(new IDBFactory(), 'engine');
   const events: EngineEvent[] = [];
   const engine = new SyncEngine({
-    api, state, adapter: new MemoryAdapter(false, clock), ring, deviceName: 'd', clock, random: r, webSocket: opts.webSocket ?? null,
+    configDir: '.obsidian', api, state, adapter: new MemoryAdapter(false, clock), ring, deviceName: 'd', clock, random: r, webSocket: opts.webSocket ?? null,
     autoRun: opts.autoRun ?? true, backoff: { baseMs: 1000, maxMs: 60_000 },
   });
   engine.on((e) => events.push(e));
@@ -241,7 +240,7 @@ describe('engine errors outside the plan table', () => {
     let refreshes = 0;
     const events: EngineEvent[] = [];
     const engine = new SyncEngine({
-      api, state, adapter: new MemoryAdapter(false, clock), ring: ring1, deviceName: 'd', clock, random: r, webSocket: null,
+      configDir: '.obsidian', api, state, adapter: new MemoryAdapter(false, clock), ring: ring1, deviceName: 'd', clock, random: r, webSocket: null,
       backoff: { baseMs: 1000, maxMs: 60_000 },
       refreshKeyring: async () => {
         refreshes++;
@@ -295,7 +294,7 @@ describe('engine errors outside the plan table', () => {
     let refreshes = 0;
     const events: EngineEvent[] = [];
     const engine = new SyncEngine({
-      api, state, adapter: new MemoryAdapter(false, clock), ring: ring1, deviceName: 'd', clock, random: r, webSocket: null,
+      configDir: '.obsidian', api, state, adapter: new MemoryAdapter(false, clock), ring: ring1, deviceName: 'd', clock, random: r, webSocket: null,
       backoff: { baseMs: 1000, maxMs: 60_000 },
       refreshKeyring: async () => {
         refreshes++;
@@ -340,7 +339,7 @@ describe('engine errors outside the plan table', () => {
       heads: async (): Promise<HeadsPage> => ({ heads: [], more: false }),
     } as unknown as ApiClient;
     const engine = new SyncEngine({
-      api, state: await LocalState.open(new IDBFactory(), 'engine-epoch-2'), adapter: new MemoryAdapter(false, clock), ring,
+      configDir: '.obsidian', api, state: await LocalState.open(new IDBFactory(), 'engine-epoch-2'), adapter: new MemoryAdapter(false, clock), ring,
       deviceName: 'd', clock, random: r, webSocket: null, backoff: { baseMs: 1000, maxMs: 60_000 },
       refreshKeyring: async () => ring, // still without epoch 2
     });
@@ -380,7 +379,7 @@ async function scripted(o: { api?: Record<string, unknown>; engine?: Partial<Con
   const adapter = new MemoryAdapter(false, clock);
   const events: EngineEvent[] = [];
   const engine = new SyncEngine({
-    api, state, adapter, ring, deviceName: 'd', clock, random: r, webSocket: null, backoff: { baseMs: 1000, maxMs: 60_000 }, ...o.engine,
+    configDir: '.obsidian', api, state, adapter, ring, deviceName: 'd', clock, random: r, webSocket: null, backoff: { baseMs: 1000, maxMs: 60_000 }, ...o.engine,
   });
   engine.on((e) => events.push(e));
   /** Runs every cycle due now (a zero-delay loop would never settle; bounded to tell). */
@@ -520,7 +519,7 @@ describe('engine scheduling', () => {
   });
 
   it('waits until local events pause (500 ms), but no more than 5 s, before syncing them', async () => {
-    const { engine, server, adapter, settle, tick } = await scripted({ engine: { ignore: new IgnoreRules(['*.md']) } });
+    const { engine, server, adapter, settle, tick } = await scripted({ engine: { ignoreGlobs: ['*.md'] } });
     await engine.start();
     await settle();
     expect(server.changes).toBe(1);
@@ -569,7 +568,8 @@ describe('the config folder', () => {
     await adapter.write('x.tmp', new TextEncoder().encode('x'));
     await tick(1000);
     await settle();
-    expect(committed).toEqual([toHex(await fileIdFor(ring.namingKey, 'n.md'))]);
+    // (This scripted server never lists what was committed, so a file may be committed more than once.)
+    expect([...new Set(committed)]).toEqual([toHex(await fileIdFor(ring.namingKey, 'n.md'))]);
     await engine.stop();
   });
 
