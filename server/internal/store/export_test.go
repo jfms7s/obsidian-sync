@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"testing"
 )
 
 // DBStats exposes the pool statistics to the external tests.
@@ -13,4 +14,25 @@ func PragmaInt(ctx context.Context, s *Store, name string) (int64, error) {
 	var v int64
 	err := s.db.QueryRowContext(ctx, "PRAGMA "+name).Scan(&v)
 	return v, err
+}
+
+// HasTable reports whether a table exists, failing tb if the query fails.
+func HasTable(tb testing.TB, s *Store, name string) bool {
+	tb.Helper()
+	var n int
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n); err != nil {
+		tb.Fatalf("look up table %s: %v", name, err)
+	}
+	return n == 1
+}
+
+// AppliedMigrations counts applied migrations, failing tb if the query fails.
+func AppliedMigrations(tb testing.TB, s *Store) int {
+	tb.Helper()
+	var n int
+	if err := s.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
+		tb.Fatalf("count migrations: %v", err)
+	}
+	return n
 }

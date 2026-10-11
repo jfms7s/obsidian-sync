@@ -137,18 +137,3 @@ func splitStatements(src string) []string {
 	}
 	return stmts
 }
-
-// HasTableForTest reports whether a table exists. Test-only inspection.
-func (s *Store) HasTableForTest(ctx context.Context, name string) bool {
-	var n int
-	_ = s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n)
-	return n == 1
-}
-
-// AppliedMigrationsForTest counts applied migrations. Test-only inspection.
-func (s *Store) AppliedMigrationsForTest(ctx context.Context) int {
-	var n int
-	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&n)
-	return n
-}
