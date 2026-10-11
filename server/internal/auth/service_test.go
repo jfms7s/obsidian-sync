@@ -281,3 +281,47 @@ func TestAuthenticateIgnoresTouchFailures(t *testing.T) {
 		t.Fatalf("a failed last-seen update rejected a valid token: %v", err)
 	}
 }
+
+// A username no account can have is refused before it becomes a limiter
+// key: oversized or garbage keys would otherwise pin memory, and anyone
+// could spend the bucket of a name that is merely spelled differently.
+func TestLoginRefusesInvalidUsernamesBeforeTheLimiter(t *testing.T) {
+	st, clk := storetest.New(t)
+	seedAlice(t, st, mustHash(t, "correct horse"))
+	lim := auth.NewLoginLimiter(5, time.Minute, clk.Now)
+	svc := newServiceWith(t, st, auth.Options{Params: auth.FastParams, Now: clk.Now, Limiter: lim})
+	for _, name := range []string{strings.Repeat("a", 10<<10), "", "   ", "alice bob", "<script>", strings.Repeat("a", 65)} {
+		if _, err := svc.Login(ctx, auth.LoginRequest{Username: name, Password: "x"}); !errors.Is(err, auth.ErrInvalidCredentials) {
+			t.Errorf("%.20q: err = %v, want invalid credentials", name, err)
+		}
+	}
+	if n := auth.TrackedKeys(lim); n != 0 {
+		t.Fatalf("%d limiter keys for invalid usernames, want 0", n)
+	}
+	// A valid name, padded with spaces, still logs in.
+	if _, err := svc.Login(ctx, auth.LoginRequest{Username: " alice ", Password: "correct horse"}); err != nil {
+		t.Fatalf("valid login: %v", err)
+	}
+}
+
+func TestValidUsername(t *testing.T) {
+	for _, ok := range []string{"alice", "a", "a.b_c@d-e", strings.Repeat("x", 64)} {
+		if !auth.ValidUsername(ok) {
+			t.Errorf("%q should be valid", ok)
+		}
+	}
+	for _, bad := range []string{"", " alice", "a b", "é", strings.Repeat("x", 65)} {
+		if auth.ValidUsername(bad) {
+			t.Errorf("%q should be invalid", bad)
+		}
+	}
+}
+
+func mustHash(t *testing.T, password string) string {
+	t.Helper()
+	h, err := auth.HashPassword(password, auth.FastParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}

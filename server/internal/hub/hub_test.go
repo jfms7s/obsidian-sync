@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -57,25 +58,38 @@ func (v *revocableVaults) revoke(vaultID string) {
 	v.revoked[vaultID] = true
 }
 
+// countingAuth counts token lookups.
+type countingAuth struct {
+	hub.Authenticator
+	n atomic.Int32
+}
+
+func (a *countingAuth) Authenticate(ctx context.Context, token string) (auth.Session, error) {
+	a.n.Add(1)
+	return a.Authenticator.Authenticate(ctx, token)
+}
+
 type env struct {
-	t      *testing.T
-	url    string
-	st     *store.Store
-	vaults *revocableVaults
-	bus    *bus.Memory
-	auth   *auth.Service
-	hub    *hub.Hub
-	token  string
-	dev    store.Device
-	vault  store.Vault
+	t       *testing.T
+	lookups *countingAuth
+	url     string
+	st      *store.Store
+	vaults  *revocableVaults
+	bus     *bus.Memory
+	auth    *auth.Service
+	hub     *hub.Hub
+	token   string
+	dev     store.Device
+	vault   store.Vault
 }
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	// Several tests re-subscribe back to back or expect every Ping to recheck
-	// membership; the pacing rules have their own tests.
+	// Several tests re-subscribe back to back, expect every Ping to recheck
+	// membership or expect a revoked token to be refused on the next frame;
+	// the pacing rules have their own tests.
 	return newEnvOpts(t, hub.Options{AuthTimeout: 200 * time.Millisecond, MinSubscribeInterval: time.Nanosecond,
-		MembershipRecheckInterval: time.Nanosecond})
+		MembershipRecheckInterval: time.Nanosecond, TokenRecheckInterval: time.Nanosecond})
 }
 
 func newEnvOpts(t *testing.T, opts hub.Options) *env {
@@ -96,10 +110,11 @@ func newEnvOpts(t *testing.T, opts hub.Options) *env {
 	}
 	b := bus.NewMemory()
 	vaults := &revocableVaults{Store: st, revoked: map[string]bool{}}
-	h := hub.New(authSvc, vaults, b, slog.New(slog.NewTextHandler(io.Discard, nil)), opts)
+	lookups := &countingAuth{Authenticator: authSvc}
+	h := hub.New(lookups, vaults, b, slog.New(slog.NewTextHandler(io.Discard, nil)), opts)
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &env{t: t, url: "ws" + strings.TrimPrefix(srv.URL, "http"), st: st, vaults: vaults, bus: b, auth: authSvc, hub: h,
+	return &env{t: t, lookups: lookups, url: "ws" + strings.TrimPrefix(srv.URL, "http"), st: st, vaults: vaults, bus: b, auth: authSvc, hub: h,
 		token: res.Token, dev: res.Device, vault: storetest.SeedVault(t, st, user.ID)}
 }
 
@@ -485,4 +500,30 @@ func TestMembershipRecheckIsThrottled(t *testing.T) {
 	if n := e.vaults.callCount(); n != base+1 {
 		t.Fatalf("%d membership queries after the interval, want 1", n-base)
 	}
+}
+
+// Every frame used to run a token lookup, and Pings are not rate limited, so
+// a device pinging in a loop loaded the store. The token is now rechecked at
+// most once per TokenRecheckInterval per socket, and a revoked device is
+// still cut off once the interval has passed.
+func TestTokenRecheckIsThrottled(t *testing.T) {
+	e := newEnvOpts(t, hub.Options{MinSubscribeInterval: time.Nanosecond, MembershipRecheckInterval: time.Hour,
+		TokenRecheckInterval: time.Second})
+	c := e.authed()
+	base := e.lookups.n.Load() // the Auth frame
+	for i := uint64(1); i <= 100; i++ {
+		expectPongNext(t, c, i)
+	}
+	if n := e.lookups.n.Load() - base; n > 1 {
+		t.Fatalf("%d token lookups for 100 pings within the interval, want at most 1", n)
+	}
+	if err := e.st.RevokeDevice(ctx, e.dev.UserID, e.dev.ID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	send(t, c, pingFrame(200))
+	if f := recv(t, c); f.GetError().GetCode() != apperr.DeviceRevoked {
+		t.Fatalf("frame = %v, want DEVICE_REVOKED after the interval", f)
+	}
+	expectClosed(t, c)
 }
