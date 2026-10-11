@@ -16,6 +16,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/store/storetest"
 	"github.com/jfms7s/obsidian-sync/server/internal/syncsvc"
+	"github.com/jfms7s/obsidian-sync/server/internal/vaultsvc"
 )
 
 func TestPutChunkQuotaHoldsUnderConcurrentUploads(t *testing.T) {
@@ -120,7 +121,7 @@ func newFlakyService(t *testing.T, f *fixture, st syncsvc.Store) (*syncsvc.Servi
 	}
 	blobs := &flakyBlobs{Store: fs}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return syncsvc.New(st, blobs, f.bus, syncsvc.Limits{MaxFileSizeBytes: 64 << 20}, log), blobs
+	return syncsvc.New(st, vaultsvc.New(f.st, nil), blobs, f.bus, syncsvc.Limits{MaxFileSizeBytes: 64 << 20}, log), blobs
 }
 
 func TestPutChunkBlobStoreFailureIsInternal(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/bus"
 	"github.com/jfms7s/obsidian-sync/server/internal/ids"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
+	"github.com/jfms7s/obsidian-sync/server/internal/vaultsvc"
 )
 
 const (
@@ -34,7 +35,6 @@ const (
 )
 
 type Store interface {
-	VaultForMember(ctx context.Context, vaultID, userID string) (store.Vault, error)
 	UserByID(ctx context.Context, id string) (store.User, error)
 	UsageBytes(ctx context.Context, ownerID string) (int64, error)
 	TouchChunks(ctx context.Context, vaultID string, chunkIDs [][]byte) ([]bool, error)
@@ -47,40 +47,35 @@ type Store interface {
 	Trash(ctx context.Context, vaultID string) ([]store.Version, error)
 }
 
+// Authorizer is the vault access check (vaultsvc.Service).
+type Authorizer interface {
+	Authorize(ctx context.Context, userID, vaultID string, action vaultsvc.Action) (store.Vault, error)
+}
+
 type Limits struct {
 	MaxFileSizeBytes int64
 }
 
 type Service struct {
 	st     Store
+	authz  Authorizer
 	blobs  blob.Store
 	bus    bus.Bus
 	limits Limits
 	log    *slog.Logger
 }
 
-func New(st Store, blobs blob.Store, b bus.Bus, limits Limits, log *slog.Logger) *Service {
-	return &Service{st: st, blobs: blobs, bus: b, limits: limits, log: log}
+func New(st Store, authz Authorizer, blobs blob.Store, b bus.Bus, limits Limits, log *slog.Logger) *Service {
+	return &Service{st: st, authz: authz, blobs: blobs, bus: b, limits: limits, log: log}
 }
 
 var (
 	errQuotaExceeded = apperr.New(apperr.QuotaExceeded, "storage quota exceeded")
 )
 
-// vault loads vaultID if userID is a member. Anything else is NotFound so a
-// vault's existence never leaks to outsiders.
-func (s *Service) vault(ctx context.Context, userID, vaultID string) (store.Vault, error) {
-	if !ids.Valid(vaultID) {
-		return store.Vault{}, apperr.ErrVaultNotFound
-	}
-	v, err := s.st.VaultForMember(ctx, vaultID, userID)
-	if errors.Is(err, store.ErrNotFound) {
-		return store.Vault{}, apperr.ErrVaultNotFound
-	}
-	if err != nil {
-		return store.Vault{}, fmt.Errorf("load vault: %w", err)
-	}
-	return v, nil
+// vault loads vaultID if userID may do action on it (vaultsvc.Authorize).
+func (s *Service) vault(ctx context.Context, userID, vaultID string, action vaultsvc.Action) (store.Vault, error) {
+	return s.authz.Authorize(ctx, userID, vaultID, action)
 }
 
 func (s *Service) ChunksExist(ctx context.Context, userID, vaultID string, chunkIDs [][]byte) ([]bool, error) {
@@ -92,7 +87,7 @@ func (s *Service) ChunksExist(ctx context.Context, userID, vaultID string, chunk
 			return nil, apperr.New(apperr.Invalid, "chunk ids must be %d bytes", chunkIDLen)
 		}
 	}
-	if _, err := s.vault(ctx, userID, vaultID); err != nil {
+	if _, err := s.vault(ctx, userID, vaultID, vaultsvc.ActionWrite); err != nil {
 		return nil, err
 	}
 	return s.st.TouchChunks(ctx, vaultID, chunkIDs)
@@ -110,7 +105,7 @@ func (s *Service) PutChunk(ctx context.Context, userID, vaultID string, chunkID 
 	if size > MaxChunkCipherBytes {
 		return apperr.New(apperr.TooLarge, "chunk exceeds %d bytes", MaxChunkCipherBytes)
 	}
-	v, err := s.vault(ctx, userID, vaultID)
+	v, err := s.vault(ctx, userID, vaultID, vaultsvc.ActionWrite)
 	if err != nil {
 		return err
 	}
@@ -172,7 +167,7 @@ func (s *Service) OpenChunk(ctx context.Context, userID, vaultID string, chunkID
 	if len(chunkID) != chunkIDLen {
 		return nil, 0, apperr.New(apperr.Invalid, "chunk id must be %d bytes", chunkIDLen)
 	}
-	if _, err := s.vault(ctx, userID, vaultID); err != nil {
+	if _, err := s.vault(ctx, userID, vaultID, vaultsvc.ActionRead); err != nil {
 		return nil, 0, err
 	}
 	key, size, err := s.st.ChunkBlob(ctx, vaultID, chunkID)
@@ -210,7 +205,7 @@ func (s *Service) Commit(ctx context.Context, userID, deviceID, vaultID string, 
 	if len(commits) == 0 || len(commits) > MaxCommitsPerRequest {
 		return nil, 0, apperr.New(apperr.Invalid, "send between 1 and %d commits", MaxCommitsPerRequest)
 	}
-	v, err := s.vault(ctx, userID, vaultID)
+	v, err := s.vault(ctx, userID, vaultID, vaultsvc.ActionWrite)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -312,7 +307,7 @@ func (s *Service) Changes(ctx context.Context, userID, vaultID string, since int
 		return ChangesPage{}, apperr.New(apperr.Invalid, "since must not be negative")
 	}
 	limit = clampLimit(limit, DefaultPageSize, MaxPageSize)
-	v, err := s.vault(ctx, userID, vaultID)
+	v, err := s.vault(ctx, userID, vaultID, vaultsvc.ActionRead)
 	if err != nil {
 		return ChangesPage{}, err
 	}
@@ -337,7 +332,7 @@ func (s *Service) Heads(ctx context.Context, userID, vaultID string, after []byt
 		return HeadsPage{}, apperr.New(apperr.Invalid, "after must be empty or %d bytes", fileIDLen)
 	}
 	limit = clampLimit(limit, DefaultHeadsPageSize, MaxHeadsPageSize)
-	if _, err := s.vault(ctx, userID, vaultID); err != nil {
+	if _, err := s.vault(ctx, userID, vaultID, vaultsvc.ActionRead); err != nil {
 		return HeadsPage{}, err
 	}
 	heads, err := s.st.Heads(ctx, vaultID, after, limit)
@@ -351,14 +346,14 @@ func (s *Service) History(ctx context.Context, userID, vaultID string, fileID []
 	if len(fileID) != fileIDLen {
 		return nil, apperr.New(apperr.Invalid, "file id must be %d bytes", fileIDLen)
 	}
-	if _, err := s.vault(ctx, userID, vaultID); err != nil {
+	if _, err := s.vault(ctx, userID, vaultID, vaultsvc.ActionRead); err != nil {
 		return nil, err
 	}
 	return s.st.History(ctx, vaultID, fileID)
 }
 
 func (s *Service) Trash(ctx context.Context, userID, vaultID string) ([]store.Version, error) {
-	if _, err := s.vault(ctx, userID, vaultID); err != nil {
+	if _, err := s.vault(ctx, userID, vaultID, vaultsvc.ActionRead); err != nil {
 		return nil, err
 	}
 	return s.st.Trash(ctx, vaultID)

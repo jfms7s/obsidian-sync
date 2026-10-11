@@ -112,14 +112,15 @@ func newTestEnvFull(t *testing.T, wrap func(*store.Store) api.Store, rl api.Rate
 		t.Fatal(err)
 	}
 	failBlobReads := new(atomic.Bool)
-	syncSvc := syncsvc.New(st, faultyBlobs{Store: blobs, fail: failBlobReads}, bus.NewMemory(), syncsvc.Limits{MaxFileSizeBytes: 64 << 20}, log)
 	var apiStore api.Store = st
 	var vaultStore vaultsvc.Store = st
 	if wrap != nil {
 		w := wrap(st)
 		apiStore, vaultStore = w, w.(vaultsvc.Store) // wrappers embed *store.Store
 	}
-	h := api.NewHandler(api.Deps{Auth: authSvc, Sync: syncSvc, Vaults: vaultsvc.New(vaultStore, authSvc), Store: apiStore,
+	vaultSvc := vaultsvc.New(vaultStore, authSvc)
+	syncSvc := syncsvc.New(st, vaultSvc, faultyBlobs{Store: blobs, fail: failBlobReads}, bus.NewMemory(), syncsvc.Limits{MaxFileSizeBytes: 64 << 20}, log)
+	h := api.NewHandler(api.Deps{Auth: authSvc, Sync: syncSvc, Vaults: vaultSvc, Store: apiStore,
 		Hub: hub, Ready: st.Ping, Log: log, RateLimits: rl})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)

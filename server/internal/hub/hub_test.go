@@ -22,28 +22,29 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/ids"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/store/storetest"
+	"github.com/jfms7s/obsidian-sync/server/internal/vaultsvc"
 )
 
 var ctx = context.Background()
 
-// revocableVaults wraps the store so a test can take away a user's access
-// to a vault (the store has no remove-member operation).
+// revocableVaults wraps the vault service so a test can take away a user's
+// access to a vault (the store has no remove-member operation).
 type revocableVaults struct {
-	*store.Store
+	*vaultsvc.Service
 	mu      sync.Mutex
 	revoked map[string]bool // vault id
-	calls   int             // VaultForMember calls
+	calls   int             // Authorize calls
 }
 
-func (v *revocableVaults) VaultForMember(ctx context.Context, vaultID, userID string) (store.Vault, error) {
+func (v *revocableVaults) Authorize(ctx context.Context, userID, vaultID string, action vaultsvc.Action) (store.Vault, error) {
 	v.mu.Lock()
 	revoked := v.revoked[vaultID]
 	v.calls++
 	v.mu.Unlock()
 	if revoked {
-		return store.Vault{}, store.ErrNotFound
+		return store.Vault{}, apperr.ErrVaultNotFound
 	}
-	return v.Store.VaultForMember(ctx, vaultID, userID)
+	return v.Service.Authorize(ctx, userID, vaultID, action)
 }
 
 func (v *revocableVaults) callCount() int {
@@ -109,7 +110,7 @@ func newEnvOpts(t *testing.T, opts hub.Options) *env {
 		t.Fatal(err)
 	}
 	b := bus.NewMemory()
-	vaults := &revocableVaults{Store: st, revoked: map[string]bool{}}
+	vaults := &revocableVaults{Service: vaultsvc.New(st, authSvc), revoked: map[string]bool{}}
 	lookups := &countingAuth{Authenticator: authSvc}
 	h := hub.New(lookups, vaults, b, slog.New(slog.NewTextHandler(io.Discard, nil)), opts)
 	srv := httptest.NewServer(h)

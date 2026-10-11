@@ -200,3 +200,36 @@ func TestVaultKeysAreForMembersOnly(t *testing.T) {
 		}
 	}
 }
+
+// failingStore fails VaultForMember with an infrastructure error.
+type failingStore struct{ *store.Store }
+
+func (failingStore) VaultForMember(context.Context, string, string) (store.Vault, error) {
+	return store.Vault{}, errors.New("disk on fire")
+}
+
+// Authorize is the one membership rule: a member may read and write, anyone
+// else (or a malformed or unknown id) gets VAULT_NOT_FOUND.
+func TestAuthorize(t *testing.T) {
+	f := newFixture(t)
+	id := ids.New()
+	if _, err := f.svc.CreateVault(ctx, f.user.ID, newVault(id)); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []vaultsvc.Action{vaultsvc.ActionRead, vaultsvc.ActionWrite} {
+		v, err := f.svc.Authorize(ctx, f.user.ID, id, action)
+		if err != nil || v.ID != id {
+			t.Fatalf("member, action %d: vault %+v, err %v", action, v, err)
+		}
+		bob := storetest.SeedUser(t, f.st, "bob"+string(rune('0'+action)))
+		for name, vaultID := range map[string]string{"non-member": id, "unknown vault": ids.New(), "malformed id": "../x"} {
+			if _, err := f.svc.Authorize(ctx, bob.ID, vaultID, action); !errors.Is(err, apperr.ErrVaultNotFound) {
+				t.Errorf("%s, action %d: err = %v, want ErrVaultNotFound", name, action, err)
+			}
+		}
+	}
+	broken := vaultsvc.New(failingStore{f.st}, f.pw)
+	if _, err := broken.Authorize(ctx, f.user.ID, id, vaultsvc.ActionRead); err == nil || errors.Is(err, apperr.ErrVaultNotFound) {
+		t.Fatalf("a store failure must not read as not found: %v", err)
+	}
+}

@@ -18,6 +18,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/store/storetest"
 	"github.com/jfms7s/obsidian-sync/server/internal/syncsvc"
+	"github.com/jfms7s/obsidian-sync/server/internal/vaultsvc"
 )
 
 var ctx = context.Background()
@@ -43,7 +44,7 @@ func newFixture(t *testing.T) *fixture {
 	user := storetest.SeedUser(t, st, "alice")
 	vault := storetest.SeedVault(t, st, user.ID)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := syncsvc.New(st, blobs, b, syncsvc.Limits{MaxFileSizeBytes: 64 << 20}, log)
+	svc := syncsvc.New(st, vaultsvc.New(st, nil), blobs, b, syncsvc.Limits{MaxFileSizeBytes: 64 << 20}, log)
 	return &fixture{svc: svc, st: st, bus: b, blobDir: dir, user: user, vault: vault}
 }
 
@@ -107,7 +108,7 @@ func TestOpenChunkMissingBlobLogsError(t *testing.T) {
 	vault := storetest.SeedVault(t, st, user.ID)
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, nil))
-	svc := syncsvc.New(st, blobs, bus.NewMemory(), syncsvc.Limits{MaxFileSizeBytes: 64 << 20}, log)
+	svc := syncsvc.New(st, vaultsvc.New(st, nil), blobs, bus.NewMemory(), syncsvc.Limits{MaxFileSizeBytes: 64 << 20}, log)
 	if _, err := st.InsertChunk(ctx, store.Chunk{VaultID: vault.ID, ChunkID: storetest.ChunkID(1), BlobKey: "gone/blob", Size: 5}); err != nil {
 		t.Fatal(err)
 	}
