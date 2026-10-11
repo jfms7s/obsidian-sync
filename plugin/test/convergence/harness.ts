@@ -16,11 +16,19 @@
 // that content, and no device has a file the server does not hold live.
 //
 // Conflict copies are checked both ways. Every copy in the final vault must
-// come from a conflict or collision event, and every conflict event's copy
-// must still be there unless the harness itself later deleted or renamed it
-// (the random operations pick any existing file, copies included). Copy
-// names can repeat (the name is free again once a copy is gone), so a
-// removal only excuses the conflict events for that name seen before it.
+// come from a conflict or collision event, and every copy an event reported
+// (merge conflicts and collisions alike) must still be there unless the
+// harness itself deleted or renamed that name after the copy appeared (the
+// random operations pick any existing file, copies included). Copies are
+// told apart by name and by the step they appeared at on some device: copy
+// names can repeat once a copy is gone, and a file id would not help, since
+// it is derived from the name (fileIdFor).
+//
+// Coverage. Every operation counts as run (ops) when it was not skipped, and
+// as an effect (effects) only when it changed something: a lost commit
+// response counts once a response was really lost, a sync once the cycle
+// committed or applied something. convergence.test.ts fails a run in which
+// some kind had far fewer effects than its usual rate.
 //
 // Fleets. A case-insensitive device cannot hold two names that differ only
 // in case, so a case-sensitive device and a case-insensitive one would end
@@ -53,6 +61,7 @@ import { ManualClock } from '../../src/util/clock';
 import { caseFold, CONFLICT_COPY_PATTERN } from '../../src/util/path';
 import { seededRandom } from '../../src/util/random';
 import { makeClient, settle, type SimClient } from '../helpers/client';
+import type { LostResponse } from '../helpers/net';
 import type { User } from '../helpers/fixture';
 import type { TestServer } from '../helpers/server';
 
@@ -88,6 +97,8 @@ export interface SeedReport {
   tokens: number;
   /** How often each kind of operation ran (skipped ones are not counted). */
   ops: Record<string, number>;
+  /** How often each kind of operation changed something (see the header). */
+  effects: Record<string, number>;
   log: string[];
 }
 
@@ -102,12 +113,56 @@ const BIG_PATH = 'big.bin';
 const enc = new TextEncoder();
 const latin1 = new TextDecoder('latin1');
 
+const flipCase = (ch: string) => (ch === ch.toUpperCase() ? ch.toLowerCase() : ch.toUpperCase());
+
 /** The same name with the first letter of the file name in the other case ('a.md' ↔ 'A.md', 'Notes' ↔ 'notes'). */
 export function caseVariant(path: string): string {
   const slash = path.lastIndexOf('/') + 1;
-  const first = path.charAt(slash);
-  const flipped = first === first.toUpperCase() ? first.toLowerCase() : first.toUpperCase();
-  return path.slice(0, slash) + flipped + path.slice(slash + 1);
+  return path.slice(0, slash) + flipCase(path.charAt(slash)) + path.slice(slash + 1);
+}
+
+/** The same path with the first letter of its top folder in the other case ('Notes/d.md' ↔ 'notes/d.md'); a path with no folder is returned unchanged. */
+export function folderCaseVariant(path: string): string {
+  return path.includes('/') ? flipCase(path.charAt(0)) + path.slice(1) : path;
+}
+
+/**
+ * The fewest effects per 100 seeds each kind of operation must reach, about a
+ * fifth of what it reaches on average (measured over seeds 1-1000 on
+ * 2026-10-11 with the weights in OPS; re-measure when they change). A kind is only checked when
+ * the run's share comes to 2 or more, so that the bound stays far below what
+ * any run of that size reaches by chance (a run of 20 seeds checks the common
+ * kinds, a release run of 1,000 all of them).
+ */
+export const MIN_EFFECTS_PER_100_SEEDS: Readonly<Record<string, number>> = {
+  'backup': 11.1,
+  'case-rename': 21.6,
+  'crash-after-commit': 5.6,
+  'create': 240.3,
+  'delete': 58.3,
+  'edit': 191.5,
+  'edit-mid-cycle': 17.1,
+  'history-restore': 0.9,
+  'hot-backup': 12.5,
+  'ignore': 23.0,
+  'lose-commit': 26.6,
+  'network': 85.3,
+  'rename': 59.8,
+  'restart': 35.4,
+  'restore-backup': 4.8,
+  'sync': 58.5,
+  'trash-restore': 1.7,
+};
+
+/** The kinds of operation whose effects fell short of MIN_EFFECTS_PER_100_SEEDS in a run of `seeds` seeds, described. */
+export function coverageShortfalls(effects: Record<string, number>, seeds: number): string[] {
+  const out: string[] = [];
+  for (const [kind, per100] of Object.entries(MIN_EFFECTS_PER_100_SEEDS)) {
+    const need = Math.floor((per100 * seeds) / 100);
+    const got = effects[kind] ?? 0;
+    if (need >= 2 && got < need) out.push(`${kind}: ${got} effects in ${seeds} seeds, expected at least ${need}`);
+  }
+  return out;
 }
 
 const isBinary = (p: string) => /\.(png|pdf|bin)$/i.test(p);
@@ -150,7 +205,8 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
   const withBig = o.seed % 10 === 0;
   const caseOps = fleet !== 'mixed';
   const paths = [...TEXT_PATHS, ...BINARY_PATHS, ...(withBig ? [BIG_PATH] : [])];
-  const universe = caseOps ? [...paths, ...paths.map(caseVariant)] : paths;
+  // Case variants of file names and of the top folder ('notes/d.md' next to 'Notes/e.md').
+  const universe = caseOps ? [...new Set([...paths, ...paths.map(caseVariant), ...paths.map(folderCaseVariant)])] : paths;
   const clock = new ManualClock(Date.UTC(2026, 0, 1));
   const user: User = { username: `conv${o.seed}x${Math.floor(rnd.float() * 1e9)}`, password: 'password123' };
   await srv.createUser(user.username, user.password);
@@ -171,6 +227,9 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
 
     const log: string[] = [];
     const ops: Record<string, number> = {};
+    const effects: Record<string, number> = {};
+    /** Armed lost commit responses (lose-commit), counted as effects at the end once they fired. */
+    const armedLosses: LostResponse[] = [];
     const written = new Set<string>();
     const removed = new Set<string>();
     let backup: string | null = null;
@@ -183,11 +242,40 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
     };
     // Copies the harness itself renamed (a case-only rename of a copy): the copy keeps its name pattern but has no event under the new name.
     const renamedCopies = new Set<string>();
-    // Conflict copy path → number of conflict events for it when the harness last deleted or renamed it.
-    const copyRemovedAfter = new Map<string, number>();
-    const conflictEventsFor = (p: string) => clients.reduce((k, c) => k + c.events.filter((e) => e.type === 'conflict' && e.conflictPath === p).length, 0);
+    // Every copy an event reported (conflict, or a collision notice naming it), with the step it was seen at.
+    const copiesSeen: Array<{ path: string; device: string; step: number; kind: 'conflict' | 'collision' }> = [];
+    const eventsRead = clients.map(() => 0);
+    const collectCopies = (step: number) => {
+      clients.forEach((c, i) => {
+        for (const e of c.events.slice(eventsRead[i])) {
+          if (e.type === 'conflict') copiesSeen.push({ path: e.conflictPath, device: c.name, step, kind: 'conflict' });
+          else if (e.type === 'notice' && e.conflictPath !== undefined) copiesSeen.push({ path: e.conflictPath, device: c.name, step, kind: 'collision' });
+        }
+        eventsRead[i] = c.events.length;
+      });
+    };
+    const foldName = (p: string) => (fleet === 'sensitive' ? p : caseFold(p));
+    // The steps at which each copy name (folded) appeared on some device, having been on none: an
+    // event can name a copy later than it appeared (a device that was offline reports it when it
+    // meets it), so a removal counts from when the copy was there, not from when it was reported.
+    const copyAppearances = new Map<string, number[]>();
+    let copiesPresent = new Set<string>();
+    const scanCopies = async (step: number) => {
+      const now = new Set<string>();
+      for (const c of clients) for (const p of await c.adapter.list()) if (CONFLICT_COPY_PATTERN.test(p)) now.add(foldName(p));
+      for (const n of now) if (!copiesPresent.has(n)) copyAppearances.set(n, [...(copyAppearances.get(n) ?? []), step]);
+      copiesPresent = now;
+    };
+    /** The step the copy reported at step `seen` appeared at: its last appearance up to then (or its first after, for an event ahead of the scan). */
+    const appearedAt = (path: string, seen: number) => {
+      const steps = copyAppearances.get(foldName(path)) ?? [seen];
+      return steps.filter((x) => x <= seen).pop() ?? steps[0]!;
+    };
+    // Copy names the harness deleted or renamed away, with the step.
+    const copyRemovals: Array<{ path: string; step: number }> = [];
+    let currentStep = 0;
     const noteRemoval = (p: string) => {
-      if (CONFLICT_COPY_PATTERN.test(p)) copyRemovedAfter.set(p, conflictEventsFor(p));
+      if (CONFLICT_COPY_PATTERN.test(p)) copyRemovals.push({ path: p, step: currentStep });
     };
 
     /** A new file can be created at p here: nothing there, no folder with files at p, no file where a folder must be. */
@@ -251,6 +339,7 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
     };
 
     for (let step = 0; step < steps; step++) {
+      currentStep = step;
       clock.advance(rnd.int(120_000));
       const ci = rnd.int(n);
       const c = clients[ci]!;
@@ -265,8 +354,10 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
           break;
         }
       }
-      const did = (what: string) => {
+      /** Records the operation as run, and as an effect unless changed is false. */
+      const did = (what: string, changed = true) => {
         ops[op] = (ops[op] ?? 0) + 1;
+        if (changed) effects[op] = (effects[op] ?? 0) + 1;
         log.push(`${step} ${c.name} ${what}`);
       };
 
@@ -309,7 +400,7 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
           } finally {
             adapter.read = read;
           }
-          if (edited === null) log.push(`${step} ${c.name} edit of ${p} during a cycle: the cycle did not read it`);
+          if (edited === null) did(`edit of ${p} during a cycle: the cycle did not read it`, false);
           else did(`${edited} (during a cycle, right after the engine read it)`);
           break;
         }
@@ -328,10 +419,13 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
         case 'case-rename': {
           if (!caseOps || existing.length === 0) break;
           const src = rnd.pick(existing);
-          const dst = caseVariant(src);
+          // On a case-insensitive device only the file name's case can change
+          // (the folder keeps its name); on a case-sensitive one the folder's
+          // case can too, which moves the file to another folder.
+          const dst = !c.adapter.caseInsensitive && src.includes('/') && rnd.float() < 0.5 ? folderCaseVariant(src) : caseVariant(src);
           if (dst === src) break;
-          // On a case-sensitive device the new case must be free; on a case-insensitive one it is the same file.
-          if (!c.adapter.caseInsensitive && ((await c.adapter.stat(dst)) || (await c.adapter.hasFolder(dst)))) break;
+          // On a case-sensitive device the new name must be free; on a case-insensitive one it is the same file.
+          if (!c.adapter.caseInsensitive && !(await placeFree(c, dst))) break;
           noteRemoval(src);
           if (CONFLICT_COPY_PATTERN.test(src)) renamedCopies.add(dst);
           await c.adapter.rename(src, dst);
@@ -352,16 +446,17 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
           did(c.net.online ? 'online' : 'offline');
           break;
         case 'lose-commit':
-          c.net.loseNextResponse('POST', '/commit');
-          did('will lose a commit response');
+          armedLosses.push(c.net.loseNextResponse('POST', '/commit'));
+          did('will lose a commit response', false);
           break;
-        case 'crash-after-commit':
+        case 'crash-after-commit': {
           // The commit reaches the server, its answer does not, and the app restarts before it can find out.
-          c.net.loseNextResponse('POST', '/commit');
+          const lost = c.net.loseNextResponse('POST', '/commit');
           await c.engine.runCycle();
           await c.restart();
-          did('crash after commit');
+          did(lost.fired ? 'crash after commit' : 'crash after a cycle that committed nothing', lost.fired);
           break;
+        }
         case 'restart':
           await c.restart();
           did('restart');
@@ -428,15 +523,26 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
           await srv.restore(backup);
           did('restore of the server from its backup');
           break;
-        default:
+        default: {
+          const commitsBefore = c.net.count('POST', '/commit');
+          const eventsBefore = c.events.length;
           await c.engine.runCycle();
-          did('sync');
+          const applied = c.events.slice(eventsBefore).some((e) => e.type === 'remote-change' || e.type === 'conflict' || e.type === 'merged' || e.type === 'notice');
+          const changed = applied || c.net.count('POST', '/commit') > commitsBefore;
+          did(changed ? 'sync' : 'sync (nothing to do)', changed);
+        }
       }
+      collectCopies(step);
+      await scanCopies(step);
     }
 
     for (const c of clients) c.net.setOnline(true);
     for (const c of clients) if (c.ignoreGlobs.length > 0) await c.setIgnore([]); // everything syncs again
     await settle(clients, 40);
+    collectCopies(steps);
+    await scanCopies(steps);
+    effects['lose-commit'] = armedLosses.filter((l) => l.fired).length;
+    if (effects['lose-commit'] === 0) delete effects['lose-commit'];
 
     const snaps = clients.map((c) => c.adapter.snapshot());
     const first = snaps[0]!;
@@ -489,9 +595,12 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
     const unexplained = copies.filter((p) => !reported.has(p) && !renamedCopies.has(p));
     if (unexplained.length > 0) throw new Error(`seed ${o.seed} (${label}): conflict copies without an event: ${unexplained.join(', ')}\n--- final\n${show(first)}\n--- log\n${log.join('\n')}`);
 
-    const missingCopies = [...new Set(clients.flatMap((c) => c.events.flatMap((e) => (e.type === 'conflict' ? [e.conflictPath] : []))))]
-      .filter((p) => !first.has(p) && (copyRemovedAfter.get(p) ?? -1) < conflictEventsFor(p));
-    if (missingCopies.length > 0) throw new Error(`seed ${o.seed} (${label}): conflict events whose copy is gone: ${missingCopies.join(', ')}\n--- final\n${show(first)}\n--- log\n${log.join('\n')}`);
+    const finalNames = new Set([...first.keys()].map(foldName));
+    const missingCopies = copiesSeen.filter((cp) => !finalNames.has(foldName(cp.path)) && !copyRemovals.some((r) => foldName(r.path) === foldName(cp.path) && r.step > appearedAt(cp.path, cp.step)));
+    if (missingCopies.length > 0) {
+      const what = missingCopies.map((cp) => `${cp.path} (${cp.kind} copy seen on ${cp.device} at step ${cp.step})`).join(', ');
+      throw new Error(`seed ${o.seed} (${label}): copies reported by an event are gone: ${what}\n--- final\n${show(first)}\n--- log\n${log.join('\n')}`);
+    }
 
     const server = await serverFiles(clients[0]!.api, clients[0]!.ring);
     const describeHashes = (m: Map<string, string>) => [...m.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([p, h]) => `${p} ${h}`).join('\n');
@@ -504,7 +613,7 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
     }
 
     ok = true;
-    return { seed: o.seed, fleet, coarseMtime: coarse, files: first.size, conflictCopies: copies.length, tokens: written.size, ops, log };
+    return { seed: o.seed, fleet, coarseMtime: coarse, files: first.size, conflictCopies: copies.length, tokens: written.size, ops, effects, log };
   } finally {
     let stopError: unknown = null;
     for (const c of clients) {
