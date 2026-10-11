@@ -17,6 +17,8 @@ import type { SyncContext } from './context';
 import { holdLargeDeletions, type HoldMemory } from './deletion-hold';
 import { applyKey, clearFailure, isCycleError, isDeferred, pushKey, recordFailure } from './failures';
 import { pull, resolveConflict } from './pull';
+import { forgetServerRemovals, serverRemovals } from './server-removal';
+import { isVaultIgnoreFile } from '../vault/ignore';
 
 /** Bounds one push round so memory stays small; the engine runs rounds until nothing is left. */
 export const MAX_FILES_PER_ROUND = 200;
@@ -89,12 +91,20 @@ function toCommit(p: PendingCommit): CommitInput {
   };
 }
 
+/** What a round knows about approved removals from the server (server-removal.ts). */
+interface Removals {
+  /** Approved paths that the rules still ignore. */
+  paths: ReadonlySet<string>;
+  /** The vault's .obsyncignore is dirty too: it is committed first, so devices learn a rule before the deletions it explains. */
+  waitForRules: boolean;
+}
+
 /**
  * Builds the op for one dirty entry, or null when there is nothing to
  * commit (the entry is then cleared), or 'wait' when the entry must wait
  * (it stays dirty and is not worked on this round).
  */
-async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<string>): Promise<Op | null | 'wait'> {
+async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<string>, removals: Removals): Promise<Op | null | 'wait'> {
   const { state, ring } = ctx;
   let path: string;
   try {
@@ -105,10 +115,14 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
     await state.clearDirty(entry.path, entry.gen);
     return null;
   }
-  if (ctx.ignore.matches(path)) {
+  // An ignored path is never pushed, except as the deletion the user
+  // approved to remove it from the server (the local file stays).
+  const removal = removals.paths.has(path);
+  if (ctx.ignore.matches(path) && !removal) {
     await state.clearDirty(entry.path, entry.gen);
     return null;
   }
+  if (removal && removals.waitForRules) return 'wait';
   const fileIdBytes = await fileIdFor(ring.namingKey, path);
   const fileId = toHex(fileIdBytes);
   // Another entry of this round (the same path spelled differently, e.g.
@@ -120,7 +134,8 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
   if (await isDeferred(ctx, applyKey(fileId))) return 'wait';
   const rec = await state.getFile(fileId);
   const synced = isSyncedHere(rec);
-  const base = synced ? rec.versionId : '';
+  // A removal deletes whatever this device last knew on the server, also a version it did not write here.
+  const base = removal ? (rec?.versionId ?? '') : synced ? rec.versionId : '';
   const pending = await state.getPending(fileId);
   if (pending) {
     // Resend a pending commit unchanged only while the file's record still
@@ -130,6 +145,14 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
     // an idempotent retry of an old version and leave this device behind.
     if (base === pending.baseVersionId) return { entry, pending, data: null, matchesLocal: false, statMtime: -1, readAt: -1 };
     await state.deletePending(fileId);
+  }
+  const keys = epochKeys(ring, ring.currentEpoch);
+  if (removal) {
+    if (!rec || rec.versionId === null || rec.deleted) {
+      await state.clearDirty(entry.path, entry.gen);
+      return null;
+    }
+    return deletionOp(ctx, entry, path, fileIdBytes, base, keys);
   }
   if (rec?.shadowed || rec?.tooLarge) {
     // Not written here (a case collision or a folder holds the name, or the
@@ -162,7 +185,6 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
     return null;
   }
   const local = await readLocal(ctx, path);
-  const keys = epochKeys(ring, ring.currentEpoch);
   const versionId = ctx.random.bytes(16);
 
   if (!local) {
@@ -175,14 +197,7 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
       await state.clearDirty(entry.path, entry.gen);
       return null;
     }
-    const meta = { path, mtimeMs: ctx.clock.now(), size: 0, contentHash: new Uint8Array(0), renamedFrom: '', deviceName: ctx.deviceName };
-    const p: PendingCommit = {
-      fileId, path, versionId: toHex(versionId), baseVersionId: base, epoch: keys.epoch,
-      encMeta: await encryptMeta(ctx.random, ring.vaultId, keys, fileIdBytes, versionId, meta),
-      chunkIds: [], size: 0, deleted: true, contentHash: null, mtime: meta.mtimeMs, text: null,
-    };
-    await state.putPending(p);
-    return { entry, pending: p, data: null, matchesLocal: true, statMtime: -1, readAt: -1 };
+    return deletionOp(ctx, entry, path, fileIdBytes, base, keys);
   }
 
   const hash = await hashHex(local.data);
@@ -215,6 +230,32 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
   };
   await state.putPending(p);
   return { entry, pending: p, data: local.data, matchesLocal: true, statMtime: local.stat.mtime, readAt: local.readAt };
+}
+
+/** A pending deletion of path on top of base, stored, as an op. */
+async function deletionOp(ctx: SyncContext, entry: DirtyEntry, path: string, fileIdBytes: Uint8Array, base: string, keys: ReturnType<typeof epochKeys>): Promise<Op> {
+  const versionId = ctx.random.bytes(16);
+  const meta = { path, mtimeMs: ctx.clock.now(), size: 0, contentHash: new Uint8Array(0), renamedFrom: '', deviceName: ctx.deviceName };
+  const p: PendingCommit = {
+    fileId: toHex(fileIdBytes), path, versionId: toHex(versionId), baseVersionId: base, epoch: keys.epoch,
+    encMeta: await encryptMeta(ctx.random, ctx.ring.vaultId, keys, fileIdBytes, versionId, meta),
+    chunkIds: [], size: 0, deleted: true, contentHash: null, mtime: meta.mtimeMs, text: null,
+  };
+  await ctx.state.putPending(p);
+  return { entry, pending: p, data: null, matchesLocal: true, statMtime: -1, readAt: -1 };
+}
+
+/**
+ * The approved removals this round may push: those the rules still ignore.
+ * The others are forgotten, so a path ignored again later needs a new answer.
+ */
+async function loadRemovals(ctx: SyncContext, entries: readonly DirtyEntry[]): Promise<Removals> {
+  const approved = await serverRemovals(ctx.state);
+  if (approved.size === 0) return { paths: approved, waitForRules: false };
+  const stale = [...approved].filter((p) => !ctx.ignore.matches(p));
+  await forgetServerRemovals(ctx.state, stale);
+  for (const p of stale) approved.delete(p);
+  return { paths: approved, waitForRules: entries.some((e) => isVaultIgnoreFile(e.path, ctx.adapter.caseInsensitive)) };
 }
 
 /** Uploads every chunk the server lacks. Ops whose content can no longer be produced are dropped (and rebuilt next round). */
@@ -306,6 +347,7 @@ export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<Push
   if (entries.length === 0) return result;
   result.worked = true;
 
+  const removals = await loadRemovals(ctx, entries);
   let ops: Op[] = [];
   let bytes = 0;
   const fileIds = new Set<string>();
@@ -314,7 +356,7 @@ export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<Push
     if (await isDeferred(ctx, pushKey(entry.path))) continue;
     let op: Op | null | 'wait';
     try {
-      op = await buildOp(ctx, entry, fileIds);
+      op = await buildOp(ctx, entry, fileIds, removals);
     } catch (err) {
       // One unreadable file must not stop the others (failures.ts).
       if (isCycleError(err)) throw err;
@@ -355,6 +397,7 @@ export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<Push
         );
         await ctx.state.deleteRefusal(p.path);
         if (op.matchesLocal) await ctx.state.clearDirty(op.entry.path, op.entry.gen);
+        if (p.deleted && removals.paths.has(p.path)) await forgetServerRemovals(ctx.state, [p.path]);
         continue;
       }
       const code: ErrorCode = r.error?.code ?? ErrorCode.INTERNAL;

@@ -353,7 +353,7 @@ describe('ignore rules saved during the first sync', () => {
     const dev = await newDevice(srv, user, { name: 'Laptop', vault: 'create' });
     const other = await makeClient(srv, user, { name: 'Phone', vault: dev.vaultId });
     await bigVault(dev);
-    let saving: Promise<void> | null = null;
+    let saving: Promise<unknown> | null = null;
     let c!: ShellController;
     const fetch: FetchLike = async (input, req) => {
       const resp = await dev.net.fetch(input, req);
