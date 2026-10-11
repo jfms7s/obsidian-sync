@@ -155,6 +155,45 @@ func (s *Store) RevokeDevice(ctx context.Context, userID, deviceID string) error
 	return nil
 }
 
+// RevokeAllDevices revokes every active device of the user and returns how
+// many it revoked.
+func (s *Store) RevokeAllDevices(ctx context.Context, userID string) (int, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE devices SET revoked_at = ? WHERE user_id = ? AND revoked_at = 0`, s.nowMs(), userID)
+	if err != nil {
+		return 0, fmt.Errorf("revoke devices: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("revoke devices: %w", err)
+	}
+	return int(n), nil
+}
+
+// Footprint counts what DeleteUser would remove: the user's devices, the
+// vaults they own and those vaults' versions and chunk blobs.
+type Footprint struct {
+	Devices  int
+	Vaults   int
+	Versions int
+	Blobs    int
+}
+
+func (s *Store) UserFootprint(ctx context.Context, userID string) (Footprint, error) {
+	var fp Footprint
+	const owned = `(SELECT id FROM vaults WHERE owner_id = ?)`
+	err := s.db.QueryRowContext(ctx, `SELECT
+		(SELECT COUNT(*) FROM devices WHERE user_id = ?),
+		(SELECT COUNT(*) FROM vaults WHERE owner_id = ?),
+		(SELECT COUNT(*) FROM versions WHERE vault_id IN `+owned+`),
+		(SELECT COUNT(*) FROM chunks WHERE vault_id IN `+owned+`)`,
+		userID, userID, userID, userID).Scan(&fp.Devices, &fp.Vaults, &fp.Versions, &fp.Blobs)
+	if err != nil {
+		return Footprint{}, fmt.Errorf("count user data: %w", err)
+	}
+	return fp, nil
+}
+
 func (s *Store) TouchDevice(ctx context.Context, deviceID string) error {
 	if _, err := s.db.ExecContext(ctx, `UPDATE devices SET last_seen_at = ? WHERE id = ?`, s.nowMs(), deviceID); err != nil {
 		return fmt.Errorf("touch device: %w", err)
