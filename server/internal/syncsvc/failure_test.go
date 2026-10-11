@@ -195,7 +195,7 @@ func TestCommitToVaultDeletedConcurrentlyIsNotFound(t *testing.T) {
 	f := newFixture(t)
 	svc, _ := newFlakyService(t, f, &failingCommits{Store: f.st, err: store.ErrNotFound})
 	_, _, err := svc.Commit(ctx, f.user.ID, "d", f.vault.ID, []store.Version{version(1, nil)})
-	if apperr.CodeOf(err) != apperr.NotFound {
-		t.Fatalf("err = %v, want NOT_FOUND", err)
+	if apperr.CodeOf(err) != apperr.VaultNotFound {
+		t.Fatalf("err = %v, want VAULT_NOT_FOUND", err)
 	}
 }

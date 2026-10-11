@@ -39,6 +39,11 @@ const (
 	// The account password sent to authorize the request was missing or wrong.
 	// Unlike UNAUTHORIZED, the device token is still valid.
 	ErrorCode_ERROR_CODE_WRONG_PASSWORD ErrorCode = 12
+	// The vault does not exist, or this account is not a member of it. A
+	// client stops syncing that vault. Other missing things (a chunk, a key
+	// bundle, a device) keep NOT_FOUND. 0.1.x servers sent NOT_FOUND with the
+	// message "vault not found" instead.
+	ErrorCode_ERROR_CODE_VAULT_NOT_FOUND ErrorCode = 13
 )
 
 // Enum value maps for ErrorCode.
@@ -57,21 +62,23 @@ var (
 		10: "ERROR_CODE_INVALID",
 		11: "ERROR_CODE_MISSING_CHUNK",
 		12: "ERROR_CODE_WRONG_PASSWORD",
+		13: "ERROR_CODE_VAULT_NOT_FOUND",
 	}
 	ErrorCode_value = map[string]int32{
-		"ERROR_CODE_UNSPECIFIED":    0,
-		"ERROR_CODE_CONFLICT":       1,
-		"ERROR_CODE_QUOTA_EXCEEDED": 2,
-		"ERROR_CODE_UNAUTHORIZED":   3,
-		"ERROR_CODE_DEVICE_REVOKED": 4,
-		"ERROR_CODE_STALE_EPOCH":    5,
-		"ERROR_CODE_RATE_LIMITED":   6,
-		"ERROR_CODE_TOO_LARGE":      7,
-		"ERROR_CODE_NOT_FOUND":      8,
-		"ERROR_CODE_INTERNAL":       9,
-		"ERROR_CODE_INVALID":        10,
-		"ERROR_CODE_MISSING_CHUNK":  11,
-		"ERROR_CODE_WRONG_PASSWORD": 12,
+		"ERROR_CODE_UNSPECIFIED":     0,
+		"ERROR_CODE_CONFLICT":        1,
+		"ERROR_CODE_QUOTA_EXCEEDED":  2,
+		"ERROR_CODE_UNAUTHORIZED":    3,
+		"ERROR_CODE_DEVICE_REVOKED":  4,
+		"ERROR_CODE_STALE_EPOCH":     5,
+		"ERROR_CODE_RATE_LIMITED":    6,
+		"ERROR_CODE_TOO_LARGE":       7,
+		"ERROR_CODE_NOT_FOUND":       8,
+		"ERROR_CODE_INTERNAL":        9,
+		"ERROR_CODE_INVALID":         10,
+		"ERROR_CODE_MISSING_CHUNK":   11,
+		"ERROR_CODE_WRONG_PASSWORD":  12,
+		"ERROR_CODE_VAULT_NOT_FOUND": 13,
 	}
 )
 
@@ -2284,7 +2291,7 @@ const file_obsync_v1_obsync_proto_rawDesc = "" +
 	"\fcontent_hash\x18\x04 \x01(\fR\vcontentHash\x12!\n" +
 	"\frenamed_from\x18\x05 \x01(\tR\vrenamedFrom\x12\x1f\n" +
 	"\vdevice_name\x18\x06 \x01(\tR\n" +
-	"deviceName*\xf6\x02\n" +
+	"deviceName*\x96\x03\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13ERROR_CODE_CONFLICT\x10\x01\x12\x1d\n" +
@@ -2299,7 +2306,8 @@ const file_obsync_v1_obsync_proto_rawDesc = "" +
 	"\x12ERROR_CODE_INVALID\x10\n" +
 	"\x12\x1c\n" +
 	"\x18ERROR_CODE_MISSING_CHUNK\x10\v\x12\x1d\n" +
-	"\x19ERROR_CODE_WRONG_PASSWORD\x10\fBHZFgithub.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1;obsyncv1b\x06proto3"
+	"\x19ERROR_CODE_WRONG_PASSWORD\x10\f\x12\x1e\n" +
+	"\x1aERROR_CODE_VAULT_NOT_FOUND\x10\rBHZFgithub.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1;obsyncv1b\x06proto3"
 
 var (
 	file_obsync_v1_obsync_proto_rawDescOnce sync.Once

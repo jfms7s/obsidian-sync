@@ -219,7 +219,7 @@ func (c *conn) subscribe(vaultIDs []string) {
 		}
 		seen[id] = struct{}{}
 		if !ids.Valid(id) {
-			c.sendError(apperr.New(apperr.NotFound, "vault not found"))
+			c.sendError(apperr.ErrVaultNotFound)
 			continue
 		}
 		// Subscribe before reading the seq, so a commit landing in between is
@@ -229,7 +229,7 @@ func (c *conn) subscribe(vaultIDs []string) {
 		if err != nil {
 			cancel()
 			if errors.Is(err, store.ErrNotFound) {
-				c.sendError(apperr.New(apperr.NotFound, "vault not found"))
+				c.sendError(apperr.ErrVaultNotFound)
 			} else {
 				c.hub.log.Error("subscribe", "vault", id, "err", err)
 				c.sendError(apperr.New(apperr.Internal, "internal error"))
@@ -302,7 +302,7 @@ func (c *conn) recheckMembership() {
 			if ok {
 				// The Error frame has no vault field, so the message is the
 				// same fixed one Subscribe sends.
-				c.sendError(apperr.New(apperr.NotFound, "vault not found"))
+				c.sendError(apperr.ErrVaultNotFound)
 			}
 		default:
 			c.hub.log.Error("recheck membership", "vault", id, "err", err)

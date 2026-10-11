@@ -20,3 +20,11 @@ func TestCodeOf(t *testing.T) {
 		t.Fatalf("message = %q", got)
 	}
 }
+
+// Clients older than VAULT_NOT_FOUND recognise a lost vault by the message,
+// so its text must not change.
+func TestErrVaultNotFound(t *testing.T) {
+	if apperr.ErrVaultNotFound.Code != apperr.VaultNotFound || apperr.ErrVaultNotFound.Msg != "vault not found" {
+		t.Fatalf("ErrVaultNotFound = %+v", apperr.ErrVaultNotFound)
+	}
+}

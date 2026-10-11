@@ -214,14 +214,15 @@ export class SyncEngine {
   }
 
   /**
-   * The hub's NOT_FOUND frame names no vault, so confirm over HTTP before
-   * giving up: only a NOT_FOUND for this vault's keys means access is gone.
+   * The hub's VAULT_NOT_FOUND frame names no vault, so confirm over HTTP
+   * before giving up: only a lost-vault answer for this vault's keys means
+   * access is gone.
    */
   private async checkVaultAccess(): Promise<void> {
     try {
       await this.opts.api.vaultKeys(this.ctx.ring.vaultId);
     } catch (err) {
-      if (err instanceof ApiError && err.code === ErrorCode.NOT_FOUND) {
+      if (isVaultNotFound(err)) {
         this.halt('VAULT_LOST', 'the vault was deleted or this account no longer has access to it');
       }
     }

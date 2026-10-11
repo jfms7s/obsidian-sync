@@ -22,7 +22,13 @@ const (
 	Invalid       = obsyncv1.ErrorCode_ERROR_CODE_INVALID
 	MissingChunk  = obsyncv1.ErrorCode_ERROR_CODE_MISSING_CHUNK
 	WrongPassword = obsyncv1.ErrorCode_ERROR_CODE_WRONG_PASSWORD
+	VaultNotFound = obsyncv1.ErrorCode_ERROR_CODE_VAULT_NOT_FOUND
 )
+
+// ErrVaultNotFound answers every request for a vault that does not exist or
+// that the caller is not a member of. Keep the message: clients written for
+// 0.1.x servers, which sent NOT_FOUND, recognise a lost vault by it.
+var ErrVaultNotFound = New(VaultNotFound, "vault not found")
 
 // Error is an error whose message is safe to show to the client.
 type Error struct {

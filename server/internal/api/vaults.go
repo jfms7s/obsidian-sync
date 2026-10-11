@@ -105,14 +105,14 @@ func validateCreateVault(req *obsyncv1.CreateVaultRequest) error {
 func (h *handlers) vaultKeys(w http.ResponseWriter, r *http.Request, sess auth.Session) {
 	vaultID := r.PathValue("vault")
 	if !ids.Valid(vaultID) {
-		h.writeError(w, r, apperr.New(apperr.NotFound, "vault not found"))
+		h.writeError(w, r, apperr.ErrVaultNotFound)
 		return
 	}
 	// VaultKeys is scoped to the caller's membership and reports a
 	// non-member as not found, so this one query is also the access check.
 	keys, err := h.store.VaultKeys(r.Context(), vaultID, sess.UserID)
 	if errors.Is(err, store.ErrNotFound) {
-		h.writeError(w, r, apperr.New(apperr.NotFound, "vault not found"))
+		h.writeError(w, r, apperr.ErrVaultNotFound)
 		return
 	}
 	if err != nil {

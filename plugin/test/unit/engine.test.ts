@@ -2,9 +2,12 @@
 // backoff with jitter, Retry-After, and the errors that stop sync.
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it, vi } from 'vitest';
+import { create, toBinary, type MessageInitShape } from '@bufbuild/protobuf';
 import type { ApiClient } from '../../src/api/client';
 import { ApiError, ErrorCode, NetworkError } from '../../src/api/errors';
+import type { WebSocketFactory, WebSocketLike } from '../../src/api/hub';
 import type { ChangesPage, HeadsPage, RemoteVersion } from '../../src/api/types';
+import { ServerFrameSchema } from '../../src/gen/obsync/v1/obsync_pb';
 import { encryptMeta, fileIdFor } from '../../src/crypto/objects';
 import { buildKeyring, epochKeys, MissingEpochKeyError } from '../../src/crypto/vaultkeys';
 import { LocalState } from '../../src/state/store';
@@ -18,12 +21,13 @@ import { MemoryAdapter } from '../../src/vault/memory';
 
 type Step = ChangesPage | Error;
 
-async function setup(script: Step[], opts: { autoRun?: boolean } = {}) {
+async function setup(script: Step[], opts: { autoRun?: boolean; webSocket?: WebSocketFactory; vaultKeys?: () => Promise<unknown> } = {}) {
   const clock = new ManualClock(0);
   const calls: number[] = [];
   const api = {
-    token: undefined,
+    token: opts.webSocket ? 'tok' : undefined,
     baseUrl: 'http://localhost',
+    vaultKeys: opts.vaultKeys ?? (async () => []),
     changes: async (_vault: string, since: number): Promise<ChangesPage> => {
       calls.push(clock.now());
       const next = script.shift() ?? { versions: [], vaultSeq: since, more: false };
@@ -37,7 +41,7 @@ async function setup(script: Step[], opts: { autoRun?: boolean } = {}) {
   const state = await LocalState.open(new IDBFactory(), 'engine');
   const events: EngineEvent[] = [];
   const engine = new SyncEngine({
-    api, state, adapter: new MemoryAdapter(false, clock), ring, deviceName: 'd', clock, random: r, webSocket: null,
+    api, state, adapter: new MemoryAdapter(false, clock), ring, deviceName: 'd', clock, random: r, webSocket: opts.webSocket ?? null,
     autoRun: opts.autoRun ?? true, backoff: { baseMs: 1000, maxMs: 60_000 },
   });
   engine.on((e) => events.push(e));
@@ -108,6 +112,85 @@ describe('engine loop', () => {
     expect(calls).toHaveLength(2);
     await engine.stop();
   });
+});
+
+/** A hub socket the test speaks for: open() accepts the connection, serverSends a frame. */
+class HubSocket implements WebSocketLike {
+  binaryType = 'blob';
+  readyState = 0;
+  onopen: ((ev: unknown) => void) | null = null;
+  onmessage: ((ev: { data: unknown }) => void) | null = null;
+  onclose: ((ev: unknown) => void) | null = null;
+  onerror: ((ev: unknown) => void) | null = null;
+  send(): void {}
+  close(): void {}
+  open(): void {
+    this.readyState = 1;
+    this.onopen?.({});
+  }
+  serverSends(frame: MessageInitShape<typeof ServerFrameSchema>['frame']): void {
+    const b = toBinary(ServerFrameSchema, create(ServerFrameSchema, { frame }));
+    this.onmessage?.({ data: b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) });
+  }
+}
+
+describe('a lost vault', () => {
+  const lost = { type: 'notice', code: 'VAULT_LOST', persistent: true, message: 'the vault was deleted or this account no longer has access to it' };
+
+  it('stops for good on VAULT_NOT_FOUND', async () => {
+    const { engine, events, calls, tick } = await setup([new ApiError(ErrorCode.VAULT_NOT_FOUND, 'vault not found', 404)]);
+    await engine.start();
+    await tick(0);
+    await tick(3_600_000);
+    expect(calls).toHaveLength(1);
+    expect(events).toContainEqual(lost);
+    expect(engine.status).toBe('error');
+  });
+
+  it('stops for good on a 0.1.x server\'s NOT_FOUND "vault not found"', async () => {
+    const { engine, events, tick } = await setup([new ApiError(ErrorCode.NOT_FOUND, 'vault not found', 404)]);
+    await engine.start();
+    await tick(0);
+    expect(events).toContainEqual(lost);
+  });
+
+  it('retries a NOT_FOUND that is not about the vault', async () => {
+    const { engine, events, calls, tick } = await setup([new ApiError(ErrorCode.NOT_FOUND, 'no such endpoint', 404), empty]);
+    await engine.start();
+    await tick(0);
+    await tick(60_000);
+    expect(calls.length).toBeGreaterThan(1);
+    expect(events).not.toContainEqual(lost);
+    await engine.stop();
+  });
+
+  for (const [name, keysError, halts] of [
+    ['VAULT_NOT_FOUND', new ApiError(ErrorCode.VAULT_NOT_FOUND, 'vault not found', 404), true],
+    ['a 0.1.x server\'s NOT_FOUND "vault not found"', new ApiError(ErrorCode.NOT_FOUND, 'vault not found', 404), true],
+    ['another NOT_FOUND', new ApiError(ErrorCode.NOT_FOUND, 'no such endpoint', 404), false],
+  ] as const) {
+    it(`after the hub reports a lost vault, ${halts ? 'stops' : 'keeps syncing'} when the keys answer ${name}`, async () => {
+      const sockets: HubSocket[] = [];
+      let keyChecks = 0;
+      const { engine, events, tick } = await setup([], {
+        webSocket: () => { const s = new HubSocket(); sockets.push(s); return s; },
+        vaultKeys: async () => { keyChecks++; throw keysError; },
+      });
+      await engine.start();
+      await tick(0);
+      sockets[0]!.open();
+      sockets[0]!.serverSends({ case: 'authOk', value: {} });
+      sockets[0]!.serverSends({ case: 'error', value: { code: ErrorCode.VAULT_NOT_FOUND, message: 'vault not found' } });
+      await vi.waitFor(() => expect(keyChecks).toBe(1));
+      await tick(0);
+      if (halts) {
+        await vi.waitFor(() => expect(events).toContainEqual(lost));
+      } else {
+        expect(events).not.toContainEqual(lost);
+        await engine.stop();
+      }
+    });
+  }
 });
 
 describe('engine errors outside the plan table', () => {

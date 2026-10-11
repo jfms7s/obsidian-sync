@@ -205,7 +205,7 @@ func TestSubscribeToForeignVault(t *testing.T) {
 	foreign := storetest.SeedVault(t, e.st, bob.ID)
 	c := e.authed()
 	send(t, c, subscribeFrame(foreign.ID))
-	if f := recv(t, c); f.GetError().GetCode() != apperr.NotFound {
+	if f := recv(t, c); f.GetError().GetCode() != apperr.VaultNotFound {
 		t.Fatalf("frame = %v", f)
 	}
 	send(t, c, pingFrame(1))
@@ -368,7 +368,7 @@ func TestSubscribeNotFoundDoesNotEchoInput(t *testing.T) {
 	c := e.authed()
 	send(t, c, subscribeFrame("<script>"))
 	f := recv(t, c).GetError()
-	if f.GetCode() != apperr.NotFound || strings.Contains(f.GetMessage(), "script") {
+	if f.GetCode() != apperr.VaultNotFound || strings.Contains(f.GetMessage(), "script") {
 		t.Fatalf("error = %v", f)
 	}
 }
@@ -393,7 +393,7 @@ func TestSubscribeRevalidatesToken(t *testing.T) {
 }
 
 // Membership is rechecked on Ping: once the user loses access to a vault, its
-// subscription is dropped, the client is told with a NOT_FOUND Error frame
+// subscription is dropped, the client is told with a VAULT_NOT_FOUND Error frame
 // (the socket stays open) and no further notifies arrive, while subscriptions
 // to vaults still accessible keep working.
 func TestPingDropsSubscriptionsToVaultsNoLongerAccessible(t *testing.T) {
@@ -410,8 +410,8 @@ func TestPingDropsSubscriptionsToVaultsNoLongerAccessible(t *testing.T) {
 	}
 	e.vaults.revoke(e.vault.ID)
 	send(t, c, pingFrame(1))
-	if f := recv(t, c).GetError(); f.GetCode() != apperr.NotFound || f.GetMessage() != "vault not found" {
-		t.Fatalf("frame = %v, want NOT_FOUND for the dropped vault", f)
+	if f := recv(t, c).GetError(); f.GetCode() != apperr.VaultNotFound || f.GetMessage() != "vault not found" {
+		t.Fatalf("frame = %v, want VAULT_NOT_FOUND for the dropped vault", f)
 	}
 	if f := recv(t, c); f.GetPong().GetNonce() != 1 {
 		t.Fatalf("frame = %v, want pong 1", f)
