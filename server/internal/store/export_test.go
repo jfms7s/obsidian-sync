@@ -36,3 +36,9 @@ func AppliedMigrations(tb testing.TB, s *Store) int {
 	}
 	return n
 }
+
+// DriverName is the database/sql driver the store opens.
+const DriverName = driverName
+
+// BundledSQLiteVersion is the SQLite version the driver ships.
+const BundledSQLiteVersion = bundledSQLiteVersion

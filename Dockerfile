@@ -8,12 +8,10 @@
 #     --build-arg VERSION=$(git describe --tags --always --dirty) -t obsync .
 #
 # The build stage always runs on the builder's own architecture and
-# cross-compiles with CGO for the target, so no emulation is needed to build.
-# The libSQL driver links a prebuilt static library that ships inside its Go
-# module for linux/amd64 and linux/arm64.
+# cross-compiles for the target: the server is pure Go (CGO_ENABLED=0), so
+# neither emulation nor a C cross compiler is needed, and the binary is static.
 
-# golang:1.26.9-bookworm, index digest as of 2026-10-11. Bookworm's glibc
-# (2.36) matches the runtime image, so the binary cannot need a newer one.
+# golang:1.26.9-bookworm, index digest as of 2026-10-11.
 FROM --platform=$BUILDPLATFORM golang:1.26.9-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c AS build
 
 ARG TARGETARCH
@@ -21,28 +19,9 @@ ARG VERSION=dev
 
 # The go.mod pins the toolchain; never download another one during a build.
 ENV GOTOOLCHAIN=local \
-    CGO_ENABLED=1 \
+    CGO_ENABLED=0 \
     GOOS=linux \
     GOARCH=${TARGETARCH}
-
-# A C cross compiler is needed only when the target is not the builder's
-# architecture. The chosen compiler is recorded for the build step below.
-RUN set -eu; \
-    native="$(dpkg --print-architecture)"; \
-    if [ "${TARGETARCH}" = "${native}" ]; then \
-        echo gcc > /cc; \
-    elif [ "${TARGETARCH}" = "arm64" ]; then \
-        apt-get update; \
-        apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross; \
-        echo aarch64-linux-gnu-gcc > /cc; \
-    elif [ "${TARGETARCH}" = "amd64" ]; then \
-        apt-get update; \
-        apt-get install -y --no-install-recommends gcc-x86-64-linux-gnu libc6-dev-amd64-cross; \
-        echo x86_64-linux-gnu-gcc > /cc; \
-    else \
-        echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1; \
-    fi; \
-    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 # Dependencies first, so editing source does not re-download them.
@@ -55,7 +34,7 @@ COPY server/ ./
 # so CI's layer cache (type=gha) keeps it between runs; a cache mount is not
 # kept there.
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    CC="$(cat /cc)" go build -trimpath \
+    go build -trimpath \
         -ldflags "-s -w -X main.version=${VERSION}" \
         -o /out/obsync ./cmd/obsync \
  # The final image has no shell, so /data is created here and copied over
@@ -64,13 +43,13 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
  && mkdir -m 0700 /out/data
 
 # Just the binary, for the release workflow: `--target binary --output type=local,dest=out`
-# gives the same bookworm-built executable the image holds (checked against glibc 2.36).
+# gives the same static executable the image holds.
 FROM scratch AS binary
 COPY --from=build /out/obsync /obsync
 
-# gcr.io/distroless/cc-debian12:nonroot, index digest as of 2026-10-05.
-# glibc 2.36, libgcc and libstdc++, CA certificates, tzdata; no shell.
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
+# gcr.io/distroless/static-debian12:nonroot, index digest as of 2026-10-11.
+# CA certificates, tzdata and the nonroot user; no libc, no shell.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 COPY --from=build /out/obsync /usr/local/bin/obsync
 COPY --from=build --chown=65532:65532 /out/data /data
