@@ -509,6 +509,14 @@ export class DataAdapter {
     this.vault.notifyOutside({ type: existed ? 'modify' : 'create', path: this.vault.fs.get(path)!.path, folder: false });
   }
 
+  async write(path: string, data: string): Promise<void> {
+    await this.writeBinary(path, new TextEncoder().encode(data).buffer as ArrayBuffer);
+  }
+
+  async read(path: string): Promise<string> {
+    return new TextDecoder().decode(this.vault.fs.read(path));
+  }
+
   async mkdir(path: string): Promise<void> {
     const before = new Set(this.vault.fs.paths());
     this.vault.fs.mkdir(path);
