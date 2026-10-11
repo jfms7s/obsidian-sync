@@ -168,8 +168,17 @@ describe('HubClient', () => {
     hub.start();
     sockets[0]!.open();
     sockets[0]!.serverSends({ case: 'authOk', value: {} });
-    sockets[0]!.serverSends({ case: 'error', value: { code: ErrorCode.NOT_FOUND, message: 'vault not found' } });
+    sockets[0]!.serverSends({ case: 'error', value: { code: ErrorCode.VAULT_NOT_FOUND, message: 'vault not found' } });
     expect(calls).toEqual(['connected', 'vault lost']);
     expect(sockets[0]!.closed).toBe(false);
+  });
+
+  it('reports a lost vault from a 0.1.x server, which sends NOT_FOUND', () => {
+    const { sockets, calls, hub } = setup();
+    hub.start();
+    sockets[0]!.open();
+    sockets[0]!.serverSends({ case: 'authOk', value: {} });
+    sockets[0]!.serverSends({ case: 'error', value: { code: ErrorCode.NOT_FOUND, message: 'vault not found' } });
+    expect(calls).toEqual(['connected', 'vault lost']);
   });
 });
