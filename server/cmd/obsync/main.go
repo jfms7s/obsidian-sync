@@ -139,7 +139,7 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	// Once the first signal starts a graceful shutdown, restore default
 	// handling so a second Ctrl-C kills the process immediately.
 	go func() { <-ctx.Done(); stop() }()
-	a, err := app.Build(ctx, cfg, log, app.Options{})
+	a, err := app.Build(ctx, cfg, log, app.Options{Version: version})
 	if err != nil {
 		return err
 	}
@@ -148,9 +148,17 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
+	var metricsLn net.Listener
+	if cfg.MetricsListen != "" {
+		if metricsLn, err = net.Listen("tcp", cfg.MetricsListen); err != nil {
+			ln.Close()
+			return fmt.Errorf("metrics listen: %w", err)
+		}
+		log.Info("obsync metrics listening", "addr", metricsLn.Addr().String())
+	}
 	// Never log the database URL: it may carry credentials.
 	log.Info("obsync listening", "addr", ln.Addr().String(), "data_dir", cfg.DataDir)
-	return a.Serve(ctx, ln)
+	return a.ServeWithMetrics(ctx, ln, metricsLn)
 }
 
 func migrate(ctx context.Context, cfg config.Config) error {

@@ -11,6 +11,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/apperr"
 	"github.com/jfms7s/obsidian-sync/server/internal/clientip"
 	obsyncv1 "github.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1"
+	"github.com/jfms7s/obsidian-sync/server/internal/metrics"
 	"github.com/jfms7s/obsidian-sync/server/internal/ratelimit"
 )
 
@@ -136,6 +137,7 @@ func (h *handlers) ipLimited(next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ok, retry := h.takeIP(h.limits.ip, r); !ok {
+			h.metrics.RateLimited(metrics.LimiterIP)
 			writeRateLimited(w, retry)
 			return
 		}

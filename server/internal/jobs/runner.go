@@ -14,6 +14,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/blob"
 	"github.com/jfms7s/obsidian-sync/server/internal/config"
 	"github.com/jfms7s/obsidian-sync/server/internal/ids"
+	"github.com/jfms7s/obsidian-sync/server/internal/metrics"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 )
 
@@ -55,6 +56,8 @@ type Config struct {
 	Interval  time.Duration // <= 0 means one hour
 	Retention config.Retention
 	GCGrace   time.Duration
+	// Metrics counts the passes and what they removed; nil records nothing.
+	Metrics *metrics.Obsync
 }
 
 type Runner struct {
@@ -118,7 +121,15 @@ var ErrLeaseHeld = errors.New("another process holds the maintenance lease")
 // lease back, so between passes an export or an on-demand pass can take it.
 // Without the lease it does nothing.
 func (r *Runner) RunOnce(ctx context.Context) error {
-	_, ran, err := r.pass(ctx)
+	rep, ran, err := r.pass(ctx)
+	switch {
+	case !ran && err == nil:
+		r.cfg.Metrics.MaintenanceSkipped()
+	case err != nil:
+		r.cfg.Metrics.MaintenanceFailed()
+	default:
+		r.cfg.Metrics.MaintenanceDone(r.now(), rep.VersionsPruned, rep.FilesPurged, rep.ChunksDeleted)
+	}
 	if ran {
 		r.releaseLease(ctx)
 	}

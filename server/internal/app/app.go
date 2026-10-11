@@ -20,6 +20,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/config"
 	"github.com/jfms7s/obsidian-sync/server/internal/hub"
 	"github.com/jfms7s/obsidian-sync/server/internal/jobs"
+	"github.com/jfms7s/obsidian-sync/server/internal/metrics"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/syncsvc"
 	"github.com/jfms7s/obsidian-sync/server/internal/vaultsvc"
@@ -38,6 +39,8 @@ const (
 
 type Options struct {
 	PasswordParams auth.Params // zero = auth.DefaultParams
+	// Version is the build version, reported by obsync_build_info.
+	Version string
 }
 
 type App struct {
@@ -46,6 +49,8 @@ type App struct {
 	Handler http.Handler
 	Hub     *hub.Hub
 	Jobs    *jobs.Runner
+	// Metrics is nil unless metrics_listen is set; ServeWithMetrics serves it.
+	Metrics *metrics.Obsync
 
 	log *slog.Logger
 }
@@ -69,14 +74,22 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts Option
 		st.Close()
 		return nil, err
 	}
-	authSvc, err := auth.NewService(st, auth.Options{Params: opts.PasswordParams})
+	var m *metrics.Obsync
+	if cfg.MetricsListen != "" {
+		m = metrics.NewObsync(opts.Version, func(ctx context.Context) (metrics.Stats, error) {
+			s, err := st.ServerStats(ctx)
+			return metrics.Stats{Users: s.Users, Vaults: s.Vaults, DevicesActive: s.DevicesActive, StorageUsedBytes: s.StorageUsedBytes}, err
+		})
+	}
+	authSvc, err := auth.NewService(st, auth.Options{Params: opts.PasswordParams, Metrics: m})
 	if err != nil {
 		st.Close()
 		return nil, err
 	}
 	vaultSvc := vaultsvc.New(st, authSvc)
-	h := hub.New(authSvc, vaultSvc, b, log, hub.Options{})
+	h := hub.New(authSvc, vaultSvc, b, log, hub.Options{Metrics: m})
 	syncSvc := syncsvc.New(st, vaultSvc, blobs, b, syncsvc.Limits{MaxFileSizeBytes: cfg.MaxFileSizeBytes}, log)
+	syncSvc.SetMetrics(m)
 	handler := api.NewHandler(api.Deps{
 		Auth:   authSvc,
 		Sync:   syncSvc,
@@ -92,9 +105,12 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts Option
 			IPBurst:        cfg.RateLimit.IPBurst,
 			TrustedProxies: cfg.TrustedProxyPrefixes(),
 		},
+		Metrics: m,
 	})
-	runner := jobs.New(st, blobs, JobsConfig(cfg), time.Now, log)
-	return &App{Store: st, Blobs: blobs, Handler: handler, Hub: h, Jobs: runner, log: log}, nil
+	jc := JobsConfig(cfg)
+	jc.Metrics = m
+	runner := jobs.New(st, blobs, jc, time.Now, log)
+	return &App{Store: st, Blobs: blobs, Handler: handler, Hub: h, Jobs: runner, Metrics: m, log: log}, nil
 }
 
 // EnsureDatabaseDir creates the directory of a local (file:) database, mode
@@ -193,6 +209,17 @@ func (a *App) Close() error { return a.Store.Close() }
 // down gracefully. If the listener fails first, Serve still shuts down the
 // same way before returning that error.
 func (a *App) Serve(ctx context.Context, ln net.Listener) error {
+	return a.ServeWithMetrics(ctx, ln, nil)
+}
+
+// ServeWithMetrics is Serve, plus GET /metrics on metricsLn (nil: none) when
+// metrics are on. The metrics server has nothing else, and it stops with
+// the API server.
+func (a *App) ServeWithMetrics(ctx context.Context, ln, metricsLn net.Listener) error {
+	if metricsLn != nil && a.Metrics == nil {
+		metricsLn.Close()
+		return errors.New("a metrics listener was given but metrics are off")
+	}
 	baseCtx, cancelBase := context.WithCancel(context.Background())
 	defer cancelBase()
 	srv := &http.Server{
@@ -213,8 +240,22 @@ func (a *App) Serve(ctx context.Context, ln net.Listener) error {
 	// after they have stopped. Their work is ctx-aware.
 	defer func() { stopJobs(); <-jobsDone }()
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() { errCh <- srv.Serve(ln) }()
+	var metricsSrv *http.Server
+	if metricsLn != nil {
+		metricsSrv = &http.Server{
+			Handler:           a.Metrics.Handler(),
+			ReadHeaderTimeout: readHeaderTimeout,
+			IdleTimeout:       idleTimeout,
+			ErrorLog:          slog.NewLogLogger(a.log.Handler(), slog.LevelWarn),
+		}
+		go func() {
+			if err := metricsSrv.Serve(metricsLn); !errors.Is(err, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("metrics: %w", err)
+			}
+		}()
+	}
 	var serveErr error
 	select {
 	case err := <-errCh:
@@ -226,6 +267,9 @@ func (a *App) Serve(ctx context.Context, ln net.Listener) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	err := srv.Shutdown(shutdownCtx)
+	if metricsSrv != nil {
+		err = errors.Join(err, metricsSrv.Shutdown(shutdownCtx))
+	}
 	// Shutdown has cancelled the sockets' contexts but does not wait for
 	// them; wait (bounded) so none outlives Serve and touches a closed store.
 	hubDone := make(chan struct{})
