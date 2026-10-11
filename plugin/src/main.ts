@@ -41,6 +41,7 @@ export default class ObsyncPlugin extends Plugin {
     const shell = new ShellController({
       state, adapter, configDir: this.app.vault.configDir, fetch, webSocket: defaultWebSocketFactory, lock: createEngineLock(`obsync-engine:${key}`),
       ...(roundBytes !== undefined ? { maxBytesPerRound: roundBytes } : {}),
+      ownPluginFolders: [pluginDir.slice(pluginDir.lastIndexOf('/') + 1)],
     });
     this.shell = shell;
 

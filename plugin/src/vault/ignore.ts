@@ -1,3 +1,5 @@
+import type { ConfigCarveOut } from './config-policy';
+
 // Which paths are not synced (spec §9.1): a fixed default list, the vault's
 // own .obsyncignore (synced, so every device shares it) and the user's own
 // globs, stored per device. A path is ignored when any of them matches.
@@ -119,24 +121,45 @@ export interface IgnoreOptions {
   configDir?: string;
   /** The globs of the vault's .obsyncignore (parseIgnoreFile), ignored in addition to the defaults. */
   vaultGlobs?: readonly string[];
+  /**
+   * The files in configDir that sync anyway (config-policy.ts): the config
+   * folder's rule does not cover them, the other rules still do.
+   */
+  configSync?: ConfigCarveOut;
 }
 
 export class IgnoreRules {
   private readonly res: RegExp[];
+  private readonly configRe: RegExp | null;
+  private readonly configSync: ConfigCarveOut | null;
   private readonly ci: boolean;
 
   /** Throws InvalidIgnorePatternError for a glob that uses unsupported syntax ('!', '['). */
   constructor(readonly userGlobs: readonly string[] = [], o: IgnoreOptions = {}) {
     const ci = (this.ci = o.caseInsensitive ?? false);
     const config = o.configDir?.replace(/^\/+|\/+$/g, '');
-    this.res = [...(o.defaults ?? DEFAULT_IGNORES), ...(config ? [`${config}/`] : []), ...(o.vaultGlobs ?? []), ...userGlobs]
+    this.configRe = config ? compileGlob(`${config}/`, ci) : null;
+    this.configSync = o.configSync ?? null;
+    this.res = [...(o.defaults ?? DEFAULT_IGNORES), ...(o.vaultGlobs ?? []), ...userGlobs]
       .filter((g) => g.trim() !== '' && !g.trim().startsWith('#'))
       .map((g) => compileGlob(g, ci));
   }
 
   matches(path: string): boolean {
     if (isVaultIgnoreFile(path, this.ci)) return false;
+    if (this.configRe?.test(path) && !this.configSync?.syncs(path)) return true;
     return this.res.some((re) => re.test(path));
+  }
+
+  /**
+   * Whether a walk of the vault can skip the folder and everything in it.
+   * The config folder (and its plugins/ and plugins/<id>/ folders) is
+   * entered only while the settings policy may sync a file in it.
+   */
+  skipsFolder(folder: string): boolean {
+    const asFolder = `${folder}/`;
+    if (this.configRe?.test(asFolder) && !this.configSync?.mayHoldSynced(folder)) return true;
+    return this.res.some((re) => re.test(asFolder));
   }
 }
 

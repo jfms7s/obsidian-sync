@@ -25,6 +25,8 @@ export interface SyncSessionOptions extends ClientDeps {
   configDir: string;
   /** SyncEngine's maxBytesPerRound (the shell sets less on a phone). */
   maxBytesPerRound?: number;
+  /** SyncEngine's ownPluginFolders: this plugin's folder name under plugins/. */
+  ownPluginFolders?: readonly string[];
 }
 
 export type SyncSessionResult =
@@ -49,7 +51,8 @@ export async function openSyncSession(o: SyncSessionOptions): Promise<SyncSessio
   const ring = await keyringFromStored(vault);
   const engine = new SyncEngine({
     api, state: o.state, adapter: o.adapter, ring, deviceName: session.deviceName,
-    configDir: o.configDir, ignoreGlobs: await o.state.getIgnoreGlobs(),
+    configDir: o.configDir, ignoreGlobs: await o.state.getIgnoreGlobs(), settingsSync: await o.state.getSettingsSync(),
+    ...(o.ownPluginFolders ? { ownPluginFolders: o.ownPluginFolders } : {}),
     webSocket: o.webSocket === undefined ? defaultWebSocketFactory : o.webSocket,
     refreshKeyring: () => refreshKeyring(o.state, api, session, keys),
     ...(o.random ? { random: o.random } : {}),
