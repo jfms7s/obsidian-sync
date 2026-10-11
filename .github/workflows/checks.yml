@@ -29,11 +29,12 @@ jobs:
       - run: cd server && go vet ./...
       - run: cd server && go test -race ./...
       # Known vulnerabilities in the Go code, its modules and the standard library
-      # it calls. v1.7.0 is the newest release that runs on the module's own
-      # toolchain (v1.8.0 needs Go 1.26), so the standard library checked is the
-      # one the binary ships with. Not seen by Dependabot: bump it by hand.
+      # it calls. It checks the standard library of the toolchain go.mod names,
+      # the one the binary ships with, so keep govulncheck's own Go requirement
+      # at or below that toolchain (else go run switches to a newer Go and checks
+      # its standard library instead). Not seen by Dependabot: bump it by hand.
       - name: govulncheck
-        run: cd server && go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+        run: cd server && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.14.0
