@@ -147,29 +147,29 @@ export function folderCaseVariant(path: string): string {
 /**
  * The fewest effects per 100 seeds each kind of operation must reach, about a
  * fifth of what it reaches on average (measured over seeds 1-1000 on
- * 2026-10-11 with the weights in OPS; re-measure when they change). A kind is only checked when
+ * 2026-10-11 with the weights in OPS and SERVER_RETENTION; re-measure when they change). A kind is only checked when
  * the run's share comes to 2 or more, so that the bound stays far below what
  * any run of that size reaches by chance (a run of 20 seeds checks the common
  * kinds, a release run of 1,000 all of them).
  */
 export const MIN_EFFECTS_PER_100_SEEDS: Readonly<Record<string, number>> = {
-  'backup': 11.1,
-  'case-rename': 21.6,
-  'crash-after-commit': 5.6,
-  'create': 240.3,
-  'delete': 58.3,
-  'edit': 191.5,
-  'edit-mid-cycle': 17.1,
-  'history-restore': 0.9,
-  'hot-backup': 12.5,
-  'ignore': 23.0,
-  'lose-commit': 26.6,
-  'maintenance': 0.0,
-  'network': 85.3,
-  'rename': 59.8,
-  'restart': 35.4,
-  'restore-backup': 4.8,
-  'sync': 58.5,
+  'backup': 11.5,
+  'case-rename': 21.2,
+  'crash-after-commit': 5.9,
+  'create': 240.1,
+  'delete': 58.8,
+  'edit': 189.4,
+  'edit-mid-cycle': 17.9,
+  'history-restore': 0.8,
+  'hot-backup': 12.2,
+  'ignore': 23.1,
+  'lose-commit': 26.7,
+  'maintenance': 4.3,
+  'network': 84.6,
+  'rename': 60.2,
+  'restart': 35.9,
+  'restore-backup': 4.9,
+  'sync': 53.9,
   'trash-restore': 1.7,
 };
 
