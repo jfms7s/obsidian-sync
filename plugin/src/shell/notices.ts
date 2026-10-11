@@ -42,6 +42,8 @@ export function noticeFor(e: EngineEvent): NoticeView | null {
       return shown(`the server is missing part of ${file(e.path)}, so that version was skipped.`);
     case 'DELETIONS_HELD':
       return shown(`${e.count ?? 'some'} files deleted on this device are on hold: they stay on your other devices until you choose, in the Obsync settings, to delete them everywhere or restore them here.`);
+    case 'IGNORE_LINES_SKIPPED':
+      return shown(`${e.count ?? 'some'} ${e.count === 1 ? 'line' : 'lines'} of ${file(e.path)} use unsupported syntax and were skipped. See the Obsync settings.`);
     case 'FILE_FAILED':
       return shown(`${file(e.path)} could not be synced just now. It is tried again later; the rest keeps syncing.`);
     default: {

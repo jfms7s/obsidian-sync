@@ -51,8 +51,14 @@ jobs:
           build-args: VERSION=ci-${{ github.sha }}
           outputs: type=local,dest=out
           cache-from: type=gha
-      - name: The Linux binaries need no newer glibc than the runtime image has
+      # The server is pure Go: a binary with a program interpreter (a dynamic
+      # loader) would need a libc the distroless/static image does not have.
+      - name: The Linux binaries are static
         run: |
           ls out/*/obsync
           test "$(ls out/*/obsync | wc -l)" -eq 2
-          for bin in out/*/obsync; do scripts/check-glibc.sh "$bin"; done
+          for bin in out/*/obsync; do
+            if readelf -lW "$bin" | grep -q 'program interpreter'; then
+              echo "$bin is dynamically linked" >&2; exit 1
+            fi
+          done

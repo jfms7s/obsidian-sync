@@ -40,6 +40,11 @@ func TestNotHeadUsesFilePrimaryKey(t *testing.T) {
 
 func queryPlan(t *testing.T, st *Store, query string, args ...any) string {
 	t.Helper()
+	if len(args) == 0 {
+		// The plan does not depend on the values, but the driver needs one
+		// per placeholder.
+		args = make([]any, strings.Count(query, "?"))
+	}
 	rows, err := st.db.QueryContext(context.Background(), `EXPLAIN QUERY PLAN `+query, args...)
 	if err != nil {
 		t.Fatal(err)

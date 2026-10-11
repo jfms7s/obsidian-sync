@@ -7,19 +7,21 @@ import type { ApiClient } from '../api/client';
 import { ApiError, ErrorCode, isAuthFailure, isTemporary, isVaultNotFound, NetworkError } from '../api/errors';
 import { HubClient, type WebSocketFactory } from '../api/hub';
 import { hubUrl } from '../api/url';
+import { fileIdFor } from '../crypto/objects';
 import { MissingEpochKeyError, type VaultKeyring } from '../crypto/vaultkeys';
 import type { LocalState } from '../state/store';
 import { backoffDelay, DEFAULT_BACKOFF, type BackoffPolicy } from '../util/backoff';
 import { systemClock, type Clock, type TimerHandle } from '../util/clock';
+import { toHex } from '../util/bytes';
 import { errorMessage } from '../util/errors';
 import { cryptoRandom, type Random } from '../util/random';
 import type { AdapterEvent, VaultAdapter } from '../vault/adapter';
-import { IgnoreRules } from '../vault/ignore';
+import { IgnoreRules, parseIgnoreFile, VAULT_IGNORE_FILE, type ParsedIgnoreFile } from '../vault/ignore';
 import { DEFAULT_MAX_FILE_BYTES, ServerRollbackError, type SyncContext } from './context';
 import { pathOfPushKey } from '../state/failure-keys';
-import { nextRetryAt } from './failures';
+import { isCycleError, nextRetryAt } from './failures';
 import type { EngineEvent, EngineListener, SyncStatus } from './events';
-import { pull } from './pull';
+import { applyVaultIgnoreFirst, pull } from './pull';
 import { PushMemory, pushRound } from './push';
 import { reconcile } from './reconcile';
 
@@ -29,6 +31,8 @@ export const DEBOUNCE_MS = 500;
 /** ...or at the latest this long after the first of them, so steady typing still syncs. */
 export const DEBOUNCE_MAX_WAIT_MS = 5000;
 const MAX_PUSH_ROUNDS_PER_CYCLE = 20;
+/** The setting holding the .obsyncignore text last noticed for skipped lines. */
+const NOTICED_IGNORE_TEXT = 'vaultIgnoreNoticed';
 
 export interface EngineOptions {
   api: ApiClient;
@@ -44,7 +48,11 @@ export interface EngineOptions {
    * device's own settings and plugins, this one's code among them.
    */
   configDir: string;
-  /** The user's ignore patterns (gitignore-like globs), on top of the defaults and the config folder. Throws InvalidIgnorePatternError for unsupported syntax. */
+  /**
+   * The user's ignore patterns (gitignore-like globs), on top of the
+   * defaults, the config folder and the vault's .obsyncignore (which the
+   * engine reads itself). Throws InvalidIgnorePatternError for unsupported syntax.
+   */
   ignoreGlobs?: readonly string[];
   /** Opens hub WebSockets; null runs without one (tests, or a manual "sync now" mode). */
   webSocket?: WebSocketFactory | null;
@@ -109,6 +117,11 @@ export class SyncEngine {
   private eventWrites: Promise<unknown> = Promise.resolve();
   /** Epochs the last keyring refresh lacked (SyncContext.unavailableEpochs); checked again with each reconcile interval. */
   private readonly unavailableEpochs = new Set<number>();
+  /** The text of the vault's .obsyncignore as last read (null: no such file; undefined: not read yet). */
+  private vaultIgnoreText: string | null | undefined = undefined;
+  private vaultIgnore: ParsedIgnoreFile = { globs: [], rejected: [] };
+  /** The server's .obsyncignore was looked for before this engine's first pull (a device that never pulled). */
+  private vaultIgnoreFetched = false;
 
   constructor(private readonly opts: EngineOptions) {
     if (opts.configDir.replace(/\//g, '') === '') throw new RangeError('the vault\'s config folder must be named');
@@ -123,7 +136,7 @@ export class SyncEngine {
       deviceName: opts.deviceName,
       clock: this.clock,
       random: this.random,
-      ignore: new IgnoreRules(opts.ignoreGlobs ?? [], { caseInsensitive: opts.adapter.caseInsensitive, configDir: opts.configDir }),
+      ignore: this.buildRules(),
       maxFileBytes: opts.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES,
       ...(opts.maxBytesPerRound !== undefined ? { maxBytesPerRound: opts.maxBytesPerRound } : {}),
       unavailableEpochs: this.unavailableEpochs,
@@ -131,7 +144,71 @@ export class SyncEngine {
       onShadowed: () => {
         this.hasShadowed = true;
       },
+      reloadVaultIgnore: () => this.loadVaultIgnore(),
     };
+  }
+
+  /** The vault's .obsyncignore as last read: its rules, and the lines skipped for unsupported syntax. */
+  get vaultIgnoreFile(): ParsedIgnoreFile {
+    return this.vaultIgnore;
+  }
+
+  private buildRules(): IgnoreRules {
+    const o = this.opts;
+    return new IgnoreRules(o.ignoreGlobs ?? [], { caseInsensitive: o.adapter.caseInsensitive, configDir: o.configDir, vaultGlobs: this.vaultIgnore.globs });
+  }
+
+  /**
+   * Reads the vault's .obsyncignore and, when it changed, rebuilds the
+   * rules and asks for a reconcile: files it no longer matches are applied
+   * or pushed then, and the file itself is found even where the platform
+   * sends no event for a hidden file. Called at the start of each cycle
+   * and right after pull applied a version of it, so a rule never applies
+   * half-way through one file. An unreadable file keeps the rules as they were.
+   */
+  private async loadVaultIgnore(): Promise<void> {
+    let data: Uint8Array | null;
+    try {
+      data = await this.opts.adapter.read(VAULT_IGNORE_FILE);
+    } catch (err) {
+      if (isCycleError(err)) throw err;
+      return;
+    }
+    const text = data === null ? null : new TextDecoder().decode(data);
+    if (text === this.vaultIgnoreText) return;
+    const first = this.vaultIgnoreText === undefined;
+    this.vaultIgnoreText = text;
+    this.vaultIgnore = parseIgnoreFile(text ?? '');
+    this.ctx.ignore = this.buildRules();
+    if (!first) {
+      this.reconcileDue = true;
+      this.schedule(0);
+    }
+    await this.noticeSkippedLines(text);
+  }
+
+  /** One notice per change of the file while it has lines that were skipped (the settings tab lists them). */
+  private async noticeSkippedLines(text: string | null): Promise<void> {
+    const count = this.vaultIgnore.rejected.length;
+    if (count === 0 || text === null) return;
+    if ((await this.ctx.state.getSetting<string | null>(NOTICED_IGNORE_TEXT, null)) === text) return;
+    await this.ctx.state.setSetting(NOTICED_IGNORE_TEXT, text);
+    this.emit({
+      type: 'notice', code: 'IGNORE_LINES_SKIPPED', persistent: false, path: VAULT_IGNORE_FILE, count,
+      message: `${count} line(s) of ${VAULT_IGNORE_FILE} use unsupported syntax and were skipped`,
+    });
+  }
+
+  /**
+   * Before every cycle: the vault's .obsyncignore as it is on disk now and,
+   * on a device that never pulled, as the server has it, before anything else arrives.
+   */
+  private async prepareVaultIgnore(): Promise<void> {
+    this.ctx.vaultIgnoreFileId ??= toHex(await fileIdFor(this.ctx.ring.namingKey, VAULT_IGNORE_FILE));
+    await this.loadVaultIgnore();
+    if (this.vaultIgnoreFetched) return;
+    if ((await this.ctx.state.getCursor()) === 0) await applyVaultIgnoreFirst(this.ctx);
+    this.vaultIgnoreFetched = true;
   }
 
   get status(): SyncStatus {
@@ -369,6 +446,7 @@ export class SyncEngine {
       // restore from a backup); only notifications that arrived during the
       // pull may be ahead of it.
       this.notifiedSeq = 0;
+      await this.prepareVaultIgnore();
       if (this.reconcileDue) {
         // Cleared first so a request during the reconcile is kept, and set
         // again if it fails, so the retry reconciles too.

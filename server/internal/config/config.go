@@ -248,9 +248,12 @@ func (c Config) Validate() error {
 	} else {
 		scheme = u.Scheme
 		switch u.Scheme {
-		case "file", "libsql", "http", "https":
+		case "file":
+		case "libsql", "http", "https":
+			// Kept for clustered mode, which brings a remote client back.
+			add("database_url %s:// is a remote database; remote databases are not supported yet (use a local file: URL)", u.Scheme)
 		default:
-			add("database_url scheme %q is not supported (use file:, libsql://, http:// or https://)", u.Scheme)
+			add("database_url scheme %q is not supported (use file:)", u.Scheme)
 		}
 		// The token is a full read/write credential for the database: never
 		// send it in clear beyond this host.
