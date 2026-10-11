@@ -8,6 +8,7 @@ import type { WebSocketFactory } from '../api/hub';
 import * as account from '../services/account';
 import { openSyncSession, type SyncSessionResult } from '../services/session';
 import type { LocalState } from '../state/store';
+import { heldDeletions, releaseHeldDeletions, restoreHeldDeletions } from '../sync/deletion-hold';
 import type { SyncEngine } from '../sync/engine';
 import type { EngineEvent, SyncStatus } from '../sync/events';
 import type { Clock } from '../util/clock';
@@ -224,6 +225,25 @@ export class ShellController {
   async restart(): Promise<StartResult> {
     await this.stop();
     return this.start();
+  }
+
+  /** The local deletions on hold: a large deletion waits for the user before it reaches other devices. */
+  heldDeletions(): Promise<string[]> {
+    return heldDeletions(this.o.state);
+  }
+
+  /** "Delete on all devices": pushes the held deletions. Returns how many. */
+  async deleteHeldEverywhere(): Promise<number> {
+    const n = await releaseHeldDeletions(this.o.state);
+    this.running?.engine.requestSync();
+    return n;
+  }
+
+  /** "Restore here": writes the held files again from the server. Returns how many. */
+  async restoreHeldHere(): Promise<number> {
+    const n = await restoreHeldDeletions(this.o.state);
+    this.running?.engine.requestReconcile();
+    return n;
   }
 
   /** "Sync now": a cycle that also compares everything with the server. False when no engine runs, so nothing happened. */

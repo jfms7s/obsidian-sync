@@ -144,6 +144,14 @@ export interface StoredVault {
   ignoresUnconfirmed?: boolean;
 }
 
+/** Large local deletions waiting for the user's answer (sync/deletion-hold.ts); paths are normalized. */
+export interface DeletionHold {
+  /** Deleted here, not pushed: waiting for "delete on all devices" or "restore here". */
+  held: string[];
+  /** The user chose "delete on all devices": pushed as usual, not held again. */
+  approved: string[];
+}
+
 /** Creates or migrates the stores; each step runs only for databases older than it. */
 export function upgradeSchema(d: IDBDatabase, oldVersion: number, tx: IDBTransaction): void {
   if (oldVersion < 1) {
@@ -210,6 +218,9 @@ export class LocalState {
   getPendingVault(): Promise<PendingVault | undefined> { return this.kvGet('pendingVault'); }
   setPendingVault(p: PendingVault): Promise<void> { return this.kvPut('pendingVault', p); }
   clearPendingVault(): Promise<void> { return this.kvDelete('pendingVault'); }
+
+  getDeletionHold(): Promise<DeletionHold | undefined> { return this.kvGet('deletionHold'); }
+  setDeletionHold(h: DeletionHold): Promise<void> { return this.kvPut('deletionHold', h); }
 
   getVault(): Promise<StoredVault | undefined> { return this.kvGet('vault'); }
   setVault(v: StoredVault): Promise<void> { return this.kvPut('vault', v); }
@@ -412,7 +423,7 @@ export class LocalState {
   /**
    * Drops all sync state for the vault (switching vaults or logging out):
    * files, bases, pending commits, dirty paths, refusals, failures, the
-   * cursor and the stored vault keys. The session, the user's keys, a
+   * cursor, the deletion hold and the stored vault keys. The session, the user's keys, a
    * pending key setup, a pending vault creation, settings and the dirty
    * generation counter are kept.
    */
@@ -422,6 +433,7 @@ export class LocalState {
       await req(t.objectStore(KV).delete('cursor'));
       await req(t.objectStore(KV).delete('cursorAnchor'));
       await req(t.objectStore(KV).delete('vault'));
+      await req(t.objectStore(KV).delete('deletionHold'));
     });
   }
 }

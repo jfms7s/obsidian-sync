@@ -290,6 +290,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
         await this.render();
       })));
     }
+    await this.renderHeldDeletions();
     this.renderIgnore();
     new Setting(this.containerEl).setName('Deleted files').setDesc('Restore a file that was deleted. To see the earlier versions of a note, use the history command or the note\'s menu.')
       .addButton((b) => b.setButtonText('Show deleted files').onClick(() => new TrashModal(this.app, this.shell).open()));
@@ -298,6 +299,25 @@ export class ObsyncSettingTab extends PluginSettingTab {
       .addButton((b) => b.setButtonText('Sign out').setWarning().onClick(() => {
         new ConfirmModal(this.app, 'Sign out of Obsync on this device? Your files stay. You will need your passphrase or recovery words to sign in again.', 'Sign out', async () => {
           await this.shell.logout();
+          await this.render();
+        }).open();
+      }));
+  }
+
+  private async renderHeldDeletions(): Promise<void> {
+    const held = await this.shell.heldDeletions();
+    if (held.length === 0) return;
+    new Setting(this.containerEl).setName('Deletions on hold')
+      .setDesc(`${held.length} files deleted on this device are not deleted on your other devices yet. Restore them here, or delete them there too.`)
+      .addButton((b) => b.setButtonText('Restore here').setCta().onClick(this.action(b, async () => {
+        const n = await this.shell.restoreHeldHere();
+        new Notice(`Obsync: restoring ${n} files.`);
+        await this.render();
+      })))
+      .addButton((b) => b.setButtonText('Delete on all devices').setWarning().onClick(() => {
+        new ConfirmModal(this.app, `Delete these ${held.length} files on all your devices? The server keeps them in its deleted files for a while.`, 'Delete on all devices', async () => {
+          const n = await this.shell.deleteHeldEverywhere();
+          new Notice(`Obsync: deleting ${n} files on all devices.`);
           await this.render();
         }).open();
       }));

@@ -254,6 +254,49 @@ describe('the settings tab', () => {
     await s.shell.stop();
   }, 120_000);
 
+  it('shows a large deletion on hold, restores it here, and deletes the next one everywhere after a confirmation', async () => {
+    const user = await newUser(srv);
+    const s = await screen('laptop');
+    await s.render();
+    s.type('Server address', srv.url);
+    s.type('Username', user.username);
+    s.type('Password', user.password);
+    await s.press('Sign in');
+    s.type('Passphrase', 'a long enough passphrase');
+    s.type('Repeat the passphrase', 'a long enough passphrase');
+    await s.press('Create keys');
+    await s.press('I have saved them');
+    await s.press('Create vault');
+    await s.press('Start syncing');
+    const notes = Array.from({ length: 60 }, (_, i) => `notes/n${i}.md`);
+    for (const p of notes) await s.adapter.write(p, new TextEncoder().encode(`${p}\n`));
+    await s.shell.engine!.runCycle();
+    expect(() => s.setting('Deletions on hold')).toThrow();
+
+    for (const p of notes) await s.adapter.remove(p);
+    await s.shell.engine!.runCycle();
+    await s.render();
+    expect(s.setting('Deletions on hold').desc).toMatch(/^60 files deleted on this device/);
+    await s.press('Restore here');
+    await s.shell.engine!.runCycle();
+    expect(s.adapter.snapshot().size).toBe(60);
+    expect(() => s.setting('Deletions on hold')).toThrow();
+
+    for (const p of notes) await s.adapter.remove(p);
+    await s.shell.engine!.runCycle();
+    await s.render();
+    await s.press('Delete on all devices'); // opens the confirmation
+    const confirm = Modal.opened.at(-1)!;
+    expect(confirm.contentEl.allText()).toMatch(/Delete these 60 files on all your devices/);
+    await confirm.contentEl.settings.flatMap((x) => x.buttons).find((b) => b.text === 'Delete on all devices')!.click();
+    await new Promise((r) => setTimeout(r, 100));
+    await s.shell.engine!.runCycle();
+    expect(await s.shell.heldDeletions()).toEqual([]);
+    expect(await s.state.dirtyEntries()).toEqual([]);
+    expect(s.adapter.snapshot().size).toBe(0);
+    await s.shell.stop();
+  }, 120_000);
+
   it('saves ignore rules, reports bad lines by their line number, and signs out after a confirmation', async () => {
     const user = await newUser(srv);
     const s = await screen('laptop');

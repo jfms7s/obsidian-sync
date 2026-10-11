@@ -27,6 +27,32 @@ export class ConfirmModal extends Modal {
   }
 }
 
+/** A large local deletion is on hold: delete the files on every device, restore them here, or decide later (in the settings). */
+export class DeletionHoldModal extends Modal {
+  constructor(app: App, private readonly shell: ShellController, private readonly count: number) {
+    super(app);
+  }
+
+  override onOpen(): void {
+    this.setTitle('Deletions on hold');
+    this.contentEl.createEl('p', {
+      text: `${this.count} files were deleted on this device. So that a mistake does not delete them everywhere, they stay on your other devices until you choose. You can also choose later in the Obsync settings.`,
+    });
+    const run = (fn: () => Promise<number>, done: (n: number) => string) => (): void => {
+      this.close();
+      void fn().then((n) => new Notice(`Obsync: ${done(n)}`)).catch((err: unknown) => new Notice(`Obsync: ${describeError(err).message}`, 10000));
+    };
+    new Setting(this.contentEl)
+      .addButton((b) => b.setButtonText('Restore here').setCta().onClick(run(() => this.shell.restoreHeldHere(), (n) => `restoring ${n} files.`)))
+      .addButton((b) => b.setButtonText('Delete on all devices').setWarning().onClick(run(() => this.shell.deleteHeldEverywhere(), (n) => `deleting ${n} files on all devices.`)))
+      .addButton((b) => b.setButtonText('Decide later').onClick(() => this.close()));
+  }
+
+  override onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
 /** Restores an entry after asking, and tells the user how it went. */
 function askRestore(app: App, shell: ShellController, history: HistoryController, entry: HistoryEntry, label: string): void {
   new ConfirmModal(app, `Restore ${label}? The file will be written to your vault and synced as a new version.`, 'Restore', async () => {
