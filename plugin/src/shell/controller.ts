@@ -15,6 +15,7 @@ import type { RestartBase } from '../sync/settings-files';
 import type { Clock } from '../util/clock';
 import type { Random } from '../util/random';
 import type { VaultAdapter } from '../vault/adapter';
+import { OBSYNC_PLUGIN_ID, type SettingsSyncPolicy } from '../vault/config-policy';
 import { approveServerRemoval, newlyIgnored, type NewlyIgnored } from '../sync/server-removal';
 import { assertValidIgnorePatterns, parseIgnoreFile, VAULT_IGNORE_FILE, type IgnoreRules, type ParsedIgnoreFile } from '../vault/ignore';
 import type { EngineLock } from './engine-lock';
@@ -326,6 +327,47 @@ export class ShellController {
     if (exists || text.trim() !== '') await this.o.adapter.write(VAULT_IGNORE_FILE, new TextEncoder().encode(text));
     this.running?.engine.requestReconcile();
     return { ...parseIgnoreFile(text), newlyIgnored: await newlyIgnored(this.o.state, before, await this.rules(deviceGlobs, text)) };
+  }
+
+  /** This device's settings sync policy (config-policy.ts). */
+  settingsSync(): Promise<SettingsSyncPolicy> {
+    return this.o.state.getSettingsSync();
+  }
+
+  /** Saves the settings sync policy and restarts the engine with it, as setIgnoreGlobs does. */
+  async setSettingsSync(policy: SettingsSyncPolicy): Promise<void> {
+    await this.o.state.setSettingsSync(policy);
+    if (this.wanted && (this.phase === 'starting' || this.phase === 'running')) await this.restart();
+  }
+
+  /**
+   * The community plugins installed in this vault's config folder (a folder
+   * under plugins/ with a manifest.json), by folder name, with the name
+   * their manifest gives; Obsync itself is left out. Sorted by name.
+   */
+  async installedPlugins(): Promise<Array<{ id: string; name: string }>> {
+    const dir = this.o.configDir.replace(/^\/+|\/+$/g, '');
+    const plugins = `${dir}/plugins`;
+    const own = new Set([OBSYNC_PLUGIN_ID, ...(this.o.ownPluginFolders ?? [])]);
+    // Only the config folder, its plugins folder and each plugin's own folder are entered.
+    const skip = (folder: string): boolean => folder !== dir && folder !== plugins && !(folder.startsWith(`${plugins}/`) && !folder.slice(plugins.length + 1).includes('/'));
+    const out: Array<{ id: string; name: string }> = [];
+    for (const path of await this.o.adapter.list(skip)) {
+      const m = /^(.+)\/manifest\.json$/.exec(path);
+      if (!m || !m[1]!.startsWith(`${plugins}/`)) continue;
+      const id = m[1]!.slice(plugins.length + 1);
+      if (id.includes('/') || own.has(id)) continue;
+      let name = id;
+      try {
+        const data = await this.o.adapter.read(path);
+        const parsed: unknown = data ? JSON.parse(new TextDecoder().decode(data)) : null;
+        if (parsed && typeof parsed === 'object' && typeof (parsed as { name?: unknown }).name === 'string') name = (parsed as { name: string }).name;
+      } catch {
+        // an unreadable manifest: the folder name will do
+      }
+      out.push({ id, name });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /** Stops syncing for good (until the user starts again) and forgets the account, its keys and the sync state on this device. */
