@@ -16,10 +16,11 @@ import { toHex } from '../util/bytes';
 import { errorMessage } from '../util/errors';
 import { cryptoRandom, type Random } from '../util/random';
 import type { AdapterEvent, VaultAdapter } from '../vault/adapter';
-import { ConfigCarveOut, SETTINGS_SYNC_OFF, type SettingsSyncPolicy } from '../vault/config-policy';
+import { ConfigCarveOut, SETTINGS_SYNC_OFF, settingsFilePaths, type SettingsSyncPolicy } from '../vault/config-policy';
 import { IgnoreRules, parseIgnoreFile, VAULT_IGNORE_FILE, type ParsedIgnoreFile } from '../vault/ignore';
 import { DEFAULT_MAX_FILE_BYTES, ServerRollbackError, type SyncContext } from './context';
 import { pathOfPushKey } from '../state/failure-keys';
+import { isSyncedHere } from './local';
 import { isCycleError, nextRetryAt } from './failures';
 import type { EngineEvent, EngineListener, SyncStatus } from './events';
 import { applyVaultIgnoreFirst, pull } from './pull';
@@ -28,6 +29,8 @@ import { reconcile } from './reconcile';
 import type { RestartBase } from './settings-files';
 
 export const RECONCILE_INTERVAL_MS = 15 * 60_000;
+/** How often the settings files the policy syncs are looked at: Obsidian reports no event for the config folder (spec D5). */
+export const SETTINGS_POLL_MS = 30_000;
 /** Local changes are synced once they pause this long... */
 export const DEBOUNCE_MS = 500;
 /** ...or at the latest this long after the first of them, so steady typing still syncs. */
@@ -61,6 +64,8 @@ export interface EngineOptions {
    * restarts. Default: a map of this engine's own.
    */
   restartBases?: Map<string, RestartBase>;
+  /** How often to look at the settings files the policy syncs (default SETTINGS_POLL_MS); with autoRun only. */
+  settingsPollMs?: number;
   /**
    * The user's ignore patterns (gitignore-like globs), on top of the
    * defaults, the config folder and the vault's .obsyncignore (which the
@@ -133,6 +138,9 @@ export class SyncEngine {
   /** When the first local event since the last cycle began arrived (null: none). */
   private debounceStart: number | null = null;
   private reconcileTimer: TimerHandle | null = null;
+  private settingsTimer: TimerHandle | null = null;
+  /** The settings files the policy syncs (settingsFilePaths): polled, since no event reports them. */
+  private readonly settingsFiles: readonly string[];
   private applyRetryTimer: TimerHandle | null = null;
   private applyRetryAt = Infinity;
 
@@ -163,6 +171,7 @@ export class SyncEngine {
     this.clock = opts.clock ?? systemClock;
     this.random = opts.random ?? cryptoRandom;
     this.autoRun = opts.autoRun ?? true;
+    this.settingsFiles = settingsFilePaths(opts.configDir, opts.settingsSync ?? SETTINGS_SYNC_OFF, opts.ownPluginFolders ?? []);
     this.ctx = {
       api: opts.api,
       state: opts.state,
@@ -319,6 +328,7 @@ export class SyncEngine {
     }
     if (this.autoRun) {
       this.scheduleReconcile();
+      this.scheduleSettingsPoll();
       this.schedule(0);
     }
   }
@@ -333,7 +343,8 @@ export class SyncEngine {
     if (this.timer) this.clock.clearTimeout(this.timer);
     if (this.reconcileTimer) this.clock.clearTimeout(this.reconcileTimer);
     if (this.applyRetryTimer) this.clock.clearTimeout(this.applyRetryTimer);
-    this.timer = this.reconcileTimer = this.applyRetryTimer = null;
+    if (this.settingsTimer) this.clock.clearTimeout(this.settingsTimer);
+    this.timer = this.reconcileTimer = this.applyRetryTimer = this.settingsTimer = null;
     this.applyRetryAt = Infinity;
     this.timerAt = Infinity;
     await this.running;
@@ -440,6 +451,45 @@ export class SyncEngine {
       this.reconcileDue = true;
       this.schedule(0);
     }, Math.max(0, at - this.clock.now()));
+  }
+
+  private scheduleSettingsPoll(): void {
+    if (this.settingsFiles.length === 0 || this.stopped) return;
+    this.settingsTimer = this.clock.setTimeout(() => {
+      this.settingsTimer = null;
+      void this.pollSettings()
+        .catch(() => undefined) // the database failed: the next poll, or the reconcile, tries again
+        .finally(() => this.scheduleSettingsPoll());
+    }, this.opts.settingsPollMs ?? SETTINGS_POLL_MS);
+  }
+
+  /**
+   * Looks at each settings file the policy syncs (a stat each) and queues
+   * the ones that differ from what was last synced in size or mtime, or
+   * appeared or disappeared, for the next cycle. Returns how many. Records
+   * of files this device did not write (still ignored, say) are left to reconcile.
+   */
+  async pollSettings(): Promise<number> {
+    let changed = 0;
+    for (const path of this.settingsFiles) {
+      if (this.ctx.ignore.matches(path)) continue; // another rule ignores it here
+      let st: Awaited<ReturnType<VaultAdapter['stat']>>;
+      try {
+        st = await this.opts.adapter.stat(path);
+      } catch {
+        continue; // unreadable now: push reports it once it is queued another way
+      }
+      const rec = (await this.ctx.state.filesByPath(path)).find((r) => r.path === path);
+      const synced = isSyncedHere(rec);
+      const differs = st
+        ? (!rec || (synced && (rec.deleted || st.mtime !== rec.localMtime || st.size !== rec.size)))
+        : synced && !rec.deleted;
+      if (!differs) continue;
+      await this.ctx.state.markDirty(path);
+      changed++;
+    }
+    if (changed > 0) this.debounce();
+    return changed;
   }
 
   private scheduleReconcile(): void {
