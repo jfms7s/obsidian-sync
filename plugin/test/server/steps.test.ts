@@ -6,6 +6,7 @@ import * as account from '../../src/services/account';
 import { chooseVault, createVault } from '../../src/services/vaults';
 import { nextStep } from '../../src/shell/steps';
 import { LocalState } from '../../src/state/store';
+import { generateUserKeys } from '../../src/crypto/userkeys';
 import { seededRandom } from '../../src/util/random';
 import { Net } from '../helpers/net';
 import { newUser, TEST_ARGON2, PASSPHRASE } from '../helpers/fixture';
@@ -58,6 +59,31 @@ describe('nextStep', () => {
     expect(await nextStep(second)).toEqual({ kind: 'choose-vault' });
     await chooseVault(second, api2, s2, keys2, vault.vaultId);
     expect(await nextStep(second)).toEqual({ kind: 'ready' });
+  });
+
+  it('asks to set the passphrase again when the server lost the keys this device holds', async () => {
+    const user = await newUser(srv);
+    const state = await LocalState.open(new IDBFactory(), 'reupload');
+    const session = await account.login(state, srv.url, user.username, user.password, 'Laptop', 'test');
+    const keys = generateUserKeys(seededRandom(14));
+    await state.setUserKeys({ userId: session.userId, encPriv: keys.encPriv, signSeed: keys.signSeed });
+    expect(await nextStep(state)).toEqual({ kind: 'setup-keys', reupload: true });
+  });
+
+  it('asks to choose a vault when the stored one belongs to the account that signed in before', async () => {
+    const r = seededRandom(15);
+    const state = await LocalState.open(new IDBFactory(), 'other-user-vault');
+    const first = await newUser(srv);
+    const s1 = await account.login(state, srv.url, first.username, first.password, 'Laptop', 'test');
+    const k1 = (await account.setupKeys(state, account.apiFor(s1), s1, PASSPHRASE, r, TEST_ARGON2)).keys;
+    await account.acknowledgeRecoveryWords(state);
+    await createVault(state, account.apiFor(s1), s1, k1, 'Theirs', r);
+    const second = await newUser(srv);
+    const s2 = await account.login(state, srv.url, second.username, second.password, 'Laptop', 'test');
+    await account.setupKeys(state, account.apiFor(s2), s2, PASSPHRASE, r, TEST_ARGON2);
+    await account.acknowledgeRecoveryWords(state);
+    expect((await state.getVault())?.userId).toBe(s1.userId);
+    expect(await nextStep(state)).toEqual({ kind: 'choose-vault' });
   });
 
   it('keeps a configured device syncing while offline, and reports a missing connection otherwise', async () => {

@@ -4,6 +4,7 @@ import { InsecureServerUrlError } from '../../src/api/url';
 import { CryptoError } from '../../src/crypto/primitives';
 import { Argon2TooCostlyError, InvalidRecoveryWordsError, WrongPassphraseError, WrongRecoveryWordsError } from '../../src/crypto/userkeys';
 import { MissingEpochKeyError } from '../../src/crypto/vaultkeys';
+import { KeysAlreadySetUpError } from '../../src/services/account';
 import { NotInTrashError, PathOccupiedError, UnsyncedChangesError } from '../../src/services/history';
 import { diffLines, MAX_DIFF_LINES } from '../../src/shell/diff';
 import { describeError } from '../../src/shell/errors';
@@ -11,6 +12,15 @@ import { noticeFor } from '../../src/shell/notices';
 import { statusLabel } from '../../src/shell/status';
 
 describe('diffLines', () => {
+  it('handles a shared prefix only, identical text and an empty side around the trimmed middle', () => {
+    expect(diffLines('a\nb\n', 'a\nb\nc\n')).toEqual([{ kind: 'same', text: 'a' }, { kind: 'same', text: 'b' }, { kind: 'add', text: 'c' }]);
+    expect(diffLines('a\nb\nc\n', 'a\nb\n')).toEqual([{ kind: 'same', text: 'a' }, { kind: 'same', text: 'b' }, { kind: 'del', text: 'c' }]);
+    expect(diffLines('a\nb\n', 'a\nb\n')).toEqual([{ kind: 'same', text: 'a' }, { kind: 'same', text: 'b' }]);
+    expect(diffLines('x\ny\n', 'z\nx\ny\n')).toEqual([{ kind: 'add', text: 'z' }, { kind: 'same', text: 'x' }, { kind: 'same', text: 'y' }]);
+    expect(diffLines('', 'a\nb\n')).toEqual([{ kind: 'add', text: 'a' }, { kind: 'add', text: 'b' }]);
+    expect(diffLines('a\nb\n', '')).toEqual([{ kind: 'del', text: 'a' }, { kind: 'del', text: 'b' }]);
+  });
+
   it('marks added, removed and unchanged lines', () => {
     expect(diffLines('a\nb\nc\n', 'a\nB\nc\nd\n')).toEqual([
       { kind: 'same', text: 'a' }, { kind: 'del', text: 'b' }, { kind: 'add', text: 'B' }, { kind: 'same', text: 'c' }, { kind: 'add', text: 'd' },
@@ -109,6 +119,24 @@ describe('describeError', () => {
     expect(describeError(new Argon2TooCostlyError({ memoryKib: 1 << 22, iterations: 99, parallelism: 1 }))).toMatchObject({ message: expect.stringContaining('memory') });
     expect(describeError(new InvalidRecoveryWordsError()).message).toContain('recovery words');
     expect(describeError(new MissingEpochKeyError(3)).message).toMatch(/key/);
+  });
+
+  it('explains a file too large, a changed vault key and an unavailable server', () => {
+    expect(describeError(new ApiError(ErrorCode.TOO_LARGE, 'm', 413))).toEqual({ kind: 'none', message: 'The file is too large for the server.' });
+    expect(describeError(new ApiError(ErrorCode.STALE_EPOCH, 'm', 409))).toEqual({ kind: 'retry', message: 'The vault key changed. Try again.' });
+    expect(describeError(new ApiError(ErrorCode.UNSPECIFIED, 'unavailable', 503))).toEqual({ kind: 'retry', message: 'The server had a problem. Try again later.' });
+  });
+
+  it('does not fail on an empty message', () => {
+    const empty = Object.assign(new KeysAlreadySetUpError(), { message: '' });
+    expect(describeError(empty)).toEqual({ kind: 'fix-input', message: 'This account already has keys.' });
+  });
+
+  it('shows the engine\'s own text for a collision without a copy', () => {
+    for (const code of ['CASE_COLLISION', 'PATH_COLLISION'] as const) {
+      expect(noticeFor({ type: 'notice', code, persistent: false, path: 'a.md', message: 'a.md is not synced from this device' }))
+        .toEqual({ message: 'Obsync: a.md is not synced from this device', timeoutMs: 8000 });
+    }
   });
 
   it('keeps the wording of history errors and shows unknown errors', () => {
