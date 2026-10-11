@@ -160,8 +160,8 @@ You need Go (the `go.mod` pins the toolchain), Node 22.12 or newer, and a C comp
 
 ```bash
 make tools            # buf, protoc-gen-go, golangci-lint into ./bin, and npm ci
-make check            # Go tests (-race) and vet, all linters, plugin typecheck and tests, plugin build
-make convergence      # the random multi-device suite: CONVERGENCE_SEEDS=1000 for the full run
+make check            # Go tests (-race) and vet, all linters, plugin typecheck, unit and server tests, plugin build
+make convergence      # the random multi-device suite (not part of make check): CONVERGENCE_SEEDS=1000 for the full run
 make plugin-install VAULT=~/vaults/test    # build and copy the plugin into a vault
 make docker-build     # image for this machine
 ```

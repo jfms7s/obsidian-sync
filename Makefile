@@ -32,8 +32,9 @@ vet:
 lint-go:
 	cd server && golangci-lint run ./...
 
+# Typecheck and the unit and server tests; the convergence suite is `make convergence`.
 plugin-test: plugin/node_modules
-	cd plugin && npm run typecheck && npm test
+	cd plugin && npm run typecheck && npx vitest run --project '!convergence'
 
 # plugin/dist/ is the folder to install: main.js, manifest.json, styles.css.
 plugin-build: plugin/node_modules
@@ -49,7 +50,9 @@ plugin-lint: plugin/lint/node_modules
 
 lint: lint-go plugin-lint proto-lint
 
-# What CI runs on every push except the slow suites (the convergence suite, the image build).
+# The Go and plugin tests, vet, all linters and the plugin build. CI also runs the
+# convergence suite (make convergence), the image build, and the generated-code,
+# protocol and release-script checks.
 check: test vet lint plugin-test plugin-build
 
 # make plugin-install VAULT=~/vaults/test
@@ -75,6 +78,7 @@ convergence: plugin/node_modules
 
 # Single-arch image for the local machine; CI builds both platforms with buildx.
 # Podman users: DOCKER_BUILD_FLAGS=--format=docker keeps the HEALTHCHECK.
-VERSION ?= $(shell git describe --tags --always --dirty)
+# Outside a git checkout (a source archive) the version is "dev".
+VERSION ?= $(or $(shell git describe --tags --always --dirty 2>/dev/null),dev)
 docker-build:
 	docker build $(DOCKER_BUILD_FLAGS) --build-arg VERSION=$(VERSION) -t obsync:$(VERSION) .

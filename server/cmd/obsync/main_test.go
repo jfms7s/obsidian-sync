@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -30,6 +31,29 @@ func TestMigrateCreatesDatabase(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "meta.db")); err != nil {
 		t.Fatalf("database not created: %v", err)
+	}
+}
+
+// Commands print through stdout, so tests (and any caller of run) see the output.
+func TestCommandsPrintThroughStdout(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"migrate"}, "migrations applied\n"},
+		{[]string{"admin", "user", "list"}, "USERNAME  ID  QUOTA_BYTES\n"},
+	} {
+		var out bytes.Buffer
+		restore := swapStdout(&out)
+		t.Setenv("OBSYNC_DATA_DIR", t.TempDir())
+		err := run(context.Background(), tc.args)
+		restore()
+		if err != nil {
+			t.Fatalf("%v: %v", tc.args, err)
+		}
+		if out.String() != tc.want {
+			t.Fatalf("%v: output = %q, want %q", tc.args, out.String(), tc.want)
+		}
 	}
 }
 

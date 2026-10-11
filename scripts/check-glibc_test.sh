@@ -20,9 +20,15 @@ expect() { # expect <description> <want-exit> <command...>
 }
 
 # A real dynamically linked binary of the host: it needs some GLIBC_2.x symbol.
+# On a host whose ls is static or not linked against glibc (Alpine, busybox)
+# these two cases do not apply; the shim cases below still run.
 real="$(command -v ls)"
-expect "real binary passes a generous limit" 0 "$script" "$real" 99
-expect "real binary fails an impossibly old limit" 1 "$script" "$real" 2.0
+if readelf --dyn-syms -W "$real" 2>/dev/null | grep -q 'GLIBC_[0-9]'; then
+  expect "real binary passes a generous limit" 0 "$script" "$real" 99
+  expect "real binary fails an impossibly old limit" 1 "$script" "$real" 2.0
+else
+  echo "skip: $real has no versioned glibc symbols, so the real-binary cases do not apply"
+fi
 
 # A shim readelf lets us state the symbol versions exactly.
 mkdir -p "$tmp/bin"

@@ -7,7 +7,7 @@
 # version in manifest.json (no leading "v"), and reads versions.json to find
 # the newest release an older Obsidian can run. The server and the plugin
 # share these X.Y.Z tags. Exit status: 0 ok, 1 the tag and the files disagree,
-# 2 bad usage.
+# 2 bad usage or jq missing.
 set -euo pipefail
 
 tag="${1:-}"
@@ -19,8 +19,14 @@ fi
 
 fail() { echo "check-release-version: $*" >&2; exit 1; }
 
+if ! command -v jq >/dev/null; then
+  echo "check-release-version: jq is required" >&2
+  exit 2
+fi
+
 [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "tag '$tag' must be a bare X.Y.Z version (no v prefix, no suffix)"
 
+jq -e . "$root/manifest.json" >/dev/null 2>&1 || fail "manifest.json is not valid JSON"
 manifest_version="$(jq -er .version "$root/manifest.json")" || fail "manifest.json has no version"
 min_app="$(jq -er .minAppVersion "$root/manifest.json")" || fail "manifest.json has no minAppVersion"
 [ "$manifest_version" = "$tag" ] || fail "tag $tag is not the manifest.json version ($manifest_version)"
