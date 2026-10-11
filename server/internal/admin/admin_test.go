@@ -6,10 +6,12 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jfms7s/obsidian-sync/server/internal/admin"
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
 	"github.com/jfms7s/obsidian-sync/server/internal/blob"
+	"github.com/jfms7s/obsidian-sync/server/internal/jobs"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/store/storetest"
 )
@@ -340,5 +342,53 @@ func TestUserDeleteReportsBlobsItCouldNotRemove(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "2 blobs removed, 1 could not be removed") {
 		t.Fatalf("output = %q", out)
+	}
+}
+
+func TestMaintenanceRun(t *testing.T) {
+	st, _ := storetest.New(t)
+	blobs, _ := blob.NewFS(t.TempDir())
+	var got time.Time
+	maintenance := func(_ context.Context, now time.Time) (jobs.Report, error) {
+		got = now
+		return jobs.Report{VersionsPruned: 3, FilesPurged: 2, ChunksDeleted: 7}, nil
+	}
+
+	d, out := deps(t, st, blobs, "")
+	d.Maintenance = maintenance
+	if err := admin.Run(ctx, []string{"maintenance", "run", "--as-of", "2027-01-02T03:04:05Z"}, d); err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2027, 1, 2, 3, 4, 5, 0, time.UTC); !got.Equal(want) {
+		t.Fatalf("now = %v, want %v", got, want)
+	}
+	for _, want := range []string{"2027-01-02T03:04:05Z", "3 versions pruned", "2 files purged", "7 chunks deleted"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output %q does not say %q", out, want)
+		}
+	}
+
+	d, _ = deps(t, st, blobs, "")
+	d.Maintenance = maintenance
+	before := time.Now()
+	if err := admin.Run(ctx, []string{"maintenance", "run"}, d); err != nil {
+		t.Fatal(err)
+	}
+	if got.Before(before) || time.Since(got) > time.Minute {
+		t.Fatalf("without --as-of, now = %v, want the current time", got)
+	}
+
+	for _, bad := range [][]string{{"maintenance", "run", "--as-of", "yesterday"}, {"maintenance", "run", "extra"}, {"maintenance"}} {
+		d, _ := deps(t, st, blobs, "")
+		d.Maintenance = maintenance
+		if err := admin.Run(ctx, bad, d); err == nil {
+			t.Errorf("%v: expected an error", bad)
+		}
+	}
+
+	d, _ = deps(t, st, blobs, "")
+	d.Maintenance = func(context.Context, time.Time) (jobs.Report, error) { return jobs.Report{}, jobs.ErrLeaseHeld }
+	if err := admin.Run(ctx, []string{"maintenance", "run"}, d); err == nil || !strings.Contains(err.Error(), "stop the server") {
+		t.Fatalf("err = %v, want advice to stop the server", err)
 	}
 }

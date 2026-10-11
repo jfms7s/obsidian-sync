@@ -1,5 +1,5 @@
 // Package admin implements `obsync admin`, the operator's user and device
-// management.
+// management and on-demand maintenance.
 package admin
 
 import (
@@ -17,6 +17,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
 	"github.com/jfms7s/obsidian-sync/server/internal/blob"
 	"github.com/jfms7s/obsidian-sync/server/internal/ids"
+	"github.com/jfms7s/obsidian-sync/server/internal/jobs"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 )
 
@@ -32,7 +33,8 @@ var errUsage = errors.New(`usage: obsync admin user create --username NAME [--qu
        obsync admin user set-password --username NAME [--revoke-devices]   (password on stdin)
        obsync admin user delete --username NAME [--yes]
        obsync admin device list --username NAME
-       obsync admin device revoke --username NAME (--id DEVICE_ID | --all)`)
+       obsync admin device revoke --username NAME (--id DEVICE_ID | --all)
+       obsync admin maintenance run [--as-of RFC3339]`)
 
 type Store interface {
 	CreateUser(ctx context.Context, u store.User) error
@@ -53,6 +55,8 @@ type Deps struct {
 	Params            auth.Params
 	Stdin             io.Reader // the password, one line
 	Stdout            io.Writer
+	// Maintenance runs one maintenance pass as if the time were now.
+	Maintenance func(ctx context.Context, now time.Time) (jobs.Report, error)
 }
 
 func Run(ctx context.Context, args []string, d Deps) error {
@@ -72,6 +76,8 @@ func Run(ctx context.Context, args []string, d Deps) error {
 		return deviceList(ctx, args[2:], d)
 	case "device revoke":
 		return deviceRevoke(ctx, args[2:], d)
+	case "maintenance run":
+		return maintenanceRun(ctx, args[2:], d)
 	}
 	return errUsage
 }
@@ -240,6 +246,41 @@ func deviceRevoke(ctx context.Context, args []string, d Deps) error {
 		return err
 	}
 	fmt.Fprintf(d.Stdout, "revoked 1 device of %s\n", u.Username)
+	return nil
+}
+
+// maintenanceRun runs one pass of retention pruning, trash purge and chunk
+// GC now, or as if the time were --as-of: a later time makes the server's
+// data that much older (tests, and operators checking what retention will
+// remove). It needs the maintenance lease, which a running server holds.
+func maintenanceRun(ctx context.Context, args []string, d Deps) error {
+	fs := flag.NewFlagSet("maintenance run", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	asOfArg := fs.String("as-of", "", "")
+	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
+		return errUsage
+	}
+	asOf := time.Now()
+	if *asOfArg != "" {
+		t, err := time.Parse(time.RFC3339, *asOfArg)
+		if err != nil {
+			return errors.New("--as-of must be an RFC 3339 time, such as 2027-01-31T00:00:00Z")
+		}
+		asOf = t
+	}
+	if d.Maintenance == nil {
+		return errors.New("maintenance is not available")
+	}
+	rep, err := d.Maintenance(ctx, asOf)
+	if errors.Is(err, jobs.ErrLeaseHeld) {
+		return errors.New("another obsync process holds the maintenance lease; a running server keeps it, so stop the server first")
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(d.Stdout, "maintenance as of %s: %s pruned, %s purged from the trash, %s deleted\n",
+		asOf.UTC().Format(time.RFC3339), plural(rep.VersionsPruned, "version"), plural(rep.FilesPurged, "file"),
+		plural(rep.ChunksDeleted, "chunk"))
 	return nil
 }
 

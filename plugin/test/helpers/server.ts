@@ -21,6 +21,13 @@ export interface TestServer {
   hotSnapshot(): Promise<string>;
   /** Stops the server, replaces its data with a snapshot (a restore from backup) and starts it again on the same port. */
   restore(snapshot: string): Promise<void>;
+  /**
+   * Stops the server, runs one maintenance pass (`obsync admin maintenance
+   * run --as-of`) on its data as if the time were asOf, and starts it again:
+   * the server's data becomes that much older. Resolves with the command's
+   * output.
+   */
+  maintenance(asOf: Date): Promise<string>;
   stop(): Promise<void>;
 }
 
@@ -178,6 +185,19 @@ export async function startServer(bin: string, opts: { env?: Record<string, stri
       rmSync(dataDir, { recursive: true, force: true });
       cpSync(snapshot, dataDir, { recursive: true });
       await relaunch(listen);
+    },
+    maintenance: async (asOf) => {
+      // The running server holds the maintenance lease (and releases it on exit).
+      await kill(proc);
+      try {
+        return await new Promise<string>((resolve, reject) => {
+          execFile(bin, ['admin', 'maintenance', 'run', '--as-of', asOf.toISOString()], { env }, (err, out, stderr) =>
+            err ? reject(new Error(`admin maintenance run: ${stderr || err.message}`)) : resolve(out),
+          );
+        });
+      } finally {
+        await relaunch(listen);
+      }
     },
     stop: async () => {
       await kill(proc);

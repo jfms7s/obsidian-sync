@@ -90,11 +90,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts Option
 			TrustedProxies: cfg.TrustedProxyPrefixes(),
 		},
 	})
-	runner := jobs.New(st, blobs, jobs.Config{
-		Interval:  cfg.JobsInterval(),
-		Retention: cfg.Retention,
-		GCGrace:   cfg.GCGrace(),
-	}, time.Now, log)
+	runner := jobs.New(st, blobs, JobsConfig(cfg), time.Now, log)
 	return &App{Store: st, Blobs: blobs, Handler: handler, Hub: h, Jobs: runner, log: log}, nil
 }
 
@@ -141,6 +137,12 @@ func OpenStore(ctx context.Context, cfg config.Config) (*store.Store, error) {
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
 	return st, nil
+}
+
+// JobsConfig is the maintenance runner's configuration, for serve and for
+// obsync admin maintenance run alike.
+func JobsConfig(cfg config.Config) jobs.Config {
+	return jobs.Config{Interval: cfg.JobsInterval(), Retention: cfg.Retention, GCGrace: cfg.GCGrace()}
 }
 
 // OpenBlobs builds the configured blob store. Every command that touches
