@@ -25,3 +25,5 @@ export * as history from './services/history';
 export { NotInTrashError, PathOccupiedError, UnsyncedChangesError } from './services/history';
 export * as vaults from './services/vaults';
 export { openSyncSession, type SyncSessionOptions, type SyncSessionResult } from './services/session';
+// Large local deletions held for a person's answer (the plugin asks in a modal, obsync-cli has a command).
+export * as deletions from './sync/deletion-hold';
