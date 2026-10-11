@@ -93,6 +93,23 @@ describe('ApiClient against obsync', () => {
     expect(net.count('POST', '/v1/vaults')).toBe(1);
   });
 
+  it('reports the storage used by the account and each vault it owns', async () => {
+    const bob = new ApiClient({ baseUrl: srv.url });
+    await srv.createUser('bob', 'bob-password');
+    await bob.login('bob', 'bob-password', 'd', 'node');
+    const empty = await bob.usage();
+    expect(empty).toMatchObject({ usedBytes: 0, vaults: new Map() });
+    expect(empty!.quotaBytes).toBeGreaterThan(0);
+
+    const one = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const two = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    for (const id of [one, two]) await bob.createVault(id, r.bytes(40), [{ epoch: 0, sealedKey: r.bytes(92) }, { epoch: 1, sealedKey: r.bytes(92) }]);
+    await bob.putChunk(one, r.bytes(32), r.bytes(300));
+    await bob.putChunk(two, r.bytes(32), r.bytes(45));
+    const got = await bob.usage();
+    expect(got).toEqual({ usedBytes: 345, quotaBytes: empty!.quotaBytes, vaults: new Map([[one, 300], [two, 45]]) });
+  });
+
   it('lists devices and logs out', async () => {
     const other = new ApiClient({ baseUrl: srv.url });
     await other.login('alice', 'alice-password', 'second', 'node');
