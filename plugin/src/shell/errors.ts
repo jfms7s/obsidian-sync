@@ -21,8 +21,11 @@ function apiMessage(err: ApiError): UserError {
     case ErrorCode.DEVICE_REVOKED:
       return { kind: 'login', message: 'This device was removed from your account. Sign in again.' };
     case ErrorCode.WRONG_PASSWORD:
-      // The server's message says which: the password, a missing code, or a wrong or used code.
-      return { kind: 'fix-input', message: sentence(err.message, 'The account password is wrong.') };
+      // Two-step sign-in answers a missing, wrong or used code with this code too; its message names the code.
+      if (/\bcode\b/i.test(err.message)) {
+        return { kind: 'fix-input', message: 'The code is wrong or was used already. Enter the code your authenticator app shows now, or a recovery code.' };
+      }
+      return { kind: 'fix-input', message: 'The account password is wrong.' };
     case ErrorCode.SECOND_FACTOR_REQUIRED:
       return { kind: 'fix-input', message: 'Enter the code from your authenticator app, or a recovery code.' };
     case ErrorCode.QUOTA_EXCEEDED:

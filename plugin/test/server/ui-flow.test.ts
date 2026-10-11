@@ -540,7 +540,7 @@ describe('the settings tab', () => {
     expect(s.setting('Off').desc).toMatch(/authenticator app/);
     s.type('Account password', 'not the password');
     await s.press('Set up');
-    expect(s.text()).toMatch(/Wrong account password\./);
+    expect(s.text()).toMatch(/The account password is wrong\./);
     s.type('Account password', user.password);
     await s.press('Set up');
     const key = s.setting('Key').desc.replace(/ /g, '');
@@ -549,7 +549,7 @@ describe('the settings tab', () => {
     expect(s.setting('Set-up link').desc).toBe(`otpauth://totp/obsync:${user.username}?algorithm=SHA1&digits=6&issuer=obsync&period=30&secret=${key}`);
     s.type('Code from the app', '000000');
     await s.press('Turn on');
-    expect(s.text()).toMatch(/The code is wrong/);
+    expect(s.text()).toMatch(/The code is wrong or was used already/);
     s.type('Code from the app', totpCode(key));
     await s.press('Turn on');
     const grid = s.el().children.find((c) => c.cls === 'obsync-recovery-words')!;

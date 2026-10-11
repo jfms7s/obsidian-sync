@@ -133,6 +133,8 @@ describe('describeError', () => {
     expect(describeError(err(ErrorCode.UNAUTHORIZED))).toMatchObject({ kind: 'login' });
     expect(describeError(err(ErrorCode.DEVICE_REVOKED))).toMatchObject({ kind: 'login', message: expect.stringContaining('removed') });
     expect(describeError(err(ErrorCode.WRONG_PASSWORD, 'm', 403))).toMatchObject({ kind: 'fix-input', message: expect.stringContaining('password') });
+    expect(describeError(err(ErrorCode.WRONG_PASSWORD, 'the code is wrong, or was used already', 403))).toMatchObject({ kind: 'fix-input', message: expect.stringContaining('authenticator app') });
+    expect(describeError(err(ErrorCode.SECOND_FACTOR_REQUIRED, 'm', 401))).toMatchObject({ kind: 'fix-input', message: expect.stringContaining('authenticator app') });
     expect(describeError(err(ErrorCode.QUOTA_EXCEEDED, 'm', 413))).toMatchObject({ kind: 'none', message: expect.stringContaining('quota') });
     expect(describeError(err(ErrorCode.RATE_LIMITED, 'm', 429, 7000))).toMatchObject({ kind: 'retry', message: expect.stringContaining('7 seconds') });
     expect(describeError(err(ErrorCode.INTERNAL, 'boom', 500))).toMatchObject({ kind: 'retry' });
