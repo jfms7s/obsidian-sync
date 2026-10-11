@@ -8,7 +8,7 @@ import { buildKeyring } from '../../src/crypto/vaultkeys';
 import { LocalState } from '../../src/state/store';
 import { DEFAULT_MAX_FILE_BYTES, type SyncContext } from '../../src/sync/context';
 import type { EngineEvent } from '../../src/sync/events';
-import { batchCommits, PushMemory, pushRound } from '../../src/sync/push';
+import { batchCommits, PushMemory, pushRound, UPLOAD_CONCURRENCY } from '../../src/sync/push';
 import { toHex } from '../../src/util/bytes';
 import { ManualClock } from '../../src/util/clock';
 import { seededRandom } from '../../src/util/random';
@@ -156,5 +156,55 @@ describe('pushRound with MISSING_CHUNK', () => {
     expect(server.commits[3]).not.toBe(first); // a new commit, not the dropped one
     expect(server.puts).toBe(4);
     expect(await dirty()).toEqual([]);
+  });
+});
+
+describe('pushRound transfers', () => {
+  async function device(name: string, o: { maxBytesPerRound?: number } = {}) {
+    const r = seededRandom(11);
+    const ring = await buildKeyring('0123456789abcdef0123456789abcdef', r.bytes(32), new Map([[1, r.bytes(32)]]), 1);
+    const state = await LocalState.open(new IDBFactory(), name);
+    const clock = new ManualClock();
+    const adapter = new MemoryAdapter(false, clock);
+    const server = { inFlight: 0, most: 0, batches: [] as number[] };
+    let seq = 0;
+    const api = {
+      chunksExist: async (_v: string, ids: Uint8Array[]) => ids.map(() => false),
+      putChunk: async () => {
+        server.most = Math.max(server.most, ++server.inFlight);
+        await new Promise((res) => setTimeout(res, 5));
+        server.inFlight--;
+      },
+      commit: async (_v: string, commits: CommitInput[]): Promise<CommitReply> => {
+        server.batches.push(commits.length);
+        return { results: commits.map((c) => ({ fileId: c.fileId, ok: true, seq: ++seq, headVersionId: c.versionId })), vaultSeq: seq };
+      },
+    } as unknown as ApiClient;
+    const ctx: SyncContext = {
+      api, state, adapter, ring, deviceName: 'd', clock, random: r, ignore: new IgnoreRules(), maxFileBytes: DEFAULT_MAX_FILE_BYTES,
+      emit: () => undefined, ...o,
+    };
+    const write = async (path: string, content: string) => {
+      await adapter.write(path, new TextEncoder().encode(content));
+      await state.markDirty(path);
+    };
+    return { ctx, server, write };
+  }
+
+  it('uploads a few chunks at a time', async () => {
+    const { ctx, server, write } = await device('push-concurrency');
+    for (let i = 0; i < 8; i++) await write(`n${i}.md`, `note ${i}\n`);
+    expect(await pushRound(ctx, new PushMemory())).toMatchObject({ committed: 8 });
+    expect(server.most).toBeGreaterThan(1);
+    expect(server.most).toBeLessThanOrEqual(UPLOAD_CONCURRENCY);
+  });
+
+  it('stops a round at maxBytesPerRound', async () => {
+    const { ctx, server, write } = await device('push-round-bytes', { maxBytesPerRound: 10 });
+    for (const p of ['a.md', 'b.md', 'c.md']) await write(p, '1234567\n'); // 8 bytes each
+    const mem = new PushMemory();
+    await pushRound(ctx, mem);
+    await pushRound(ctx, mem);
+    expect(server.batches).toEqual([2, 1]);
   });
 });

@@ -4,13 +4,13 @@
 import { build } from 'esbuild';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { options } from '../../esbuild.config.mjs';
+import { options, optionsFor } from '../../esbuild.config.mjs';
 import * as fakeObsidian from '../fakes/obsidian';
 
 afterEach(() => vi.unstubAllGlobals());
 
-async function bundle(): Promise<string> {
-  const result = await build({ ...options, outfile: 'main.js', write: false, sourcemap: false, logLevel: 'silent' });
+async function bundle(o = options): Promise<string> {
+  const result = await build({ ...o, outfile: 'main.js', write: false, sourcemap: false, logLevel: 'silent' });
   return result.outputFiles![0]!.text;
 }
 
@@ -23,6 +23,14 @@ describe('the plugin bundle', () => {
     expect(code.length).toBeLessThan(2_000_000);
     // BigInt literals and class fields are fine at ES2020; top-level await would not be.
     expect(code).not.toMatch(/^await /m);
+  });
+
+  it('is minified for a release, still requiring nothing but obsidian, and much smaller', async () => {
+    const plain = await bundle(optionsFor('development'));
+    const code = await bundle(optionsFor('production'));
+    const required = [...code.matchAll(/require\((["'])([^"']+)\1\)/g)].map((m) => m[2]);
+    expect(new Set(required)).toEqual(new Set(['obsidian']));
+    expect(code.length).toBeLessThan(plain.length * 0.75);
   });
 
   it('exports a plugin that loads, registers its commands and settings tab, and unloads', async () => {
