@@ -96,6 +96,9 @@ describe('names that differ only in letter case', () => {
     // File ids depend on the vault's naming key, so across fresh vaults the
     // lower one is sometimes the name the second device wrote and sometimes
     // the one the first device wrote: both ways must end the same.
+    // Which side wins in each round depends on the vault keys, which come
+    // from the seeded random of newDevice's counter: the rounds are the same
+    // on every run, and the last line checks that both sides won at least once.
     const wonBy = new Set<string>();
     for (let round = 0; round < 8; round++) {
       const user = await newUser(srv);
