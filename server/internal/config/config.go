@@ -252,6 +252,11 @@ func (c Config) Validate() error {
 		default:
 			add("database_url scheme %q is not supported (use file:, libsql://, http:// or https://)", u.Scheme)
 		}
+		// The token is a full read/write credential for the database: never
+		// send it in clear beyond this host.
+		if u.Scheme == "http" && c.DatabaseAuthToken != "" && !isLoopbackHost(u.Hostname()) {
+			add("database_url must use https:// or libsql:// when an auth token is set (http:// is allowed only for a loopback host)")
+		}
 	}
 	switch c.DatabaseSynchronous {
 	case "full":
@@ -339,6 +344,15 @@ func parseProxy(s string) (netip.Prefix, error) {
 	}
 	a = a.Unmap()
 	return netip.PrefixFrom(a, a.BitLen()), nil
+}
+
+// isLoopbackHost reports whether host is localhost or a loopback address.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	addr, err := netip.ParseAddr(host)
+	return err == nil && addr.IsLoopback()
 }
 
 // TrustedProxyPrefixes returns TrustedProxies parsed. Entries that do not

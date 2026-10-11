@@ -121,6 +121,13 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (LoginResult, err
 	if len(req.Password) > maxPasswordBytes {
 		return LoginResult{}, errPasswordTooLong()
 	}
+	// A name no account can have is refused before it becomes a limiter key,
+	// so oversized or garbage names cannot fill the limiter. No password
+	// check is spent on it: that it cannot exist is no secret, the rule is
+	// public.
+	if !ValidUsername(strings.TrimSpace(req.Username)) {
+		return LoginResult{}, ErrInvalidCredentials
+	}
 	key := limiterKey(req.Username)
 	// Every attempt spends a token up front; only a successful login gives
 	// them back. Lookup errors and corrupt hashes therefore count too.

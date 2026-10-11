@@ -52,6 +52,12 @@ type Options struct {
 	// a query per subscribed vault; Pings are not rate limited, so without
 	// this a client pinging in a loop would load the store.
 	MembershipRecheckInterval time.Duration
+	// TokenRecheckInterval is the least time between two checks of the
+	// socket's device token (default 5s). Every frame used to run one, a
+	// database query, and Pings are not rate limited. A revoked device is
+	// therefore cut off at its first frame after this interval (or by the
+	// idle timeout if it stops sending), or at its next HTTP request.
+	TokenRecheckInterval time.Duration
 }
 
 type Hub struct {
@@ -78,6 +84,9 @@ func New(a Authenticator, v Vaults, b bus.Bus, log *slog.Logger, opts Options) *
 	}
 	if opts.MembershipRecheckInterval == 0 {
 		opts.MembershipRecheckInterval = 15 * time.Second
+	}
+	if opts.TokenRecheckInterval == 0 {
+		opts.TokenRecheckInterval = 5 * time.Second
 	}
 	return &Hub{auth: a, vaults: v, bus: b, log: log, opts: opts}
 }
@@ -122,6 +131,7 @@ type conn struct {
 
 	lastSubscribe time.Time // zero until the first Subscribe
 	lastRecheck   time.Time // zero until the first membership recheck
+	lastAuth      time.Time // when the token was last checked
 
 	mu   sync.Mutex
 	subs map[string]func() // vault id → bus cancel
@@ -136,10 +146,14 @@ func (c *conn) run() error {
 		if err := c.readIdle(&f); err != nil {
 			return err
 		}
-		// Every frame revalidates the token, so a revoked device can't stay
-		// connected by sending frames other than Ping.
-		if _, err := c.hub.auth.Authenticate(c.ctx, c.token); err != nil {
-			return c.fail(err)
+		// Any frame, not just Ping, revalidates the token (at most once per
+		// TokenRecheckInterval), so a revoked device can't stay connected by
+		// sending other frames.
+		if time.Since(c.lastAuth) >= c.hub.opts.TokenRecheckInterval {
+			if _, err := c.hub.auth.Authenticate(c.ctx, c.token); err != nil {
+				return c.fail(err)
+			}
+			c.lastAuth = time.Now()
 		}
 		switch m := f.Frame.(type) {
 		case *obsyncv1.ClientFrame_Subscribe:
@@ -185,7 +199,7 @@ func (c *conn) authenticate() error {
 	if err != nil {
 		return c.fail(err)
 	}
-	c.token, c.sess = a.GetToken(), sess
+	c.token, c.sess, c.lastAuth = a.GetToken(), sess, time.Now()
 	return c.send(&obsyncv1.ServerFrame{Frame: &obsyncv1.ServerFrame_AuthOk{AuthOk: &obsyncv1.AuthOk{DeviceId: sess.DeviceID}}})
 }
 

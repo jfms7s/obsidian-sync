@@ -142,6 +142,35 @@ func TestDatabaseSynchronous(t *testing.T) {
 	}
 }
 
+// The auth token is a full read/write credential for the metadata database:
+// it may only cross the network encrypted.
+func TestValidateRefusesAuthTokenOverPlainHTTP(t *testing.T) {
+	for _, tc := range []struct {
+		url, token string
+		ok         bool
+	}{
+		{"http://db.example:8080", "secret", false},
+		{"http://10.0.0.5:8080", "secret", false},
+		{"http://127.0.0.1:8080", "secret", true},
+		{"http://localhost:8080", "secret", true},
+		{"http://[::1]:8080", "secret", true},
+		{"http://db.example:8080", "", true},
+		{"https://db.example", "secret", true},
+		{"libsql://db.example", "secret", true},
+	} {
+		_, err := config.Load("", env(map[string]string{"OBSYNC_DATABASE_URL": tc.url, "OBSYNC_DATABASE_AUTH_TOKEN": tc.token}))
+		if tc.ok && err != nil {
+			t.Errorf("%s with token %q: %v", tc.url, tc.token, err)
+		}
+		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "https://")) {
+			t.Errorf("%s with token %q: err = %v, want a refusal naming https://", tc.url, tc.token, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "secret") {
+			t.Errorf("the error leaks the token: %v", err)
+		}
+	}
+}
+
 func TestValidateRejectsNonPositiveLimits(t *testing.T) {
 	_, err := config.Load("", env(map[string]string{"OBSYNC_DEFAULT_QUOTA_BYTES": "0", "OBSYNC_GC_GRACE_HOURS": "0"}))
 	if err == nil {

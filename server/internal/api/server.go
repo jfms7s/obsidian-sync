@@ -74,7 +74,10 @@ func NewHandler(d Deps) http.Handler {
 	h.registerVaultRoutes(mux)
 	if d.Hub != nil {
 		// The socket authenticates in its first frame, so the upgrade is
-		// limited per address; frames after that are paced by the hub.
+		// limited per address. Frames after that are not rate limited; the
+		// hub bounds the work they cause (Subscribe at most once per
+		// MinSubscribeInterval, and the token and membership rechecks at
+		// most once per their intervals).
 		mux.Handle("GET /v1/ws", h.ipLimited(d.Hub))
 	}
 	return h.recoverer(h.protoFallback(mux))

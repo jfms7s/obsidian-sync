@@ -59,8 +59,9 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
         -ldflags "-s -w -X main.version=${VERSION}" \
         -o /out/obsync ./cmd/obsync \
  # The final image has no shell, so /data is created here and copied over
- # with its owner set, which also makes a fresh named volume writable.
- && mkdir /out/data
+ # with its owner set, which also makes a fresh named volume writable. Mode
+ # 0700: the database holds password and token hashes (COPY keeps the mode).
+ && mkdir -m 0700 /out/data
 
 # Just the binary, for the release workflow: `--target binary --output type=local,dest=out`
 # gives the same bookworm-built executable the image holds (checked against glibc 2.36).
