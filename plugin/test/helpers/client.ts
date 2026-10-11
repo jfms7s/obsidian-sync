@@ -1,6 +1,8 @@
 // Simulated devices running the real engine (no UI): a fixture Device plus
 // a SyncEngine over the same state, adapter and network.
 import { SyncEngine } from '../../src/sync/engine';
+import type { RestartBase } from '../../src/sync/settings-files';
+import { SETTINGS_SYNC_OFF, type SettingsSyncPolicy } from '../../src/vault/config-policy';
 import { newDevice, type Device, type DeviceOptions, type User } from './fixture';
 import type { TestServer } from './server';
 
@@ -8,10 +10,14 @@ export interface SimClient extends Device {
   engine: SyncEngine;
   /** The device's ignore globs; setIgnore changes them. */
   ignoreGlobs: string[];
-  /** A fresh engine over the same state and adapter, as after an app restart. */
+  /** A fresh engine over the same state and adapter, as after a settings change (the plugin keeps running). */
   restart(): Promise<void>;
+  /** A fresh engine as after Obsidian restarted: also forgets the settings files written since the last load. */
+  reload(): Promise<void>;
   /** Changes the ignore globs and restarts the engine, as the settings tab does. */
   setIgnore(globs: string[]): Promise<void>;
+  /** Changes the settings sync policy and restarts the engine, as the settings tab does. */
+  setSettingsSync(policy: SettingsSyncPolicy): Promise<void>;
 }
 
 export interface ClientOptions extends DeviceOptions {
@@ -19,15 +25,19 @@ export interface ClientOptions extends DeviceOptions {
   autoRun?: boolean;
   /** Default false: no hub WebSocket. */
   webSocket?: boolean;
+  /** Default SETTINGS_SYNC_OFF. */
+  settingsSync?: SettingsSyncPolicy;
 }
 
 export async function makeClient(srv: TestServer, user: User, o: ClientOptions): Promise<SimClient> {
   const dev = await newDevice(srv, user, o);
   let ignoreGlobs = [...(o.ignoreGlobs ?? [])];
+  let settingsSync = o.settingsSync ?? SETTINGS_SYNC_OFF;
+  const restartBases = new Map<string, RestartBase>(); // as the shell keeps it: across engine restarts
   const build = () => {
     const engine = new SyncEngine({
       api: dev.api, state: dev.state, adapter: dev.adapter, ring: dev.ring, deviceName: dev.name, clock: dev.clock,
-      random: dev.random, configDir: '.obsidian', ignoreGlobs, webSocket: o.webSocket ? dev.net.webSocket : null,
+      random: dev.random, configDir: '.obsidian', ignoreGlobs, settingsSync, restartBases, webSocket: o.webSocket ? dev.net.webSocket : null,
       autoRun: o.autoRun ?? false, backoff: { baseMs: 20, maxMs: 200 }, maxFileBytes: dev.ctx.maxFileBytes,
     });
     engine.on((e) => dev.events.push(e));
@@ -46,10 +56,18 @@ export async function makeClient(srv: TestServer, user: User, o: ClientOptions):
       ignoreGlobs = [...globs];
       await client.restart();
     },
+    setSettingsSync: async (policy) => {
+      settingsSync = policy;
+      await client.restart();
+    },
     restart: async () => {
       await client.engine.stop();
       client.engine = build();
       await client.engine.start();
+    },
+    reload: async () => {
+      restartBases.clear();
+      await client.restart();
     },
   };
   await client.engine.start();

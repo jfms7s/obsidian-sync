@@ -430,6 +430,60 @@ describe('the settings tab', () => {
     await s.shell.stop();
   }, 120_000);
 
+  it('turns settings sync on with its defaults, per file and per plugin, and syncs what it names', async () => {
+    const user = await newUser(srv);
+    const s = await screen('laptop');
+    await s.render();
+    s.type('Server address', srv.url);
+    s.type('Username', user.username);
+    s.type('Password', user.password);
+    await s.press('Sign in');
+    s.type('Passphrase', 'a long enough passphrase');
+    s.type('Repeat the passphrase', 'a long enough passphrase');
+    await s.press('Create keys');
+    await s.press('I have saved them');
+    await s.press('Create vault');
+    await s.press('Start syncing');
+    const enc = (t: string) => new TextEncoder().encode(t);
+    await s.adapter.write('.obsidian/app.json', enc('{"vimMode":true}'));
+    await s.adapter.write('.obsidian/hotkeys.json', enc('{}'));
+    await s.adapter.write('.obsidian/plugins/dataview/manifest.json', enc('{"id":"dataview","name":"Dataview"}'));
+    await s.adapter.write('.obsidian/plugins/dataview/data.json', enc('{"x":1}'));
+    await s.adapter.write('.obsidian/plugins/dataview/main.js', enc('code'));
+    await s.adapter.write('.obsidian/plugins/obsync/manifest.json', enc('{"id":"obsync","name":"Obsync"}'));
+    await s.render();
+    const toggle = (name: string) => s.setting(name).toggles[0]!;
+    const flip = async (name: string) => {
+      await toggle(name).flip();
+      await new Promise((r) => setTimeout(r, 100));
+    };
+    expect(s.text()).toMatch(/same config folder name \(\.obsidian\)/);
+    expect(toggle('Sync Obsidian settings with my other devices').value).toBe(false);
+    expect(() => s.setting('Hotkeys')).toThrow(); // nothing more until it is on
+    expect(await s.shell.settingsSync()).toMatchObject({ enabled: false });
+
+    await flip('Sync Obsidian settings with my other devices');
+    expect(await s.shell.settingsSync()).toEqual({
+      enabled: true, pluginData: [],
+      core: { 'app.json': true, 'appearance.json': true, 'hotkeys.json': true, 'core-plugins.json': true, 'community-plugins.json': true },
+    });
+    expect(toggle('Hotkeys').value).toBe(true);
+    expect(toggle('Dataview').value).toBe(false);
+    expect(() => s.setting('Obsync')).toThrow(); // its own settings never sync
+    await flip('Hotkeys');
+    await flip('Dataview');
+    expect(await s.shell.settingsSync()).toMatchObject({ core: { 'hotkeys.json': false }, pluginData: ['dataview'] });
+
+    await s.shell.engine!.runCycle();
+    const vault = (await s.state.getVault())!;
+    const api = apiFor((await s.state.getSession())!);
+    expect((await api.heads(vault.vaultId, null)).heads).toHaveLength(2); // app.json and dataview's data.json
+
+    await flip('Sync Obsidian settings with my other devices'); // off again: the choices are kept
+    expect(await s.shell.settingsSync()).toMatchObject({ enabled: false, core: { 'hotkeys.json': false }, pluginData: ['dataview'] });
+    await s.shell.stop();
+  }, 120_000);
+
   it('saves ignore rules, reports bad lines by their line number, and signs out after a confirmation', async () => {
     const user = await newUser(srv);
     const s = await screen('laptop');

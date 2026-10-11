@@ -6,6 +6,7 @@ import type { Random } from '../util/random';
 import type { VaultAdapter } from '../vault/adapter';
 import type { IgnoreRules } from '../vault/ignore';
 import type { EngineEvent } from './events';
+import type { RestartBase } from './settings-files';
 
 /** Everything push, pull and reconcile need; built and owned by SyncEngine. */
 export interface SyncContext {
@@ -22,6 +23,14 @@ export interface SyncContext {
   vaultIgnoreFileId?: string;
   /** Called after a version of the vault's .obsyncignore was applied: reads it and rebuilds ignore. */
   reloadVaultIgnore?(): Promise<void>;
+  /**
+   * Settings files written from other devices since the plugin loaded, with
+   * the text each had before the first such write: what Obsidian still
+   * holds in memory until it restarts, and may write back (settings-files.ts).
+   */
+  restartBases?: Map<string, RestartBase>;
+  /** A settings file from another device (named by device) was written here. */
+  onSettingsApplied?(path: string, device: string): void;
   /** Files larger than this are neither uploaded nor downloaded by this device. */
   maxFileBytes: number;
   /** Bytes of file content one push round takes on at most (default MAX_BYTES_PER_ROUND); less on a phone, to hold less in memory. */
