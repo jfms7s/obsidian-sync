@@ -21,7 +21,13 @@ function apiMessage(err: ApiError): UserError {
     case ErrorCode.DEVICE_REVOKED:
       return { kind: 'login', message: 'This device was removed from your account. Sign in again.' };
     case ErrorCode.WRONG_PASSWORD:
+      // Two-step sign-in answers a missing, wrong or used code with this code too; its message names the code.
+      if (/\bcode\b/i.test(err.message)) {
+        return { kind: 'fix-input', message: 'The code is wrong or was used already. Enter the code your authenticator app shows now, or a recovery code.' };
+      }
       return { kind: 'fix-input', message: 'The account password is wrong.' };
+    case ErrorCode.SECOND_FACTOR_REQUIRED:
+      return { kind: 'fix-input', message: 'Enter the code from your authenticator app, or a recovery code.' };
     case ErrorCode.QUOTA_EXCEEDED:
       return { kind: 'none', message: 'The storage quota is used up. Free some space or ask the server\'s administrator.' };
     case ErrorCode.RATE_LIMITED: {

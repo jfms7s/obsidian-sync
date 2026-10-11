@@ -15,6 +15,7 @@ import { App, Modal, Notice, Plugin, Vault, type ButtonComponent, type FakeEl, t
 import { Net } from '../helpers/net';
 import { newUser } from '../helpers/fixture';
 import { startServer, type TestServer } from '../helpers/server';
+import { totpCode } from '../helpers/totp';
 
 let srv: TestServer;
 beforeAll(async () => {
@@ -572,6 +573,99 @@ describe('the settings tab', () => {
     clock.advance(120_000);
     await new Promise((r) => setTimeout(r, 50));
     expect(s.net.count('GET', '/v1/account/usage')).toBe(before + 1);
+    await s.shell.stop();
+  }, 120_000);
+  it('turns two-step sign-in on, asks a new device for a code only when the server does, and turns it off with a recovery code', async () => {
+    const user = await newUser(srv);
+    const s = await screen('laptop');
+    await s.render();
+    s.type('Server address', srv.url);
+    s.type('Username', user.username);
+    s.type('Password', user.password);
+    await s.press('Sign in');
+    s.type('Passphrase', 'a long enough passphrase');
+    s.type('Repeat the passphrase', 'a long enough passphrase');
+    await s.press('Create keys');
+    await s.press('I have saved them');
+    await s.press('Create vault');
+    await s.press('Start syncing');
+
+    expect(s.setting('Two-step sign-in').heading).toBe(true);
+    expect(s.setting('Off').desc).toMatch(/authenticator app/);
+    s.type('Account password', 'not the password');
+    await s.press('Set up');
+    expect(s.text()).toMatch(/The account password is wrong\./);
+    s.type('Account password', user.password);
+    await s.press('Set up');
+    const key = s.setting('Key').desc.replace(/ /g, '');
+    expect(key).toMatch(/^[A-Z2-7]{32}$/);
+    expect(s.setting('Key').desc).toMatch(/^([A-Z2-7]{4} ){7}[A-Z2-7]{4}$/);
+    expect(s.setting('Set-up link').desc).toBe(`otpauth://totp/obsync:${user.username}?algorithm=SHA1&digits=6&issuer=obsync&period=30&secret=${key}`);
+    s.type('Code from the app', '000000');
+    await s.press('Turn on');
+    expect(s.text()).toMatch(/The code is wrong or was used already/);
+    s.type('Code from the app', totpCode(key));
+    await s.press('Turn on');
+    const grid = s.el().children.find((c) => c.cls === 'obsync-recovery-words')!;
+    const codes = grid.children.map((c) => c.text);
+    expect(codes).toHaveLength(10);
+    expect(codes[0]).toMatch(/^[0-9a-z]{5}-[0-9a-z]{5}$/);
+    await s.press('I have saved them');
+    expect(s.setting('On').desc).toMatch(/10 recovery codes left/);
+
+    // A second device: no code field until the server asks for one; what was typed stays.
+    const phone = await screen('phone');
+    await phone.render();
+    phone.type('Server address', srv.url);
+    phone.type('Username', user.username);
+    phone.type('Password', user.password);
+    expect(() => phone.setting('Code')).toThrow();
+    await phone.press('Sign in');
+    expect(phone.setting('Sign in').heading).toBe(true);
+    expect(phone.field('Password').value).toBe(user.password);
+    phone.type('Code', '000000');
+    await phone.press('Sign in');
+    expect(phone.setting('Sign in').heading).toBe(true);
+    expect(await phone.state.getSession()).toBeUndefined();
+    phone.type('Code', codes[0]!);
+    await phone.press('Sign in');
+    expect(phone.setting('Unlock this device').heading).toBe(true);
+
+    // Off again, with the password and a recovery code; the laptop never had to sign in again.
+    await s.render();
+    expect(s.setting('On').desc).toMatch(/9 recovery codes left/);
+    s.type('Account password', user.password);
+    s.type('Code', codes[1]!);
+    await s.press('Turn off');
+    expect(s.setting('Off')).toBeTruthy();
+    expect(Notice.shown.some((n) => n.message === 'Obsync: two-step sign-in is off.')).toBe(true);
+    expect(await s.state.getSession()).toBeDefined();
+    await s.shell.stop();
+  }, 120_000);
+
+  it('hides the two-step sign-in section when the server cannot say (an older server, or a failure)', async () => {
+    const user = await newUser(srv);
+    const s = await screen('laptop');
+    await s.render();
+    s.type('Server address', srv.url);
+    s.type('Username', user.username);
+    s.type('Password', user.password);
+    await s.press('Sign in');
+    s.type('Passphrase', 'a long enough passphrase');
+    s.type('Repeat the passphrase', 'a long enough passphrase');
+    await s.press('Create keys');
+    await s.press('I have saved them');
+    await s.press('Create vault');
+    await s.press('Start syncing');
+    const setup = (s.tab as unknown as { setup: { twoStepStatus(): Promise<unknown> } }).setup;
+    const old = vi.spyOn(setup, 'twoStepStatus').mockResolvedValueOnce(null);
+    await s.render();
+    expect(() => s.setting('Two-step sign-in')).toThrow();
+    old.mockRejectedValueOnce(new Error('offline'));
+    await s.render();
+    expect(() => s.setting('Two-step sign-in')).toThrow();
+    expect(s.setting('Sync').heading).toBe(true);
+    old.mockRestore();
     await s.shell.stop();
   }, 120_000);
 });

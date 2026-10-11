@@ -29,6 +29,18 @@ export interface AccountUsage {
   vaults: Map<string, number>;
 }
 
+/** GET /v1/account/totp. */
+export interface TotpStatus {
+  enabled: boolean;
+  recoveryCodesLeft: number;
+}
+
+/** A secret to add to an authenticator app: typed in (base32) or opened as an otpauth:// link. */
+export interface TotpSetup {
+  secret: string;
+  uri: string;
+}
+
 export interface SealedVaultKey {
   epoch: number;
   sealedKey: Uint8Array;

@@ -5,6 +5,7 @@ import { ErrorCode, NetworkError } from '../../src/api/errors';
 import type { KeyBundleFields } from '../../src/api/types';
 import { seededRandom } from '../../src/util/random';
 import { Net } from '../helpers/net';
+import { totpCode } from '../helpers/totp';
 import { startServer, type TestServer } from '../helpers/server';
 
 let srv: TestServer;
@@ -108,6 +109,35 @@ describe('ApiClient against obsync', () => {
     await bob.putChunk(two, r.bytes(32), r.bytes(45));
     const got = await bob.usage();
     expect(got).toEqual({ usedBytes: 345, quotaBytes: empty!.quotaBytes, vaults: new Map([[one, 300], [two, 45]]) });
+  });
+
+  it('sets up two-step sign-in, then logs in with a code or a recovery code, and turns it off', async () => {
+    await srv.createUser('tess', 'tess-password');
+    const tess = new ApiClient({ baseUrl: srv.url });
+    await tess.login('tess', 'tess-password', 'laptop', 'node');
+    expect(await tess.totpStatus()).toEqual({ enabled: false, recoveryCodesLeft: 0 });
+    await expect(tess.totpBegin('wrong')).rejects.toMatchObject({ code: ErrorCode.WRONG_PASSWORD, status: 403 });
+    const setup = await tess.totpBegin('tess-password');
+    expect(setup.secret).toMatch(/^[A-Z2-7]{32}$/);
+    expect(setup.uri).toBe(`otpauth://totp/obsync:tess?algorithm=SHA1&digits=6&issuer=obsync&period=30&secret=${setup.secret}`);
+    await expect(tess.totpConfirm('000000')).rejects.toMatchObject({ code: ErrorCode.WRONG_PASSWORD });
+    const codes = await tess.totpConfirm(totpCode(setup.secret));
+    expect(codes).toHaveLength(10);
+    expect(await tess.totpStatus()).toEqual({ enabled: true, recoveryCodesLeft: 10 });
+
+    const other = new ApiClient({ baseUrl: srv.url });
+    await expect(other.login('tess', 'tess-password', 'phone', 'node')).rejects.toMatchObject({ code: ErrorCode.SECOND_FACTOR_REQUIRED, status: 401 });
+    await expect(other.login('tess', 'tess-password', 'phone', 'node', '000000')).rejects.toMatchObject({ code: ErrorCode.UNAUTHORIZED });
+    await other.login('tess', 'tess-password', 'phone', 'node', codes[0]);
+    expect(other.token).toBeTruthy();
+    expect(await tess.totpStatus()).toEqual({ enabled: true, recoveryCodesLeft: 9 });
+
+    const fresh = await tess.totpNewRecoveryCodes('tess-password', codes[1]!);
+    expect(fresh).toHaveLength(10);
+    await expect(tess.totpDisable('tess-password', codes[2]!)).rejects.toMatchObject({ code: ErrorCode.WRONG_PASSWORD });
+    await tess.totpDisable('tess-password', fresh[0]!);
+    expect(await tess.totpStatus()).toEqual({ enabled: false, recoveryCodesLeft: 0 });
+    await new ApiClient({ baseUrl: srv.url }).login('tess', 'tess-password', 'tablet', 'node');
   });
 
   it('lists devices and logs out', async () => {
