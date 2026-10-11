@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Obsidian's plugin lint rules, in a package of their own: typescript-eslint does not support the TypeScript 7 the plugin itself is built with.",
+  "description": "Obsidian's plugin lint rules, in a package of their own: typescript-eslint does not support the TypeScript 7 the plugin itself is built with. Fold plugin/lint back into plugin/ when typescript-eslint supports TypeScript 7 (expected with TS 7.1's API); until then the lint package stays on TS 5.x.",
   "scripts": {
     "lint": "cd ../.. && plugin/lint/node_modules/.bin/eslint --config plugin/lint/eslint.config.mjs --max-warnings 0 plugin/src"
   },
