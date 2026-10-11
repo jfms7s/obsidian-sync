@@ -14,5 +14,8 @@
     "obsidian": "1.8.7",
     "typescript": "5.9.3",
     "typescript-eslint": "8.71.1"
+  },
+  "overrides": {
+    "moment": "2.31.0"
   }
 }
