@@ -91,7 +91,7 @@ Put a reverse proxy with TLS in front of it (the compose example's `Caddyfile` i
 | `admin user set-password --username NAME [--revoke-devices]` | Sets a new password. Signed-in devices stay signed in unless `--revoke-devices` signs them all out (do that after a suspected compromise) |
 | `admin device list --username NAME` | Lists the account's devices, when they were last seen and whether they are revoked |
 | `admin device revoke --username NAME (--id DEVICE_ID \| --all)` | Signs one device, or all of them, out for good |
-| `admin maintenance run [--as-of TIME]` | Runs one pass of history pruning, trash purge and chunk cleanup now, or as if the time were `TIME` (RFC 3339, e.g. `2027-01-31T00:00:00Z`). The server runs the same pass every `OBSYNC_JOBS_INTERVAL_MINUTES` and holds a lease on it while it runs, so stop the server first |
+| `admin maintenance run [--as-of TIME]` | Runs one pass of history pruning, trash purge and chunk cleanup now, or as if the time were `TIME` (RFC 3339, e.g. `2027-01-31T00:00:00Z`). The server runs the same pass every `OBSYNC_JOBS_INTERVAL_MINUTES` under a lease; while its pass (or an export) runs, this one is refused, so try again a minute later |
 | `admin user delete --username NAME --yes` | Deletes the account with all its vaults and their history. Without `--yes` it only says what it would delete. It cannot be undone |
 
 ### Configuration
