@@ -16,6 +16,7 @@ export type NoticeCode =
   | 'INVALID_PATH' // a local path cannot be synced
   | 'CONTENT_MISSING' // the server lost a chunk of a version; it is skipped
   | 'DELETIONS_HELD' // persistent: a large local deletion waits for the user's answer before it reaches other devices
+  | 'IGNORE_LINES_SKIPPED' // some lines of the vault's .obsyncignore use unsupported syntax; the rest applies
   | 'FILE_FAILED'; // one file failed (for example a local I/O error); retried later, the rest keeps syncing
 
 export type EngineEvent =
@@ -37,7 +38,7 @@ export type EngineEvent =
     /** For TOO_LARGE: the file's size and this device's limit, in bytes. */
     size?: number;
     limit?: number;
-    /** For DELETIONS_HELD: how many deleted files are on hold. */
+    /** For DELETIONS_HELD: how many deleted files are on hold; for IGNORE_LINES_SKIPPED, how many lines were skipped. */
     count?: number;
   }
   | { type: 'conflict'; path: string; conflictPath: string }

@@ -8,6 +8,7 @@ import { CryptoError, sha256 } from '../crypto/primitives';
 import { epochKeys, type EpochKeys, type VaultKeyring } from '../crypto/vaultkeys';
 import { equalBytes, fromUtf8Strict, toHex } from '../util/bytes';
 import { extension } from '../util/path';
+import { isVaultIgnoreFile } from '../vault/ignore';
 import { mapConcurrently } from '../util/pool';
 import { FileSyncError } from './failures';
 
@@ -18,7 +19,7 @@ export const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
 ]);
 
 export function isTextPath(path: string): boolean {
-  return TEXT_EXTENSIONS.has(extension(path));
+  return TEXT_EXTENSIONS.has(extension(path)) || isVaultIgnoreFile(path);
 }
 
 /** The content as text if path is a text type and the bytes are valid UTF-8, else null. */

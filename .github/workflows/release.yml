@@ -51,7 +51,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      # The same bookworm build stage as the image, cross-compiled: no emulation.
+      # The same build stage as the image, cross-compiled: no emulation.
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -59,8 +59,11 @@ jobs:
           platforms: linux/${{ matrix.arch }}
           build-args: VERSION=${{ github.ref_name }}
           outputs: type=local,dest=out
-      - name: Needs no newer glibc than the runtime image has
-        run: scripts/check-glibc.sh out/obsync
+      - name: The binary is static
+        run: |
+          if readelf -lW out/obsync | grep -q 'program interpreter'; then
+            echo "out/obsync is dynamically linked" >&2; exit 1
+          fi
       - name: Package
         run: |
           name="obsync_${GITHUB_REF_NAME}_linux_${{ matrix.arch }}"

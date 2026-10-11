@@ -46,8 +46,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 		stmts := splitStatements(string(src))
 		for _, stmt := range stmts {
-			// A ';' anywhere but the end means two statements were merged,
-			// and go-libsql would silently run only the first.
+			// A ';' anywhere but the end means two statements were merged
+			// into one Exec (see splitStatements).
 			if strings.Count(stmt, ";") > 1 || (strings.Contains(stmt, ";") && !strings.HasSuffix(stmt, ";")) {
 				return fmt.Errorf("migration %s: each statement must end its own line with ';': %.60q", name, stmt)
 			}
@@ -110,9 +110,12 @@ func listMigrations() ([]migration, error) {
 	return out, nil
 }
 
-// splitStatements splits a migration into single statements, because
-// go-libsql's Exec runs only the first statement of a multi-statement string
-// and silently ignores the rest. A statement ends at a line ending in ';'.
+// splitStatements splits a migration into single statements. go-libsql, the
+// driver before modernc.org/sqlite, ran only the first statement of a
+// multi-statement Exec and silently ignored the rest; running one statement
+// per Exec keeps migrations independent of a driver's multi-statement
+// support, which a future remote client may lack. A statement ends at a line
+// ending in ';'.
 // Blank lines and lines starting with "--" are dropped. Migrations must
 // therefore put at most one statement per line group, end it with ';' at the
 // end of a line, and avoid ';' inside literals, trailing comments and triggers;

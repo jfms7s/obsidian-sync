@@ -158,16 +158,36 @@ func TestValidateRefusesAuthTokenOverPlainHTTP(t *testing.T) {
 		{"https://db.example", "secret", true},
 		{"libsql://db.example", "secret", true},
 	} {
+		// Every remote URL fails while remote databases are not supported;
+		// the token rule must still hold for when they return.
 		_, err := config.Load("", env(map[string]string{"OBSYNC_DATABASE_URL": tc.url, "OBSYNC_DATABASE_AUTH_TOKEN": tc.token}))
-		if tc.ok && err != nil {
+		refused := err != nil && strings.Contains(err.Error(), "when an auth token is set")
+		if tc.ok && refused {
 			t.Errorf("%s with token %q: %v", tc.url, tc.token, err)
 		}
-		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "https://")) {
-			t.Errorf("%s with token %q: err = %v, want a refusal naming https://", tc.url, tc.token, err)
+		if !tc.ok && !refused {
+			t.Errorf("%s with token %q: err = %v, want the auth token refusal", tc.url, tc.token, err)
 		}
 		if err != nil && strings.Contains(err.Error(), "secret") {
 			t.Errorf("the error leaks the token: %v", err)
 		}
+	}
+}
+
+// Remote databases wait for clustered mode: the settings stay, but a remote
+// URL is refused at startup, naming only the scheme.
+func TestValidateRefusesRemoteDatabases(t *testing.T) {
+	for _, u := range []string{"libsql://admin:hunter2@db.example", "https://db.example/?authToken=hunter2", "http://127.0.0.1:8080"} {
+		_, err := config.Load("", env(map[string]string{"OBSYNC_DATABASE_URL": u}))
+		if err == nil || !strings.Contains(err.Error(), "not supported yet") {
+			t.Errorf("%s: err = %v, want remote databases not supported", u, err)
+		}
+		if err != nil && (strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "db.example")) {
+			t.Errorf("the error echoes the URL: %v", err)
+		}
+	}
+	if _, err := config.Load("", env(map[string]string{"OBSYNC_DATABASE_URL": "file:/var/lib/obsync/meta.db"})); err != nil {
+		t.Errorf("file: URL: %v", err)
 	}
 }
 
