@@ -9,12 +9,13 @@ import * as account from '../services/account';
 import { openSyncSession, type SyncSessionResult } from '../services/session';
 import type { LocalState } from '../state/store';
 import { heldDeletions, releaseHeldDeletions, restoreHeldDeletions } from '../sync/deletion-hold';
-import type { SyncEngine } from '../sync/engine';
+import { composeIgnoreRules, type SyncEngine } from '../sync/engine';
 import type { EngineEvent, SyncStatus } from '../sync/events';
 import type { Clock } from '../util/clock';
 import type { Random } from '../util/random';
 import type { VaultAdapter } from '../vault/adapter';
-import { assertValidIgnorePatterns, parseIgnoreFile, VAULT_IGNORE_FILE, type ParsedIgnoreFile } from '../vault/ignore';
+import { approveServerRemoval, newlyIgnored, type NewlyIgnored } from '../sync/server-removal';
+import { assertValidIgnorePatterns, parseIgnoreFile, VAULT_IGNORE_FILE, type IgnoreRules, type ParsedIgnoreFile } from '../vault/ignore';
 import type { EngineLock } from './engine-lock';
 import { HistoryController } from './history-controller';
 
@@ -264,12 +265,34 @@ export class ShellController {
    * Throws InvalidIgnorePatternError for unsupported syntax; otherwise saves
    * the rules and restarts the engine with them. A start still in line for
    * the lock reads them when its turn comes; one already past that is
-   * restarted.
+   * restarted. Returns the synced files the new rules newly ignore: they
+   * stay on the server until removeFromServer is asked for them.
    */
-  async setIgnoreGlobs(globs: string[]): Promise<void> {
+  async setIgnoreGlobs(globs: string[]): Promise<NewlyIgnored> {
     assertValidIgnorePatterns(globs);
+    const vaultText = await this.vaultIgnoreText();
+    const before = this.rules(await this.o.state.getIgnoreGlobs(), vaultText);
     await this.o.state.setIgnoreGlobs(globs);
     if (this.wanted && (this.phase === 'starting' || this.phase === 'running')) await this.restart();
+    return newlyIgnored(this.o.state, before, this.rules(globs, vaultText));
+  }
+
+  /** This device's ignore rules with these device globs and this .obsyncignore text. */
+  private rules(deviceGlobs: readonly string[], vaultText: string): IgnoreRules {
+    // Globs saved before validation existed could be unsupported: skip them here as the vault file does.
+    const device = parseIgnoreFile(deviceGlobs.join('\n')).globs;
+    return composeIgnoreRules({ configDir: this.o.configDir, caseInsensitive: this.o.adapter.caseInsensitive, ignoreGlobs: device, vaultGlobs: parseIgnoreFile(vaultText).globs });
+  }
+
+  /**
+   * "Also remove them from the server": deletes these files on the server,
+   * as if they were deleted here, while this device keeps its copies.
+   * Only paths the rules still ignore when the push runs are deleted. Other
+   * devices that do not ignore them move their copies to the trash.
+   */
+  async removeFromServer(paths: readonly string[]): Promise<void> {
+    await approveServerRemoval(this.o.state, paths);
+    this.running?.engine.requestSync();
   }
 
   /** The text of the vault's .obsyncignore ('' when there is none). */
@@ -284,13 +307,15 @@ export class ShellController {
    * asks the engine to compare everything with the new rules and push the
    * file: Obsidian reports no event for a hidden file. Lines with
    * unsupported syntax are saved too and skipped by every device; they are
-   * returned in rejected.
+   * returned in rejected. newlyIgnored: as for setIgnoreGlobs.
    */
-  async setVaultIgnoreText(text: string): Promise<ParsedIgnoreFile> {
+  async setVaultIgnoreText(text: string): Promise<ParsedIgnoreFile & { newlyIgnored: NewlyIgnored }> {
+    const deviceGlobs = await this.o.state.getIgnoreGlobs();
+    const before = this.rules(deviceGlobs, await this.vaultIgnoreText());
     const exists = (await this.o.adapter.stat(VAULT_IGNORE_FILE)) !== null;
     if (exists || text.trim() !== '') await this.o.adapter.write(VAULT_IGNORE_FILE, new TextEncoder().encode(text));
     this.running?.engine.requestReconcile();
-    return parseIgnoreFile(text);
+    return { ...parseIgnoreFile(text), newlyIgnored: await newlyIgnored(this.o.state, before, this.rules(deviceGlobs, text)) };
   }
 
   /** Stops syncing for good (until the user starts again) and forgets the account, its keys and the sync state on this device. */
