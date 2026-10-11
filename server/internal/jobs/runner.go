@@ -1,6 +1,7 @@
 // Package jobs runs periodic maintenance: retention pruning, chunk garbage
 // collection, then (daily) removal of stale blob temp files. A database lease makes
-// one replica run it at a time.
+// one process run it at a time, and lets obsync admin export keep it from
+// deleting anything while a backup is taken.
 package jobs
 
 import (
@@ -16,8 +17,12 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 )
 
+// LeaseName is the database lease a maintenance pass holds. Anything that
+// must not see chunks or versions deleted under it (obsync admin export)
+// holds the same lease.
+const LeaseName = "maintenance"
+
 const (
-	leaseName       = "maintenance"
 	gcBatch         = 500
 	maxGCBatches    = 100
 	defaultInterval = time.Hour
@@ -93,7 +98,7 @@ func (r *Runner) Run(ctx context.Context) {
 func (r *Runner) releaseLease(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 	defer cancel()
-	if err := r.st.ReleaseLease(ctx, leaseName, r.holder); err != nil {
+	if err := r.st.ReleaseLease(ctx, LeaseName, r.holder); err != nil {
 		r.log.Warn("release maintenance lease", "err", err)
 	}
 }
@@ -109,10 +114,14 @@ type Report struct {
 // single node, the running server, which keeps it while it runs.
 var ErrLeaseHeld = errors.New("another process holds the maintenance lease")
 
-// RunOnce runs one pass if this runner can take the lease, and keeps the
-// lease for the next pass. Without the lease it does nothing.
+// RunOnce runs one pass if this runner can take the lease, then gives the
+// lease back, so between passes an export or an on-demand pass can take it.
+// Without the lease it does nothing.
 func (r *Runner) RunOnce(ctx context.Context) error {
-	_, _, err := r.pass(ctx)
+	_, ran, err := r.pass(ctx)
+	if ran {
+		r.releaseLease(ctx)
+	}
 	return err
 }
 
@@ -133,7 +142,7 @@ func (r *Runner) RunPass(ctx context.Context) (Report, error) {
 
 // pass takes the lease and runs one pass; ran reports whether it got the lease.
 func (r *Runner) pass(ctx context.Context) (rep Report, ran bool, err error) {
-	ok, err := r.st.AcquireLease(ctx, leaseName, r.holder, 2*r.cfg.Interval)
+	ok, err := r.st.AcquireLease(ctx, LeaseName, r.holder, 2*r.cfg.Interval)
 	if err != nil {
 		return Report{}, false, fmt.Errorf("acquire lease: %w", err)
 	}

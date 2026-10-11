@@ -252,7 +252,8 @@ func deviceRevoke(ctx context.Context, args []string, d Deps) error {
 // maintenanceRun runs one pass of retention pruning, trash purge and chunk
 // GC now, or as if the time were --as-of: a later time makes the server's
 // data that much older (tests, and operators checking what retention will
-// remove). It needs the maintenance lease, which a running server holds.
+// remove). It needs the maintenance lease, which a running server holds only
+// while its own pass runs.
 func maintenanceRun(ctx context.Context, args []string, d Deps) error {
 	fs := flag.NewFlagSet("maintenance run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -273,7 +274,7 @@ func maintenanceRun(ctx context.Context, args []string, d Deps) error {
 	}
 	rep, err := d.Maintenance(ctx, asOf)
 	if errors.Is(err, jobs.ErrLeaseHeld) {
-		return errors.New("another obsync process holds the maintenance lease; a running server keeps it, so stop the server first")
+		return errors.New("another obsync process holds the maintenance lease (a pass or an export is running); try again in a minute")
 	}
 	if err != nil {
 		return err
