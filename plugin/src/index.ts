@@ -16,7 +16,7 @@ export { systemClock, type Clock } from './util/clock';
 export { cryptoRandom, type Random } from './util/random';
 export { CONFLICT_COPY_PATTERN, normalizePath } from './util/path';
 export { expectFor, type AdapterEvent, type Expect, type FileStat, type VaultAdapter } from './vault/adapter';
-export { DEFAULT_IGNORES, IgnoreRules, InvalidIgnorePatternError, validateIgnorePattern } from './vault/ignore';
+export { DEFAULT_IGNORES, IgnoreRules, InvalidIgnorePatternError, parseIgnoreFile, validateIgnorePattern, VAULT_IGNORE_FILE } from './vault/ignore';
 // In-memory adapter for tests and tooling, not for real vaults.
 export { MemoryAdapter } from './vault/memory';
 export * as account from './services/account';

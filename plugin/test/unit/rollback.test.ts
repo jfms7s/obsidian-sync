@@ -25,6 +25,7 @@ it('detects a server rollback and forgets synced versions', async () => {
       changesCalls++;
       return { versions: [], vaultSeq: 3, more: false };
     },
+    history: async () => [], // the engine looks up the vault's .obsyncignore before a first pull
     heads: async (): Promise<HeadsPage> => ({ heads: [], more: false }),
   } as unknown as ApiClient;
   const r = seededRandom(1);
