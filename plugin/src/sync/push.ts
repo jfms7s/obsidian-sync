@@ -50,6 +50,8 @@ interface Op {
   /** The pending commit describes the local file as it was when the entry was read. */
   matchesLocal: boolean;
   statMtime: number;
+  /** LocalFile.readAt of the read behind statMtime (-1 with it). */
+  readAt: number;
 }
 
 /** Splits commits so each request stays under the server's count and body limits. */
@@ -117,7 +119,7 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
     // itself, because it landed and came back, or to a newer one), the
     // pending commit is settled or stale; resending it could "succeed" as
     // an idempotent retry of an old version and leave this device behind.
-    if (base === pending.baseVersionId) return { entry, pending, data: null, matchesLocal: false, statMtime: -1 };
+    if (base === pending.baseVersionId) return { entry, pending, data: null, matchesLocal: false, statMtime: -1, readAt: -1 };
     await state.deletePending(fileId);
   }
   if (rec?.shadowed || rec?.tooLarge) {
@@ -160,12 +162,14 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
       chunkIds: [], size: 0, deleted: true, contentHash: null, mtime: meta.mtimeMs, text: null,
     };
     await state.putPending(p);
-    return { entry, pending: p, data: null, matchesLocal: true, statMtime: -1 };
+    return { entry, pending: p, data: null, matchesLocal: true, statMtime: -1, readAt: -1 };
   }
 
   const hash = await hashHex(local.data);
   if (synced && !rec.deleted && rec.contentHash === hash) {
-    if (rec.localMtime !== local.stat.mtime) await state.putFile({ ...rec, localMtime: local.stat.mtime });
+    if (rec.localMtime !== local.stat.mtime || rec.localCheckedAt === undefined) {
+      await state.putFile({ ...rec, localMtime: local.stat.mtime, localCheckedAt: local.readAt });
+    }
     await state.clearDirty(entry.path, entry.gen);
     return null;
   }
@@ -190,7 +194,7 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
     text: decodeText(path, local.data),
   };
   await state.putPending(p);
-  return { entry, pending: p, data: local.data, matchesLocal: true, statMtime: local.stat.mtime };
+  return { entry, pending: p, data: local.data, matchesLocal: true, statMtime: local.stat.mtime, readAt: local.readAt };
 }
 
 /** Uploads every chunk the server lacks. Ops whose content can no longer be produced are dropped (and rebuilt next round). */
@@ -315,7 +319,8 @@ export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<Push
         result.committed++;
         mem.missingChunk.delete(p.fileId);
         await ctx.state.recordSynced(
-          { fileId: p.fileId, path: p.path, versionId: p.versionId, deleted: p.deleted, contentHash: p.contentHash, size: p.size, localMtime: op.matchesLocal ? op.statMtime : -1, hasBase: false, seq: r.seq },
+          { fileId: p.fileId, path: p.path, versionId: p.versionId, deleted: p.deleted, contentHash: p.contentHash, size: p.size, localMtime: op.matchesLocal ? op.statMtime : -1, hasBase: false, seq: r.seq,
+            ...(op.matchesLocal && op.statMtime !== -1 ? { localCheckedAt: op.readAt } : {}) },
           p.text,
           true,
         );

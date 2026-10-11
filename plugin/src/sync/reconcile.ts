@@ -6,6 +6,7 @@ import { normalizePath } from '../util/path';
 import { isCoarseMtime } from '../vault/adapter';
 import { alreadyApplied, applyHead, isSyncedHere } from './apply';
 import { hashHex } from './content';
+import type { FileRecord } from '../state/store';
 import { ServerRollbackError, type SyncContext } from './context';
 import { applyKey, isCycleError, isDeferred } from './failures';
 import { pull, remoteHeads, serverLostHistory } from './pull';
@@ -17,6 +18,19 @@ export interface ReconcileResult {
   vaultSeq: number;
   /** Files not written locally because another file or a folder holds their name. */
   shadowed: number;
+}
+
+/**
+ * Equal size and mtime mean unchanged, except where mtimes are whole
+ * seconds (FAT keeps even two-second steps): there an edit saved in the
+ * same step as the one recorded keeps both. It cannot have happened unseen
+ * once the record's content was checked (localCheckedAt, taken before that
+ * read or write) more than two seconds after its mtime: any later edit
+ * gets a later mtime. Records written within that window, and records
+ * from before localCheckedAt was kept, are read and compared once more.
+ */
+function settled(rec: FileRecord, mtime: number): boolean {
+  return rec.localCheckedAt !== undefined && rec.localCheckedAt - mtime > 2000;
 }
 
 export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
@@ -80,15 +94,16 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
       markedDirty++;
       continue;
     }
-    // Equal size and mtime mean unchanged, unless mtimes are whole seconds (then the content is compared).
-    if (!st || (st.mtime === rec.localMtime && st.size === rec.size && !isCoarseMtime(st.mtime))) continue;
+    if (!st || (st.mtime === rec.localMtime && st.size === rec.size && (!isCoarseMtime(st.mtime) || settled(rec, st.mtime)))) continue;
     if (st.size !== rec.size) {
       // Changed for sure: push reads it (or refuses it when too large).
       await state.markDirty(path);
       markedDirty++;
       continue;
     }
-    // Same size, new mtime: read and compare (a touch, or a sync tool that rewrote it).
+    // Same size, new mtime (a touch, or a sync tool that rewrote it), or a
+    // whole-second mtime not settled yet: read and compare.
+    const checkedAt = ctx.clock.now();
     let data: Uint8Array | null;
     try {
       data = await adapter.read(path);
@@ -97,7 +112,7 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
       data = null; // push reports the read error for this file
     }
     if (data && (await hashHex(data)) === rec.contentHash) {
-      await state.putFile({ ...rec, localMtime: st.mtime });
+      await state.putFile({ ...rec, localMtime: st.mtime, localCheckedAt: checkedAt });
     } else {
       await state.markDirty(path);
       markedDirty++;

@@ -6,12 +6,12 @@ import { merge3 } from '../merge/merge3';
 import type { FileRecord, PendingCommit } from '../state/store';
 import { equalBytes, toHex, utf8 } from '../util/bytes';
 import { caseFold, conflictCopyName } from '../util/path';
-import { expectFor, isCoarseMtime } from '../vault/adapter';
+import { expectFor, isCoarseMtime, type FileStat } from '../vault/adapter';
 import { evictBlockingFile, moveToCopy, saveBeside } from './collisions';
 import { decodeText, downloadContent, hashHex } from './content';
 import type { SyncContext } from './context';
 import { applyKey, clearFailure, isFileError, recordFailure } from './failures';
-import { isSyncedHere, readLocal, type LocalFile } from './local';
+import { isSyncedHere, readLocal } from './local';
 
 export { isSyncedHere, readLocal, type LocalFile } from './local';
 
@@ -176,11 +176,20 @@ async function adoptLanded(ctx: SyncContext, p: PendingCommit, v: RemoteVersion)
   const localHash = local ? await hashHex(local.data) : null;
   const matches = p.deleted ? local === null : localHash === p.contentHash;
   await ctx.state.recordSynced(
-    { fileId: p.fileId, path: p.path, versionId: p.versionId, deleted: p.deleted, contentHash: p.contentHash, size: p.size, localMtime: matches && local ? local.stat.mtime : -1, hasBase: false, seq: v.seq },
+    {
+      fileId: p.fileId, path: p.path, versionId: p.versionId, deleted: p.deleted, contentHash: p.contentHash, size: p.size,
+      localMtime: matches && local ? local.stat.mtime : -1, ...(matches && local ? { localCheckedAt: local.readAt } : {}), hasBase: false, seq: v.seq,
+    },
     p.text,
     true,
   );
   if (!matches) await ctx.state.markDirty(p.path);
+}
+
+/** rec with the mtime of the file just written at path (writtenAt: the engine clock right before the write). */
+async function recordWritten(ctx: SyncContext, path: string, writtenAt: number, rec: FileRecord): Promise<FileRecord> {
+  const after = await ctx.adapter.stat(path);
+  return after ? { ...rec, localMtime: after.mtime, localCheckedAt: writtenAt } : rec;
 }
 
 /**
@@ -191,7 +200,7 @@ async function adoptLanded(ctx: SyncContext, p: PendingCommit, v: RemoteVersion)
  * although the file changed; only the content tells, and reading it again
  * costs one read on such devices only.
  */
-async function stillAsRead(ctx: SyncContext, path: string, local: LocalFile, localHash: string): Promise<boolean> {
+async function stillAsRead(ctx: SyncContext, path: string, local: { stat: FileStat }, localHash: string): Promise<boolean> {
   if (!isCoarseMtime(local.stat.mtime)) return true;
   const now = await ctx.adapter.read(path);
   return now !== null && (await hashHex(now)) === localHash;
@@ -233,10 +242,10 @@ async function tryApply(
           if (!(await adapter.rename(st.path, path, expectFor(st)))) return false;
           const data = await remote();
           const renamed = await adapter.stat(path);
-          if (!renamed || !(await stillAsRead(ctx, path, { data: local, stat: renamed }, old.contentHash))) return false;
+          if (!renamed || !(await stillAsRead(ctx, path, { stat: renamed }, old.contentHash))) return false;
+          const writtenAt = ctx.clock.now();
           if (!(await adapter.write(path, data, expectFor(renamed)))) return false;
-          const after = await adapter.stat(path);
-          await state.recordSynced(record(fileId, path, versionId, v, contentHash, after?.mtime ?? -1), decodeText(path, data));
+          await state.recordSynced(await recordWritten(ctx, path, writtenAt, record(fileId, path, versionId, v, contentHash, -1)), decodeText(path, data));
           ctx.emit({ type: 'remote-change', path, action: 'write' });
           return true;
         }
@@ -286,15 +295,15 @@ async function tryApply(
   if (!local || !localChanged) {
     // New here, unchanged here, or deleted here (a remote edit wins over a local delete).
     if (local && !(await stillAsRead(ctx, path, local, localHash!))) return false;
+    const writtenAt = ctx.clock.now();
     if (!(await adapter.write(path, data, expectFor(local?.stat ?? null)))) return false;
-    const after = await adapter.stat(path);
-    await state.recordSynced(record(fileId, path, versionId, v, contentHash, after?.mtime ?? -1), text);
+    await state.recordSynced(await recordWritten(ctx, path, writtenAt, record(fileId, path, versionId, v, contentHash, -1)), text);
     ctx.emit({ type: 'remote-change', path, action: 'write' });
     return true;
   }
 
   if (localHash === contentHash) {
-    await state.recordSynced(record(fileId, path, versionId, v, contentHash, local.stat.mtime), text);
+    await state.recordSynced(record(fileId, path, versionId, v, contentHash, local.stat.mtime, { localCheckedAt: local.readAt }), text);
     return true;
   }
 
