@@ -407,8 +407,87 @@ func TestRunPassReportsAndReleasesTheLease(t *testing.T) {
 	if ok, _ := st.AcquireLease(ctx, "maintenance", "someone-else", time.Hour); !ok {
 		t.Fatal("RunPass kept the lease")
 	}
-	if _, err := r.RunPass(ctx); !errors.Is(err, jobs.ErrLeaseHeld) {
+	_, err = r.RunPass(ctx)
+	if !errors.Is(err, jobs.ErrLeaseHeld) {
 		t.Fatalf("err = %v, want ErrLeaseHeld while another process holds the lease", err)
+	}
+	// The refusal says when the other holder's lease runs out.
+	var held *jobs.LeaseHeldError
+	if !errors.As(err, &held) || !held.Until.Equal(clk.Now().Add(time.Hour)) {
+		t.Fatalf("err = %#v, want a LeaseHeldError until %v", err, clk.Now().Add(time.Hour))
+	}
+}
+
+// blockingStore stops the pass at its first DeadChunks call (the lease is
+// held by then) until release is closed.
+type blockingStore struct {
+	*store.Store
+	once             sync.Once
+	entered, release chan struct{}
+}
+
+func (s *blockingStore) DeadChunks(ctx context.Context, touchedBeforeMs int64, limit int) ([]store.DeadChunk, error) {
+	s.once.Do(func() { close(s.entered); <-s.release })
+	return s.Store.DeadChunks(ctx, touchedBeforeMs, limit)
+}
+
+// A pass holds the lease for minutes, not intervals, and renews it while it
+// runs: a copy of the database taken mid-pass blocks maintenance on the copy
+// only until that short lease runs out, and a long pass still keeps it.
+func TestPassRenewsAShortLeaseWhileItRuns(t *testing.T) {
+	ctx := context.Background()
+	st, clk := storetest.New(t)
+	bs := &blockingStore{Store: st, entered: make(chan struct{}), release: make(chan struct{})}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(bs.release) }) }
+	t.Cleanup(release)
+	blobs, _ := blob.NewFS(t.TempDir())
+	r := jobs.New(bs, blobs, jobs.Config{Interval: time.Hour, Retention: config.Retention{TrashDays: 30}, GCGrace: time.Hour},
+		clk.Now, discard())
+	jobs.SetLeaseRenew(r, time.Millisecond)
+	done := make(chan error, 1)
+	go func() { done <- r.RunOnce(ctx) }()
+	select {
+	case <-bs.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pass never started")
+	}
+
+	until, held, err := st.LeaseExpiry(ctx, jobs.LeaseName)
+	if err != nil || !held {
+		t.Fatalf("lease during the pass: held=%v err=%v", held, err)
+	}
+	if ttl := until.Sub(clk.Now()); ttl > jobs.PassLeaseTTL || jobs.PassLeaseTTL > 15*time.Minute {
+		t.Fatalf("pass lease lasts %s (PassLeaseTTL %s), want at most a few minutes", ttl, jobs.PassLeaseTTL)
+	}
+	// Run well past the first lease: each renewal moves the expiry on.
+	for i := 0; i < 3; i++ {
+		clk.Advance(jobs.PassLeaseTTL * 9 / 10)
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			u, ok, err := st.LeaseExpiry(ctx, jobs.LeaseName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok && u.Sub(clk.Now()) > jobs.PassLeaseTTL/2 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("lease not renewed after %d advances: until=%v held=%v now=%v", i+1, u, ok, clk.Now())
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if ok, _ := st.AcquireLease(ctx, jobs.LeaseName, "other", time.Minute); ok {
+		t.Fatal("another process took the lease of a running pass")
+	}
+
+	release()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, held, _ := st.LeaseExpiry(ctx, jobs.LeaseName); held {
+		t.Fatal("the pass kept the lease after it ended")
 	}
 }
 
