@@ -6,6 +6,7 @@ import { Notice, PluginSettingTab, Setting, type App, type ButtonComponent, type
 import type { FetchLike } from '../api/client';
 import { PASSPHRASE_MIN_CHARS, PASSPHRASE_MIN_WORDS } from '../services/account';
 import type { LocalState } from '../state/store';
+import type { NewlyIgnored } from '../sync/server-removal';
 import type { ShellController, StartResult } from './controller';
 import { describeError } from './errors';
 import { ConfirmModal, TrashModal } from './history-modal';
@@ -44,6 +45,13 @@ function plainTextArea(a: TextAreaComponent, rows: number): void {
   a.inputEl.setAttr('autocapitalize', 'off');
   a.inputEl.setAttr('autocorrect', 'off');
   a.inputEl.setAttr('autocomplete', 'off');
+}
+
+/** A size for people: bytes, KB or MB (powers of 1,024, as file managers show them). */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1 << 20) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1 << 20)).toFixed(bytes < 10 << 20 ? 1 : 0)} MB`;
 }
 
 export class ObsyncSettingTab extends PluginSettingTab {
@@ -370,16 +378,38 @@ export class ObsyncSettingTab extends PluginSettingTab {
         const n = parsed.rejected.length;
         new Notice(n === 0 ? 'Obsync: rules for every device saved.' : `Obsync: rules for every device saved; ${n} ${n === 1 ? 'line is' : 'lines are'} skipped (see the settings).`);
         b.setDisabled(false);
+        this.offerServerRemoval(parsed.newlyIgnored);
       })));
   }
 
   private renderIgnore(): void {
     this.ignoreEditor('Save', async (globs, button) => {
-      await this.shell.setIgnoreGlobs(globs);
+      const newly = await this.shell.setIgnoreGlobs(globs);
       this.form.ignoreText = null;
       new Notice('Obsync: ignore rules saved.');
       button.setDisabled(false);
+      this.offerServerRemoval(newly);
     });
+  }
+
+  /**
+   * New rules match files that are already on the server: they stay there
+   * (and on the other devices) unless the user confirms removing them. Only
+   * ever offered after the user saved rules here, never for rules that
+   * arrive from another device.
+   */
+  private offerServerRemoval(newly: NewlyIgnored): void {
+    const n = newly.paths.length;
+    if (n === 0) return;
+    const files = n === 1 ? '1 synced file' : `${n} synced files`;
+    const examples = newly.paths.slice(0, 5).join(', ') + (n > 5 ? `, and ${n - 5} more` : '');
+    new ConfirmModal(this.app,
+      `The new rules match ${files} (${formatBytes(newly.bytes)}): ${examples}. This device no longer syncs them, but they stay on the server and on your other devices. ` +
+      'Also remove them from the server? Your other devices then move their copies to the trash, unless they ignore these files too, and the server keeps them in its deleted files for a while. This device keeps its copies.',
+      'Remove from server', async () => {
+        await this.shell.removeFromServer(newly.paths);
+        new Notice(`Obsync: removing ${files} from the server.`);
+      }).open();
   }
 
   /**
