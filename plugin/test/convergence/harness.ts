@@ -59,7 +59,11 @@
 // trash, an hour of grace for unreferenced chunks), so a pass prunes
 // history, purges the trash and collects chunks while devices are
 // mid-history: a stale cursor over pruned versions, a chunk collected under
-// a pending commit, a trash entry purged while a device is offline.
+// a pending commit, a trash entry purged while a device is offline. A hot
+// backup taken while the server's own pass ran (it runs one at every start)
+// holds that pass's lease; a server restored from it cannot run maintenance
+// until the lease expires (two jobs intervals), and the admin command is
+// refused meanwhile. Only then is a refusal accepted (and logged).
 import type { ApiClient } from '../../src/api/client';
 import { NetworkError } from '../../src/api/errors';
 import { CHUNK_SIZE } from '../../src/api/limits';
@@ -267,6 +271,9 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
     const written = new Set<string>();
     const removed = new Set<string>();
     let backup: string | null = null;
+    /** The backup is a copy of the running server (hot-backup), and the server now runs on such a copy. */
+    let backupIsHot = false;
+    let onHotCopy = false;
     /** How much older than now the server's data is taken to be at the next maintenance pass. */
     let serverAgeMs = 0;
     let tokenN = 0;
@@ -543,20 +550,30 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
           break;
         case 'backup':
           backup = await srv.snapshot();
+          backupIsHot = false;
           did('backup of the server');
           break;
         case 'hot-backup':
           backup = await srv.hotSnapshot();
+          backupIsHot = true;
           did('hot backup of the running server');
           break;
         case 'restore-backup':
           if (backup === null) break;
           await srv.restore(backup);
+          onHotCopy = backupIsHot;
           did('restore of the server from its backup');
           break;
         case 'maintenance': {
           serverAgeMs += (12 + rnd.int(37)) * HOUR;
-          const out = await srv.maintenance(new Date(Date.now() + serverAgeMs));
+          let out: string;
+          try {
+            out = await srv.maintenance(new Date(Date.now() + serverAgeMs));
+          } catch (err) {
+            if (!onHotCopy || !/holds the maintenance lease/.test(String(err))) throw err;
+            did('maintenance refused: the restored hot copy holds the lease of the pass it was taken during', false);
+            break;
+          }
           did(`maintenance ${Math.round(serverAgeMs / HOUR)} h on: ${out.trim().replace(/^maintenance as of \S+: /, '')}`, maintenanceChanged(out));
           break;
         }
