@@ -329,6 +329,12 @@ func maintenanceRun(ctx context.Context, args []string, d Deps) error {
 		return errors.New("maintenance is not available")
 	}
 	rep, err := d.Maintenance(ctx, asOf)
+	var held *jobs.LeaseHeldError
+	if errors.As(err, &held) {
+		return fmt.Errorf("another obsync process holds the maintenance lease (a pass or an export is running, or this database "+
+			"was copied during one) until %s, in %s unless it is renewed; try again then",
+			held.Until.UTC().Format(time.RFC3339), max(time.Until(held.Until), 0).Round(time.Second))
+	}
 	if errors.Is(err, jobs.ErrLeaseHeld) {
 		return errors.New("another obsync process holds the maintenance lease (a pass or an export is running); try again in a minute")
 	}

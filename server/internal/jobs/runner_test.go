@@ -130,7 +130,7 @@ func (s *signalStore) Prune(ctx context.Context, p store.PrunePolicy) (store.Pru
 }
 
 // A runner that stops gives its lease back, so a restarted process does not
-// wait two intervals for maintenance.
+// wait for its lease to expire before maintenance runs.
 func TestRunReleasesLeaseOnExit(t *testing.T) {
 	st, clk := storetest.New(t)
 	sig := &signalStore{Store: st, pruning: make(chan struct{})}

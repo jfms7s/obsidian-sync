@@ -28,6 +28,11 @@ const (
 	maxGCBatches    = 100
 	defaultInterval = time.Hour
 	releaseTimeout  = 5 * time.Second
+	// passLeaseTTL bounds how long a pass that died (or a copy of the
+	// database taken during one) keeps maintenance off; a running pass renews
+	// its lease every passLeaseRenew.
+	passLeaseTTL   = 10 * time.Minute
+	passLeaseRenew = 2 * time.Minute
 	// staleTempAge is how old a blob temp file must be before it is swept;
 	// younger ones may belong to a Put still running in some process.
 	staleTempAge = time.Hour
@@ -47,6 +52,7 @@ type TempSweeper interface {
 type Store interface {
 	AcquireLease(ctx context.Context, name, holder string, ttl time.Duration) (bool, error)
 	ReleaseLease(ctx context.Context, name, holder string) error
+	LeaseExpiry(ctx context.Context, name string) (until time.Time, held bool, err error)
 	Prune(ctx context.Context, p store.PrunePolicy) (store.PruneStats, error)
 	DeadChunks(ctx context.Context, touchedBeforeMs int64, limit int) ([]store.DeadChunk, error)
 	DeleteDeadChunks(ctx context.Context, cs []store.DeadChunk, touchedBeforeMs int64) ([]store.DeadChunk, error)
@@ -67,6 +73,8 @@ type Runner struct {
 	holder string
 	now    func() time.Time
 	log    *slog.Logger
+	// leaseRenew is how often a running pass renews its lease.
+	leaseRenew time.Duration
 
 	lastSweep time.Time // zero until the first sweep
 }
@@ -75,7 +83,7 @@ func New(st Store, blobs blob.Store, cfg Config, now func() time.Time, log *slog
 	if cfg.Interval <= 0 {
 		cfg.Interval = defaultInterval
 	}
-	return &Runner{st: st, blobs: blobs, cfg: cfg, holder: ids.New(), now: now, log: log}
+	return &Runner{st: st, blobs: blobs, cfg: cfg, holder: ids.New(), now: now, log: log, leaseRenew: passLeaseRenew}
 }
 
 // Run calls RunOnce immediately and then every Interval until ctx ends. On
@@ -113,9 +121,21 @@ type Report struct {
 	ChunksDeleted  int
 }
 
-// ErrLeaseHeld means another process holds the maintenance lease: on a
-// single node, the running server, which keeps it while it runs.
+// ErrLeaseHeld means another process holds the maintenance lease: a pass or
+// an export is running (or a copy of the database was taken during one).
 var ErrLeaseHeld = errors.New("another process holds the maintenance lease")
+
+// LeaseHeldError is the ErrLeaseHeld that RunPass returns: it says when the
+// other holder's lease runs out unless that holder renews it.
+type LeaseHeldError struct {
+	Until time.Time
+}
+
+func (e *LeaseHeldError) Error() string {
+	return fmt.Sprintf("%v until %s", ErrLeaseHeld, e.Until.UTC().Format(time.RFC3339))
+}
+
+func (e *LeaseHeldError) Is(target error) bool { return target == ErrLeaseHeld }
 
 // RunOnce runs one pass if this runner can take the lease, then gives the
 // lease back, so between passes an export or an on-demand pass can take it.
@@ -137,13 +157,14 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 }
 
 // RunPass runs one pass on demand (obsync admin maintenance run) and gives
-// the lease back afterwards. It returns ErrLeaseHeld, doing nothing, while
-// another process holds the lease.
+// the lease back afterwards. It returns a *LeaseHeldError (ErrLeaseHeld if
+// the lease's expiry cannot be read), doing nothing, while another process
+// holds the lease.
 func (r *Runner) RunPass(ctx context.Context) (Report, error) {
 	rep, ran, err := r.pass(ctx)
 	if !ran {
 		if err == nil {
-			err = ErrLeaseHeld
+			err = r.leaseHeld(ctx)
 		}
 		return Report{}, err
 	}
@@ -151,15 +172,70 @@ func (r *Runner) RunPass(ctx context.Context) (Report, error) {
 	return rep, err
 }
 
-// pass takes the lease and runs one pass; ran reports whether it got the lease.
+// leaseHeld describes the lease another process holds. The expiry only
+// helps the operator, so failing to read it still reports ErrLeaseHeld.
+func (r *Runner) leaseHeld(ctx context.Context) error {
+	until, held, err := r.st.LeaseExpiry(ctx, LeaseName)
+	if err != nil || !held { // !held: it ran out since AcquireLease
+		return ErrLeaseHeld
+	}
+	return &LeaseHeldError{Until: until}
+}
+
+// pass takes the lease and runs one pass, renewing the lease while it runs;
+// ran reports whether it got the lease.
 func (r *Runner) pass(ctx context.Context) (rep Report, ran bool, err error) {
-	ok, err := r.st.AcquireLease(ctx, LeaseName, r.holder, 2*r.cfg.Interval)
+	ok, err := r.st.AcquireLease(ctx, LeaseName, r.holder, passLeaseTTL)
 	if err != nil {
 		return Report{}, false, fmt.Errorf("acquire lease: %w", err)
 	}
 	if !ok {
 		return Report{}, false, nil
 	}
+	pctx, stop := r.holdLease(ctx)
+	rep, err = r.maintain(pctx)
+	if err != nil && ctx.Err() == nil && pctx.Err() != nil {
+		err = fmt.Errorf("%w: %w", context.Cause(pctx), err)
+	}
+	stop()
+	return rep, true, err
+}
+
+// holdLease renews the lease every leaseRenew until stop is called. Losing
+// it (a renewal refused or failing) cancels the returned context: another
+// process may then run a pass, or an export may snapshot, alongside this one.
+func (r *Runner) holdLease(ctx context.Context) (_ context.Context, stop func()) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		t := time.NewTicker(r.leaseRenew)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			ok, err := r.st.AcquireLease(ctx, LeaseName, r.holder, passLeaseTTL)
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
+				cancel(fmt.Errorf("renew the maintenance lease: %w", err))
+				return
+			}
+			if !ok {
+				cancel(errors.New("lost the maintenance lease during the pass"))
+				return
+			}
+		}
+	}()
+	return ctx, func() { cancel(nil); <-done }
+}
+
+// maintain is the body of a pass, run under the lease.
+func (r *Runner) maintain(ctx context.Context) (rep Report, err error) {
 	now := r.now()
 	day := 24 * time.Hour
 	policy := store.PrunePolicy{
@@ -171,12 +247,12 @@ func (r *Runner) pass(ctx context.Context) (rep Report, ran bool, err error) {
 	}
 	stats, err := r.st.Prune(ctx, policy)
 	if err != nil {
-		return Report{}, true, fmt.Errorf("prune: %w", err)
+		return Report{}, fmt.Errorf("prune: %w", err)
 	}
 	rep = Report{VersionsPruned: stats.VersionsDeleted, FilesPurged: stats.FilesPurged}
 	rep.ChunksDeleted, err = r.collectChunks(ctx, now.Add(-r.cfg.GCGrace).UnixMilli())
 	if err != nil {
-		return rep, true, fmt.Errorf("collect chunks: %w", err)
+		return rep, fmt.Errorf("collect chunks: %w", err)
 	}
 	r.log.Info("maintenance done",
 		"versions_pruned", rep.VersionsPruned, "files_purged", rep.FilesPurged, "chunks_deleted", rep.ChunksDeleted)
@@ -184,13 +260,12 @@ func (r *Runner) pass(ctx context.Context) (rep Report, ran bool, err error) {
 		r.sweepTemp(ctx)
 		r.lastSweep = now
 	}
-	return rep, true, nil
+	return rep, nil
 }
 
 // sweepTemp removes stale blob temp files if the blob store supports it. A
 // runner calls it on its first pass and then at most once per sweepInterval.
-// It runs under the lease, whose TTL (two intervals) leaves ample room for
-// one walk of the blob tree. Failures are only wasted space, so they are
+// It runs under the lease, which the pass renews while the walk lasts. Failures are only wasted space, so they are
 // logged rather than failing the pass.
 func (r *Runner) sweepTemp(ctx context.Context) {
 	sw, ok := r.blobs.(TempSweeper)
