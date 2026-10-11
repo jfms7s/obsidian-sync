@@ -5,7 +5,7 @@ import { CHANGES_PAGE_SIZE, HEADS_PAGE_SIZE } from '../api/limits';
 import type { RemoteHead, RemoteVersion } from '../api/types';
 import type { FileRecord } from '../state/store';
 import { decryptMeta } from '../crypto/objects';
-import { toHex } from '../util/bytes';
+import { fromHex, toHex } from '../util/bytes';
 import { alreadyApplied, applyHead, ensureHeadApplied } from './apply';
 import { downloadContent } from './content';
 import { ServerRollbackError, type SyncContext } from './context';
@@ -171,7 +171,15 @@ export async function pull(ctx: SyncContext, pageSize = CHANGES_PAGE_SIZE): Prom
     // (this device's own commit, say, that it has not pulled yet) means the
     // server was restored from a backup and its new commits reused the seq.
     if (await seqReused(ctx, versions)) throw new ServerRollbackError(cursor, page.vaultSeq);
-    const heads = newestPerFile(versions);
+    let heads = newestPerFile(versions);
+    // The vault's ignore file first, so its rules decide about the rest of the page.
+    const rules = heads.find((h) => toHex(h.fileId) === ctx.vaultIgnoreFileId);
+    if (rules) {
+      heads = heads.filter((h) => h !== rules);
+      await applyHead(ctx, rules, versions);
+      await ctx.reloadVaultIgnore?.();
+      applied++;
+    }
     const ahead = new Prefetch(ctx, heads);
     for (let i = 0; i < heads.length; i++) {
       await ahead.startFrom(i);
@@ -189,6 +197,22 @@ export async function pull(ctx: SyncContext, pageSize = CHANGES_PAGE_SIZE): Prom
     }
     if (!page.more) return { applied, vaultSeq: page.vaultSeq };
   }
+}
+
+/**
+ * Before a device's first pull: applies the server's head of the vault's
+ * .obsyncignore (one history request), so its rules are in place before
+ * the first page decides what to write. Returns whether a live version was
+ * applied; the change log brings it again later, already applied.
+ */
+export async function applyVaultIgnoreFirst(ctx: SyncContext): Promise<boolean> {
+  if (!ctx.vaultIgnoreFileId) return false;
+  const history = await ctx.api.history(ctx.ring.vaultId, fromHex(ctx.vaultIgnoreFileId));
+  const head = history[0]; // newest first
+  if (!head || head.deleted) return false;
+  const ok = await applyHead(ctx, head, history);
+  await ctx.reloadVaultIgnore?.();
+  return ok;
 }
 
 /** After a commit got CONFLICT: make sure the server's head for the file is applied locally, so the next push merges against it. */

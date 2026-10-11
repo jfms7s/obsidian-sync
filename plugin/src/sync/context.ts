@@ -16,7 +16,12 @@ export interface SyncContext {
   deviceName: string;
   clock: Clock;
   random: Random;
+  /** Replaced by the engine when the vault's .obsyncignore changes (between files, never during one). */
   ignore: IgnoreRules;
+  /** The file id of the vault's .obsyncignore (hex), once the engine has worked it out: pull applies its version first. */
+  vaultIgnoreFileId?: string;
+  /** Called after a version of the vault's .obsyncignore was applied: reads it and rebuilds ignore. */
+  reloadVaultIgnore?(): Promise<void>;
   /** Files larger than this are neither uploaded nor downloaded by this device. */
   maxFileBytes: number;
   /** Bytes of file content one push round takes on at most (default MAX_BYTES_PER_ROUND); less on a phone, to hold less in memory. */
