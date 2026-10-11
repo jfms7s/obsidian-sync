@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
+import { fileIdFor } from '../../src/crypto/objects';
+import { equalBytes } from '../../src/util/bytes';
 import { CONFLICT_COPY_PATTERN } from '../../src/util/path';
 import { makeClient, settle, type SimClient } from '../helpers/client';
 import { files, nameKeepingCollision, newUser, remoteCommit, text } from '../helpers/fixture';
@@ -79,6 +81,27 @@ describe('a file and a folder wanting the same path', () => {
     await a.adapter.remove('docs/x.md');
     await a.engine.runCycle();
     expect(files(a.adapter)['docs']).toBe('the file\n');
+  });
+
+  it('deletes the file again when a server restore brings it back over a folder (convergence seed 519)', async () => {
+    // Laptop makes a file "docs" while Phone, not yet pulled, makes a folder "docs".
+    const [a, b, c] = await trio();
+    await a.adapter.write('docs', text('from laptop\n'));
+    await a.engine.runCycle();
+    await b.adapter.write('docs/x.md', text('from phone\n'));
+    await b.engine.runCycle(); // the file is saved beside the folder here and stays live on the server
+    const backup = await srv.snapshot();
+    await settle([a, b, c]); // the laptop moves its file beside the folder and deletes "docs"
+    const settled = files(a.adapter);
+    expect(Object.keys(settled).sort()).toEqual([copies(a)[0]!, 'docs/x.md'].sort());
+    // The restore brings the file "docs" back, but every device holds the folder now.
+    await srv.restore(backup);
+    await settle([a, b, c]);
+    for (const d of [a, b, c]) expect(files(d.adapter)).toEqual(settled);
+    // The server agrees: "docs" is not a live file next to the folder.
+    const docsId = await fileIdFor(a.ring.namingKey, 'docs');
+    const head = (await a.api.heads(a.vaultId, null)).heads.find((h) => equalBytes(h.fileId, docsId));
+    expect(head?.deleted).toBe(true);
   });
 });
 

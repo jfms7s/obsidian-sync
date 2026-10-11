@@ -31,6 +31,16 @@ function record(fileId: string, path: string, versionId: string, v: RemoteVersio
   };
 }
 
+/**
+ * Whether this device knew the file as deleted before the server lost
+ * history (a restore from a backup): the rollback keeps a record's deletion
+ * but forgets its version (LocalState.forgetSyncedVersions), and the server
+ * may have the file live again.
+ */
+function deletionLostByServer(rec: FileRecord | undefined): boolean {
+  return !!rec && rec.deleted && rec.versionId === null;
+}
+
 /** A free conflict-copy name for path, stamped with device and this device's local time now. */
 async function freeConflictPath(ctx: SyncContext, path: string, device: string): Promise<string> {
   return (await freeCopyPath(ctx, path, { device, mtimeMs: ctx.clock.now() }, { utc: false })).path;
@@ -251,6 +261,15 @@ async function tryApply(
         const copy = await saveBeside(ctx, meta, contentHash!, await remote());
         if (copy === null) return false;
         ctx.emit({ type: 'notice', code: 'PATH_COLLISION', persistent: false, path, conflictPath: copy, message: `${path} is a folder on this device; the file was saved as ${copy}` });
+      }
+      if (deletionLostByServer(rec)) {
+        // The file cannot come back here, and its content is beside the
+        // folder now: its name is deleted again, as when the file was first
+        // moved aside, rather than kept live on the server where no device
+        // can hold it.
+        await state.recordSynced(record(fileId, path, versionId, v, contentHash, -1), null);
+        await state.markDirty(path);
+        return true;
       }
       await state.recordSynced(record(fileId, path, versionId, v, contentHash, -1, { shadowed: true, shadowedBy: 'folder' }), null);
       ctx.onShadowed?.();
