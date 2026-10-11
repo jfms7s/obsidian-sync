@@ -460,8 +460,8 @@ describe('the settings tab', () => {
     expect(confirm.contentEl.allText()).toMatch(/Sign out of Obsync/);
     const confirmButton = confirm.contentEl.settings.flatMap((x) => x.buttons).find((b) => b.text === 'Sign out')!;
     await confirmButton.click();
-    await new Promise((r) => setTimeout(r, 100));
-    expect(await s.state.getSession()).toBeUndefined();
+    // Signing out revokes the token on the server first: wait for it rather than a fixed time.
+    await vi.waitFor(async () => expect(await s.state.getSession()).toBeUndefined(), { timeout: 5000 });
     expect(s.shell.engine).toBeNull();
     await s.render();
     expect(s.setting('Sign in').heading).toBe(true);
