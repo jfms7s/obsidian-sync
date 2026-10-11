@@ -152,8 +152,10 @@ function wrapAad(b: WrapBinding, userId: string, encPub: Uint8Array, signPub: Ui
   return b.kind === 'pass' ? passAad(userId, encPub, signPub, b.salt, b.params) : recoveryAad(userId, encPub, signPub);
 }
 
-/** nonce ‖ AES-256-GCM(kek, encPriv ‖ signSeed, AAD per the binding). */
-/** @internal test-only: caller supplies nonce */
+/**
+ * nonce ‖ AES-256-GCM(kek, encPriv ‖ signSeed, AAD per the binding).
+ * @internal test-only: caller supplies nonce
+ */
 export function wrapPrivateKeys(kek: Uint8Array, nonce: Uint8Array, binding: WrapBinding, userId: string, keys: UserKeys): Promise<Uint8Array> {
   const plaintext = new Uint8Array(64);
   plaintext.set(keys.encPriv, 0);
@@ -180,8 +182,11 @@ export interface NewKeyBundle {
   recoveryWords: string;
 }
 
-/** First-time setup: new keypairs, a new recovery key, and both wrappings. */
-/** A new bundle with a new recovery key; for existingKeys (a re-upload) instead of new keypairs when given. */
+/**
+ * First-time setup: new keypairs, a new recovery key, and both wrappings.
+ * For existingKeys (a re-upload) those keys are wrapped instead of new
+ * keypairs, with a new recovery key.
+ */
 export async function createKeyBundle(
   userId: string, passphrase: string, random: Random, params: Argon2Params = DEFAULT_ARGON2, existingKeys?: UserKeys,
 ): Promise<NewKeyBundle> {

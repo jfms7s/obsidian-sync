@@ -85,8 +85,10 @@ export function decodeFileMeta(b: Uint8Array): FileMeta {
   };
 }
 
-/** enc_meta = AES-256-GCM(meta_key[e], pad(FileMeta), AAD); see padding.ts. */
-/** @internal test-only: caller supplies nonce */
+/**
+ * enc_meta = AES-256-GCM(meta_key[e], pad(FileMeta), AAD); see padding.ts.
+ * @internal test-only: caller supplies nonce
+ */
 export function encryptMetaWith(nonce: Uint8Array, vaultId: string, keys: EpochKeys, fileId: Uint8Array, versionId: Uint8Array, meta: FileMeta): Promise<Uint8Array> {
   return aesGcmSeal(keys.metaKey, nonce, pad(encodeFileMeta(meta)), metaAad(vaultId, keys.epoch, fileId, versionId));
 }
@@ -129,8 +131,8 @@ export const MAX_VAULT_NAME_BYTES = 200;
 /**
  * enc_name = core ‖ Ed25519(creator, "obsync/v1/vault-name-sig" ‖ vault_id ‖ u32be(e) ‖ core)
  * core     = u32be(e) ‖ AES-256-GCM(vault_name_key[e], pad(UTF-8(NFC(name))), AAD = label ‖ vault_id ‖ u32be(e)).
+ * @internal test-only: caller supplies nonce
  */
-/** @internal test-only: caller supplies nonce */
 export async function encryptVaultNameWith(nonce: Uint8Array, vaultId: string, keys: EpochKeys, name: string, signSeed: Uint8Array): Promise<Uint8Array> {
   const pt = utf8(name.normalize('NFC'));
   if (pt.length === 0 || pt.length > MAX_VAULT_NAME_BYTES) throw new RangeError(`vault names are 1 to ${MAX_VAULT_NAME_BYTES} bytes`);

@@ -1,5 +1,6 @@
 // The device's local sync state (spec §4.2), one IndexedDB database per
 // synced vault on this device.
+import { pushKey } from './failure-keys';
 import type { KeyBundleFields } from '../crypto/userkeys';
 import { inTx, openDb, req } from './idb';
 
@@ -171,7 +172,6 @@ export function upgradeSchema(d: IDBDatabase, oldVersion: number, tx: IDBTransac
 }
 
 /** The failure key of a pushed path (see sync/failures.ts). */
-export const pushFailureKey = (path: string): string => `push:${path}`;
 
 /** KV key of the last dirty generation handed out; never reset, so generations stay unique. */
 const DIRTY_GEN = 'dirtyGen';
@@ -237,6 +237,10 @@ export class LocalState {
       await req(t.objectStore(KV).put(anchor, 'cursorAnchor'));
     });
   }
+
+  /** The user's ignore rules (stored under the setting key earlier versions used). */
+  getIgnoreGlobs(): Promise<string[]> { return this.getSetting<string[]>('ignoreGlobs', []); }
+  setIgnoreGlobs(globs: string[]): Promise<void> { return this.setSetting('ignoreGlobs', globs); }
 
   async getSetting<T>(key: string, fallback: T): Promise<T> { return (await this.kvGet<T>(`setting:${key}`)) ?? fallback; }
   setSetting(key: string, value: unknown): Promise<void> { return this.kvPut(`setting:${key}`, value); }
@@ -327,7 +331,7 @@ export class LocalState {
       const hint = renamedFrom ?? prev?.renamedFrom;
       if (hint !== undefined) entry.renamedFrom = hint;
       await req(store.put(entry));
-      if (renamedFrom !== undefined && renamedFrom !== path) await req(t.objectStore(FAILURES).delete(pushFailureKey(renamedFrom)));
+      if (renamedFrom !== undefined && renamedFrom !== path) await req(t.objectStore(FAILURES).delete(pushKey(renamedFrom)));
       return gen;
     });
   }
@@ -347,7 +351,7 @@ export class LocalState {
       const cur = (await req(store.get(path))) as DirtyEntry | undefined;
       if (!cur || cur.gen !== gen) return false;
       await req(store.delete(path));
-      await req(t.objectStore(FAILURES).delete(pushFailureKey(path)));
+      await req(t.objectStore(FAILURES).delete(pushKey(path)));
       return true;
     });
   }

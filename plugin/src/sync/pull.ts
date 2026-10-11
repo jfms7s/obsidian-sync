@@ -4,10 +4,9 @@
 import { CHANGES_PAGE_SIZE, HEADS_PAGE_SIZE } from '../api/limits';
 import type { RemoteHead, RemoteVersion } from '../api/types';
 import type { FileRecord } from '../state/store';
-import { equalBytes, toHex } from '../util/bytes';
-import { alreadyApplied, applyHead } from './apply';
+import { toHex } from '../util/bytes';
+import { applyHead, ensureHeadApplied } from './apply';
 import { ServerRollbackError, type SyncContext } from './context';
-import { applyKey, isDeferred } from './failures';
 
 export interface PullResult {
   applied: number;
@@ -116,12 +115,7 @@ export async function pull(ctx: SyncContext, pageSize = CHANGES_PAGE_SIZE): Prom
   }
 }
 
-/**
- * After a commit got CONFLICT: make sure the server's head for the file
- * has been applied locally, so the next push merges against it. The
- * history also reveals a landed pending commit of this device's that the
- * head overtook (applyHead).
- */
+/** After a commit got CONFLICT: make sure the server's head for the file is applied locally, so the next push merges against it. */
 export async function resolveConflict(ctx: SyncContext, fileId: Uint8Array, head: Uint8Array): Promise<void> {
   const hex = toHex(fileId);
   const rec = await ctx.state.getFile(hex);
@@ -130,9 +124,6 @@ export async function resolveConflict(ctx: SyncContext, fileId: Uint8Array, head
     if (rec) await ctx.state.putFile({ ...rec, versionId: null, contentHash: null, localMtime: -1, seq: 0 });
     return;
   }
-  // Already applied, or its apply failed and waits out the backoff (retried by reconcile, not by every push round).
-  if (alreadyApplied(rec, toHex(head), ctx) || (await isDeferred(ctx, applyKey(hex)))) return;
-  const versions = await ctx.api.history(ctx.ring.vaultId, fileId);
-  const v = versions.find((x) => equalBytes(x.versionId, head));
-  if (v) await applyHead(ctx, v, versions);
+  // A failed apply waits out its backoff: retried by reconcile, not by every push round.
+  await ensureHeadApplied(ctx, fileId, head, rec);
 }

@@ -2,7 +2,7 @@
 // which one is shown), then the day-to-day settings. All logic is in the
 // setup controller and the shell controller; this file only builds the
 // screens and shows errors.
-import { Notice, PluginSettingTab, Setting, type App, type ButtonComponent, type Plugin } from 'obsidian';
+import { Notice, PluginSettingTab, Setting, type App, type ButtonComponent, type Plugin, type TextAreaComponent } from 'obsidian';
 import type { FetchLike } from '../api/client';
 import { PASSPHRASE_MIN_CHARS, PASSPHRASE_MIN_WORDS } from '../services/account';
 import type { LocalState } from '../state/store';
@@ -15,7 +15,7 @@ import { SetupController, type RemoteVaults } from './setup-controller';
 import type { SetupStep } from './steps';
 import { statusLabel } from './status';
 
-const START_FAILURES: Record<Extract<Awaited<ReturnType<ShellController['start']>>, { ok: false }>['reason'], string> = {
+const START_FAILURES: Record<Extract<StartResult, { ok: false }>['reason'], string> = {
   'not-logged-in': 'this device is not signed in.',
   locked: 'this device is locked. Open the settings again to unlock it.',
   'no-vault': 'no vault is chosen for this device.',
@@ -33,6 +33,15 @@ interface Form {
   recoveryWords: string;
   vaultName: string;
   ignoreText: string | null;
+}
+
+/** A text area for typed text that is not prose (recovery words, ignore rules): no spell check or autocorrect. */
+function plainTextArea(a: TextAreaComponent, rows: number): void {
+  a.inputEl.rows = rows;
+  a.inputEl.spellcheck = false;
+  a.inputEl.setAttr('autocapitalize', 'off');
+  a.inputEl.setAttr('autocorrect', 'off');
+  a.inputEl.setAttr('autocomplete', 'off');
 }
 
 export class ObsyncSettingTab extends PluginSettingTab {
@@ -205,11 +214,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
       await this.render();
     })));
     new Setting(this.containerEl).setName('Forgot the passphrase?').setDesc('Use the 24 recovery words instead.').addTextArea((a) => {
-      a.inputEl.rows = 3;
-      a.inputEl.spellcheck = false;
-      a.inputEl.setAttr('autocapitalize', 'off');
-      a.inputEl.setAttr('autocorrect', 'off');
-      a.inputEl.setAttr('autocomplete', 'off');
+      plainTextArea(a, 3);
       a.setPlaceholder('Type or paste the 24 words').onChange((v) => (f.recoveryWords = v));
     }).addButton((b) => b.setButtonText('Unlock with recovery words').onClick(this.action(b, async () => {
       await this.setup.unlockWithRecoveryWords(f.recoveryWords);
@@ -346,11 +351,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
     const errors = this.containerEl.createDiv({ cls: 'obsync-error' });
     new Setting(this.containerEl).setName('Ignored files').setDesc('Patterns of files and folders this device does not sync, one per line. A folder ends with a slash. Lines starting with # are comments.')
       .addTextArea((a) => {
-        a.inputEl.rows = 6;
-        a.inputEl.spellcheck = false;
-        a.inputEl.setAttr('autocapitalize', 'off');
-        a.inputEl.setAttr('autocorrect', 'off');
-        a.inputEl.setAttr('autocomplete', 'off');
+        plainTextArea(a, 6);
         a.onChange((v) => (f.ignoreText = v));
         void (async () => {
           a.setValue(f.ignoreText ?? formatIgnoreText(await this.shell.ignoreGlobs()));

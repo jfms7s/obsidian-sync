@@ -29,16 +29,10 @@ export function u32be(n: number): Uint8Array<ArrayBuffer> {
 const encoder = new TextEncoder();
 // ignoreBOM: a leading U+FEFF is kept, so decoding is the exact inverse of
 // utf8() and a file's byte-order mark survives a round trip (e.g. a merge).
-const lenient = new TextDecoder('utf-8', { ignoreBOM: true });
 const strict = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 export function utf8(s: string): Uint8Array<ArrayBuffer> {
   return encoder.encode(s);
-}
-
-/** Decodes UTF-8, replacing invalid sequences. */
-export function fromUtf8(b: Uint8Array): string {
-  return lenient.decode(b);
 }
 
 /** Decodes UTF-8, or returns null if b is not valid UTF-8. */

@@ -95,6 +95,22 @@ describe('pull', () => {
     expect(await dirtyPaths(d)).toEqual(['Notes/a (conflict Work PC 2026-01-02 0304).md', 'Notes/a.md']);
   });
 
+  it('takes the next conflict copy name when a folder holds the first one', async () => {
+    const d = await device();
+    await remoteCommit(d, 'Notes/a.md', text('base\n'));
+    await pull(d.ctx);
+    await d.adapter.write('Notes/a (conflict Work PC 2026-01-02 0304).md/inside.md', text('a folder by that name\n'));
+    await d.adapter.write('Notes/a.md', text('mine\n'));
+    await remoteCommit(d, 'Notes/a.md', text('theirs\n'), 'Work PC');
+    await pull(d.ctx);
+    expect(files(d.adapter)).toEqual({
+      'Notes/a.md': 'mine\n',
+      'Notes/a (conflict Work PC 2026-01-02 0304).md/inside.md': 'a folder by that name\n',
+      'Notes/a (conflict Work PC 2026-01-02 0304 2).md': 'theirs\n',
+    });
+    expect(d.events).toContainEqual({ type: 'conflict', path: 'Notes/a.md', conflictPath: 'Notes/a (conflict Work PC 2026-01-02 0304 2).md' });
+  });
+
   it('adopts a remote version identical to an independently created local file', async () => {
     const d = await device();
     await d.adapter.write('a.md', text('same\n'));

@@ -5,12 +5,12 @@ import { CryptoError } from '../crypto/primitives';
 import { merge3 } from '../merge/merge3';
 import type { FileRecord, PendingCommit } from '../state/store';
 import { equalBytes, toHex, utf8 } from '../util/bytes';
-import { caseFold, conflictCopyName } from '../util/path';
+import { caseFold } from '../util/path';
 import { expectFor, isCoarseMtime, type FileStat } from '../vault/adapter';
-import { evictBlockingFile, moveToCopy, saveBeside } from './collisions';
+import { deviceLabel, evictBlockingFile, freeCopyPath, moveToCopy, saveBeside } from './collisions';
 import { decodeText, downloadContent, hashHex } from './content';
 import type { SyncContext } from './context';
-import { applyKey, clearFailure, isFileError, recordFailure } from './failures';
+import { applyKey, clearFailure, isDeferred, isFileError, recordFailure } from './failures';
 import { isSyncedHere, readLocal } from './local';
 
 export { isSyncedHere, readLocal, type LocalFile } from './local';
@@ -31,12 +31,9 @@ function record(fileId: string, path: string, versionId: string, v: RemoteVersio
   };
 }
 
+/** A free conflict-copy name for path, stamped with device and this device's local time now. */
 async function freeConflictPath(ctx: SyncContext, path: string, device: string): Promise<string> {
-  const now = ctx.clock.now();
-  for (let n = 1; ; n++) {
-    const candidate = conflictCopyName(path, device, now, n);
-    if (!(await ctx.adapter.stat(candidate)) && (await ctx.state.filesByPath(candidate)).length === 0) return candidate;
-  }
+  return (await freeCopyPath(ctx, path, { device, mtimeMs: ctx.clock.now() }, { utc: false })).path;
 }
 
 /** A version must agree with its own metadata: a deletion has no content, anything else has a hash and the same size. */
@@ -81,6 +78,22 @@ export async function applyVersion(ctx: SyncContext, v: RemoteVersion): Promise<
  * conflict. When adopting the commit fails, the head is left for the
  * retry of that failure. Returns whether everything was applied.
  */
+/**
+ * Makes sure the server's head of a file is applied here: unless rec (the
+ * file's record) already has it, or its apply failed and waits out the
+ * backoff, the file's history is fetched and the head applied with it
+ * (the history also reveals a landed pending commit the head overtook, see
+ * applyHead). Returns whether the head was found and applied.
+ */
+export async function ensureHeadApplied(ctx: SyncContext, fileId: Uint8Array, head: Uint8Array, rec: FileRecord | undefined): Promise<boolean> {
+  if (alreadyApplied(rec, toHex(head), ctx) || (await isDeferred(ctx, applyKey(toHex(fileId))))) return false;
+  const history = await ctx.api.history(ctx.ring.vaultId, fileId);
+  const v = history.find((x) => equalBytes(x.versionId, head));
+  if (!v) return false;
+  await applyHead(ctx, v, history);
+  return true;
+}
+
 export async function applyHead(ctx: SyncContext, head: RemoteVersion, known: readonly RemoteVersion[]): Promise<boolean> {
   const pending = await ctx.state.getPending(toHex(head.fileId));
   if (pending && pending.versionId !== toHex(head.versionId)) {
@@ -324,7 +337,7 @@ async function tryApply(
   }
 
   // Overlapping edits, or a binary file: keep local, save remote beside it.
-  const copy = await freeConflictPath(ctx, path, meta.deviceName || 'unknown device');
+  const copy = await freeConflictPath(ctx, path, deviceLabel(meta));
   if (!(await adapter.write(copy, data, { absent: true }))) return false;
   await state.markDirty(copy);
   await state.recordSynced(record(fileId, path, versionId, v, contentHash, -1), text);

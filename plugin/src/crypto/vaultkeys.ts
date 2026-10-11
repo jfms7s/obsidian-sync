@@ -40,8 +40,8 @@ export const SEALED_KEY_LEN = SEALED_CORE_LEN + SIGNATURE_LEN; // 156
  * The signature lets the recipient check who sealed the key: an anonymous
  * seal could come from the server itself. The deterministic core: the
  * ephemeral key and nonce are inputs (Ed25519 signing is deterministic).
+ * @internal test-only: caller supplies nonce
  */
-/** @internal test-only: caller supplies nonce */
 export async function sealKeyWith(
   ephPriv: Uint8Array, nonce: Uint8Array, recipientPub: Uint8Array, key: Uint8Array, vaultId: string, epoch: number, userId: string,
   sealerSignSeed: Uint8Array,

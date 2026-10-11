@@ -6,6 +6,11 @@ export const COMMIT_BODY_LIMIT = 8 << 20;
 /** Batches are cut below the limit to leave room for framing. */
 export const COMMIT_BATCH_BYTES = 7 << 20;
 export const MAX_CHUNK_EXISTS_BATCH = 1000;
+/**
+ * The server's limit on encrypted metadata. Not checked here: a FileMeta
+ * this large needs a path of tens of thousands of characters, and a
+ * refusal comes back as COMMIT_REJECTED.
+ */
 export const MAX_ENC_META_BYTES = 64 << 10;
 export const CHANGES_PAGE_SIZE = 1000;
 export const HEADS_PAGE_SIZE = 5000;

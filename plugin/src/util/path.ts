@@ -81,6 +81,9 @@ export function conflictStamp(ms: number, utc = false): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}${pad2(d.getMinutes())}`;
 }
 
+/** The device name a conflict copy carries when there is none. */
+export const UNKNOWN_DEVICE = 'unknown device';
+
 /**
  * A device name made safe for a file name: characters some platform forbids
  * become '-', at most 60 code points (never half a surrogate pair), and no
@@ -89,7 +92,7 @@ export function conflictStamp(ms: number, utc = false): string {
 export function sanitizeName(s: string): string {
   const cleaned = Array.from(s, (ch) => (ch.charCodeAt(0) < 0x20 || '\\/:*?"<>|'.includes(ch) ? '-' : ch)).join('').trim();
   const cut = Array.from(cleaned).slice(0, 60).join('').replace(/[ .]+$/, '');
-  return cut === '' ? 'unknown device' : cut;
+  return cut === '' ? UNKNOWN_DEVICE : cut;
 }
 
 /**
