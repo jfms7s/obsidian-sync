@@ -34,7 +34,9 @@ var errUsage = errors.New(`usage: obsync admin user create --username NAME [--qu
        obsync admin user delete --username NAME [--yes]
        obsync admin device list --username NAME
        obsync admin device revoke --username NAME (--id DEVICE_ID | --all)
-       obsync admin maintenance run [--as-of RFC3339]`)
+       obsync admin maintenance run [--as-of RFC3339]
+       obsync admin export --out DIR [--copy] [--wait 2m]
+       obsync admin export --prune DIR --keep N`)
 
 type Store interface {
 	CreateUser(ctx context.Context, u store.User) error
@@ -46,6 +48,9 @@ type Store interface {
 	ListDevices(ctx context.Context, userID string) ([]store.Device, error)
 	RevokeDevice(ctx context.Context, userID, deviceID string) error
 	RevokeAllDevices(ctx context.Context, userID string) (int, error)
+	AcquireLease(ctx context.Context, name, holder string, ttl time.Duration) (bool, error)
+	ReleaseLease(ctx context.Context, name, holder string) error
+	Snapshot(ctx context.Context, path string) error
 }
 
 type Deps struct {
@@ -57,9 +62,21 @@ type Deps struct {
 	Stdout            io.Writer
 	// Maintenance runs one maintenance pass as if the time were now.
 	Maintenance func(ctx context.Context, now time.Time) (jobs.Report, error)
+
+	// For export: the configured database URL (only file: is exported), the
+	// build version for the manifest, and how to open the snapshot.
+	DatabaseURL  string
+	Version      string
+	OpenSnapshot func(ctx context.Context, path string) (Snapshot, error)
+	// Link and Now replace os.Link and time.Now in tests; nil uses them.
+	Link func(oldname, newname string) error
+	Now  func() time.Time
 }
 
 func Run(ctx context.Context, args []string, d Deps) error {
+	if len(args) >= 1 && args[0] == "export" {
+		return export(ctx, args[1:], d)
+	}
 	if len(args) < 2 {
 		return errUsage
 	}

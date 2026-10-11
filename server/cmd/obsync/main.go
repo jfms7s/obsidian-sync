@@ -25,6 +25,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
 	"github.com/jfms7s/obsidian-sync/server/internal/config"
 	"github.com/jfms7s/obsidian-sync/server/internal/jobs"
+	"github.com/jfms7s/obsidian-sync/server/internal/store"
 )
 
 const usage = `usage: obsync [--config PATH] <command> [args]
@@ -33,7 +34,8 @@ commands:
   serve     run the sync server
   migrate   apply database migrations and exit
   admin     manage users and devices: obsync admin user create|list|delete|set-password,
-            obsync admin device list|revoke, obsync admin maintenance run
+            obsync admin device list|revoke, obsync admin maintenance run,
+            obsync admin export (a backup a server can start from)
   version   print the build version
   health    probe GET /readyz on the server's own listen address; exit 0 only on 200
 
@@ -50,6 +52,9 @@ var stdout io.Writer = os.Stdout
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "obsync:", err)
+		if exit := (*admin.ExitError)(nil); errors.As(err, &exit) {
+			os.Exit(exit.Code)
+		}
 		os.Exit(1)
 	}
 }
@@ -233,6 +238,11 @@ func adminCmd(ctx context.Context, cfg config.Config, args []string, log *slog.L
 		Maintenance: func(ctx context.Context, now time.Time) (jobs.Report, error) {
 			r := jobs.New(st, blobs, app.JobsConfig(cfg), func() time.Time { return now }, log)
 			return r.RunPass(ctx)
+		},
+		DatabaseURL: cfg.DatabaseURL,
+		Version:     version,
+		OpenSnapshot: func(ctx context.Context, path string) (admin.Snapshot, error) {
+			return store.Open(ctx, store.Options{URL: "file:" + path})
 		},
 	})
 }

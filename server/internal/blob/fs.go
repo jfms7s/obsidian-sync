@@ -85,6 +85,10 @@ func (f *FS) path(key string) (string, error) {
 	return filepath.Join(f.root, filepath.FromSlash(key)), nil
 }
 
+// Path is the file that holds key's blob, for tools that work on the files
+// themselves (obsync admin export links them into a backup).
+func (f *FS) Path(key string) (string, error) { return f.path(key) }
+
 func (f *FS) Put(ctx context.Context, key string, r io.Reader) error {
 	if err := ctx.Err(); err != nil {
 		return err
