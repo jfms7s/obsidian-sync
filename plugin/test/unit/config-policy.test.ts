@@ -2,7 +2,7 @@
 // settings files sync; plugin code, workspaces, themes and Obsync's own
 // folder never do, under any spelling.
 import { describe, expect, it } from 'vitest';
-import { ConfigCarveOut, configPolicy, CORE_SETTINGS_FILES, defaultSettingsSyncPolicy, SETTINGS_SYNC_OFF, type SettingsSyncPolicy } from '../../src/vault/config-policy';
+import { ConfigCarveOut, configPolicy, CORE_SETTINGS_FILES, defaultSettingsSyncPolicy, SETTINGS_SYNC_OFF, settingsFilePaths, type SettingsSyncPolicy } from '../../src/vault/config-policy';
 import { IgnoreRules } from '../../src/vault/ignore';
 
 const all: SettingsSyncPolicy = { enabled: true, core: Object.fromEntries(CORE_SETTINGS_FILES.map((f) => [f, true])), pluginData: ['dataview', 'templater', 'obsync', 'mine'] };
@@ -107,5 +107,16 @@ describe('the config folder in the ignore rules', () => {
     expect(coreOnly.skipsFolder(`${C}/plugins`)).toBe(true);
     expect(rules(SETTINGS_SYNC_OFF).skipsFolder(C)).toBe(true);
     expect(rules({ enabled: true, core: {}, pluginData: [] }).skipsFolder(C)).toBe(true);
+  });
+});
+
+describe('settingsFilePaths', () => {
+  it('lists exactly the files the policy syncs', () => {
+    expect(settingsFilePaths(C, all, ['mine'])).toEqual([
+      ...CORE_SETTINGS_FILES.map((f) => `${C}/${f}`), `${C}/plugins/dataview/data.json`, `${C}/plugins/templater/data.json`,
+    ]);
+    expect(settingsFilePaths(C, defaultSettingsSyncPolicy(true))).not.toContain(`${C}/appearance.json`);
+    expect(settingsFilePaths(C, SETTINGS_SYNC_OFF)).toEqual([]);
+    expect(settingsFilePaths(C, { ...all, pluginData: ['a/b', '..', 'con'] })).toHaveLength(CORE_SETTINGS_FILES.length);
   });
 });

@@ -77,6 +77,17 @@ function pluginDataSyncs(id: string, policy: SettingsSyncPolicy, ownPluginFolder
   return policy.pluginData.includes(id);
 }
 
+/** Every path the policy can sync, for watching them (Obsidian reports no event for the config folder). */
+export function settingsFilePaths(configDir: string, policy: SettingsSyncPolicy, ownPluginFolders: readonly string[] = []): string[] {
+  const dir = configDir.replace(/^\/+|\/+$/g, '');
+  if (!policy.enabled || dir === '') return [];
+  const candidates = [
+    ...CORE_SETTINGS_FILES.map((f) => `${dir}/${f}`),
+    ...policy.pluginData.map((id) => `${dir}/plugins/${id}/data.json`),
+  ];
+  return [...new Set(candidates.filter((p) => configPolicy(p, dir, policy, ownPluginFolders) === 'sync'))];
+}
+
 /** The policy bound to one config folder, as the ignore rules use it. */
 export class ConfigCarveOut {
   private readonly dir: string;
