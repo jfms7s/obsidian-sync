@@ -9,13 +9,13 @@ import * as account from '../services/account';
 import { openSyncSession, type SyncSessionResult } from '../services/session';
 import type { LocalState } from '../state/store';
 import { heldDeletions, releaseHeldDeletions, restoreHeldDeletions } from '../sync/deletion-hold';
-import type { SyncEngine } from '../sync/engine';
+import { composeIgnoreRules, type SyncEngine } from '../sync/engine';
 import type { EngineEvent, SyncStatus } from '../sync/events';
 import type { Clock } from '../util/clock';
 import type { Random } from '../util/random';
 import type { VaultAdapter } from '../vault/adapter';
 import { approveServerRemoval, newlyIgnored, type NewlyIgnored } from '../sync/server-removal';
-import { assertValidIgnorePatterns, IgnoreRules, parseIgnoreFile, VAULT_IGNORE_FILE, type ParsedIgnoreFile } from '../vault/ignore';
+import { assertValidIgnorePatterns, parseIgnoreFile, VAULT_IGNORE_FILE, type IgnoreRules, type ParsedIgnoreFile } from '../vault/ignore';
 import type { EngineLock } from './engine-lock';
 import { HistoryController } from './history-controller';
 
@@ -281,7 +281,7 @@ export class ShellController {
   private rules(deviceGlobs: readonly string[], vaultText: string): IgnoreRules {
     // Globs saved before validation existed could be unsupported: skip them here as the vault file does.
     const device = parseIgnoreFile(deviceGlobs.join('\n')).globs;
-    return new IgnoreRules(device, { caseInsensitive: this.o.adapter.caseInsensitive, configDir: this.o.configDir, vaultGlobs: parseIgnoreFile(vaultText).globs });
+    return composeIgnoreRules({ configDir: this.o.configDir, caseInsensitive: this.o.adapter.caseInsensitive, ignoreGlobs: device, vaultGlobs: parseIgnoreFile(vaultText).globs });
   }
 
   /**
