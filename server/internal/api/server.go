@@ -16,6 +16,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/apperr"
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
 	obsyncv1 "github.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1"
+	"github.com/jfms7s/obsidian-sync/server/internal/metrics"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/syncsvc"
 	"github.com/jfms7s/obsidian-sync/server/internal/vaultsvc"
@@ -41,22 +42,25 @@ type Deps struct {
 	// RateLimits bounds request rates; the zero value disables limiting.
 	// Health checks are never limited.
 	RateLimits RateLimits
+	// Metrics counts rate-limit refusals; nil records nothing.
+	Metrics *metrics.Obsync
 }
 
 type handlers struct {
-	auth   *auth.Service
-	sync   *syncsvc.Service
-	vaults *vaultsvc.Service
-	store  Store
-	ready  func(ctx context.Context) error
-	log    *slog.Logger
-	limits *limiters
+	auth    *auth.Service
+	sync    *syncsvc.Service
+	vaults  *vaultsvc.Service
+	store   Store
+	ready   func(ctx context.Context) error
+	log     *slog.Logger
+	limits  *limiters
+	metrics *metrics.Obsync
 
 	readyCache readyCache
 }
 
 func NewHandler(d Deps) http.Handler {
-	h := &handlers{auth: d.Auth, sync: d.Sync, vaults: d.Vaults, store: d.Store, ready: d.Ready, log: d.Log, limits: newLimiters(d.RateLimits)}
+	h := &handlers{auth: d.Auth, sync: d.Sync, vaults: d.Vaults, store: d.Store, ready: d.Ready, log: d.Log, limits: newLimiters(d.RateLimits), metrics: d.Metrics}
 	if h.ready == nil {
 		h.ready = func(context.Context) error { return nil }
 	}
@@ -159,6 +163,7 @@ func (h *handlers) authed(next authedHandler) http.HandlerFunc {
 		}
 		if h.limits.device != nil {
 			if ok, retry := h.limits.device.Take(sess.DeviceID); !ok {
+				h.metrics.RateLimited(metrics.LimiterDevice)
 				writeRateLimited(w, retry)
 				return
 			}
@@ -175,6 +180,7 @@ func (h *handlers) authFailed(w http.ResponseWriter, r *http.Request, err error)
 		switch apperr.CodeOf(err) {
 		case apperr.Unauthorized, apperr.DeviceRevoked:
 			if ok, retry := h.takeIP(h.limits.authFail, r); !ok {
+				h.metrics.RateLimited(metrics.LimiterBadToken)
 				writeRateLimited(w, retry)
 				return
 			}

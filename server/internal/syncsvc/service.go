@@ -15,6 +15,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/bus"
 	"github.com/jfms7s/obsidian-sync/server/internal/ids"
 	"github.com/jfms7s/obsidian-sync/server/internal/limits"
+	"github.com/jfms7s/obsidian-sync/server/internal/metrics"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/vaultsvc"
 )
@@ -57,13 +58,19 @@ type Limits struct {
 	MaxFileSizeBytes int64
 }
 
+// SetMetrics makes the service count commits, chunk transfers and quota
+// refusals in m. Call it before serving requests; without it nothing is
+// recorded.
+func (s *Service) SetMetrics(m *metrics.Obsync) { s.metrics = m }
+
 type Service struct {
-	st     Store
-	authz  Authorizer
-	blobs  blob.Store
-	bus    bus.Bus
-	limits Limits
-	log    *slog.Logger
+	metrics *metrics.Obsync
+	st      Store
+	authz   Authorizer
+	blobs   blob.Store
+	bus     bus.Bus
+	limits  Limits
+	log     *slog.Logger
 }
 
 func New(st Store, authz Authorizer, blobs blob.Store, b bus.Bus, limits Limits, log *slog.Logger) *Service {
@@ -128,6 +135,7 @@ func (s *Service) PutChunk(ctx context.Context, userID, vaultID string, chunkID 
 	if used+size > owner.QuotaBytes {
 		// A fast path only: InsertChunk makes the authoritative check, since
 		// concurrent uploads can all pass this one.
+		s.metrics.QuotaRefused()
 		return errQuotaExceeded
 	}
 
@@ -150,6 +158,7 @@ func (s *Service) PutChunk(ctx context.Context, userID, vaultID string, chunkID 
 		s.deleteBlob(ctx, key)
 		switch {
 		case errors.Is(err, store.ErrQuotaExceeded):
+			s.metrics.QuotaRefused()
 			return errQuotaExceeded
 		case errors.Is(err, store.ErrNotFound):
 			return apperr.ErrVaultNotFound // deleted while the chunk was uploading
@@ -158,7 +167,9 @@ func (s *Service) PutChunk(ctx context.Context, userID, vaultID string, chunkID 
 	}
 	if !inserted {
 		s.deleteBlob(ctx, key) // a concurrent upload of the same chunk won
+		return nil
 	}
+	s.metrics.ChunkStored(size)
 	return nil
 }
 
@@ -187,6 +198,7 @@ func (s *Service) OpenChunk(ctx context.Context, userID, vaultID string, chunkID
 	if err != nil {
 		return nil, 0, err
 	}
+	s.metrics.ChunkServed()
 	return rc, size, nil
 }
 
@@ -217,6 +229,7 @@ func (s *Service) Commit(ctx context.Context, userID, deviceID, vaultID string, 
 		results[i].FileID = c.FileID
 		if verr := s.validateCommit(c); verr != nil {
 			results[i].Err = verr
+			s.metrics.Commit(metrics.CommitInvalid)
 			continue
 		}
 		c.VaultID = vaultID
@@ -241,15 +254,20 @@ func (s *Service) Commit(ctx context.Context, userID, deviceID, vaultID string, 
 		case store.CommitOK:
 			r.Seq = out.Seq
 			newest = max(newest, out.Seq)
+			s.metrics.Commit(metrics.CommitOK)
 		case store.CommitConflict:
 			r.Err = apperr.New(apperr.Conflict, "the file changed since the base version")
 			r.HeadVersionID = out.HeadVersionID
+			s.metrics.Commit(metrics.CommitConflict)
 		case store.CommitStaleEpoch:
 			r.Err = apperr.New(apperr.StaleEpoch, "the vault key epoch has changed")
+			s.metrics.Commit(metrics.CommitStaleEpoch)
 		case store.CommitMissingChunk:
 			r.Err = apperr.New(apperr.MissingChunk, "a referenced chunk is not on the server; upload it again")
+			s.metrics.Commit(metrics.CommitMissingChunk)
 		default:
 			r.Err = apperr.New(apperr.Invalid, "%s", out.Detail)
+			s.metrics.Commit(metrics.CommitInvalid)
 		}
 	}
 	s.publish(ctx, vaultID, newest)

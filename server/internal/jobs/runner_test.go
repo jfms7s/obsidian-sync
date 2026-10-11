@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +18,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/blob"
 	"github.com/jfms7s/obsidian-sync/server/internal/config"
 	"github.com/jfms7s/obsidian-sync/server/internal/jobs"
+	"github.com/jfms7s/obsidian-sync/server/internal/metrics"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/store/storetest"
 )
@@ -428,5 +432,38 @@ func TestRunOnceGivesTheLeaseBackAfterThePass(t *testing.T) {
 	}
 	if ok, _ := st.AcquireLease(ctx, jobs.LeaseName, "someone-else", time.Minute); ok {
 		t.Fatal("a skipped pass released another holder's lease")
+	}
+}
+
+// A pass that finds the lease taken counts as skipped; one that runs, as ok.
+func TestRunOnceCountsPasses(t *testing.T) {
+	ctx := context.Background()
+	st, clk := storetest.New(t)
+	blobs, _ := blob.NewFS(t.TempDir())
+	m := metrics.NewObsync("test", func(context.Context) (metrics.Stats, error) { return metrics.Stats{}, nil })
+	r := jobs.New(st, blobs, jobs.Config{Interval: time.Hour, Retention: config.Retention{TrashDays: 30}, GCGrace: time.Hour, Metrics: m}, clk.Now, discard())
+	if ok, _ := st.AcquireLease(ctx, jobs.LeaseName, "other", time.Minute); !ok {
+		t.Fatal("setup: lease not taken")
+	}
+	if err := r.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.ReleaseLease(ctx, jobs.LeaseName, "other")
+	if err := r.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(m.Handler())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	for _, want := range []string{`obsync_maintenance_runs_total{result="skipped_lease"} 1`, `obsync_maintenance_runs_total{result="ok"} 1`,
+		fmt.Sprintf("obsync_maintenance_last_success_timestamp_seconds %v", float64(clk.Now().UnixMilli())/1000)} {
+		if !strings.Contains(string(body), "\n"+want+"\n") {
+			t.Errorf("metrics lack %q:\n%s", want, body)
+		}
 	}
 }

@@ -44,7 +44,8 @@ func buildWith(t *testing.T, vars map[string]string) (*app.App, config.Config) {
 
 func get(t *testing.T, url string) (int, string) {
 	t.Helper()
-	resp, err := http.Get(url)
+	req, _ := http.NewRequest("GET", url, nil)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,18 +122,23 @@ func TestMetricsListener(t *testing.T) {
 		{FileId: fileID, VersionId: ids.Bytes(16), Epoch: 1, EncMeta: []byte("m"), ChunkIds: [][]byte{chunk}, Size: 10},
 		{FileId: fileID, VersionId: ids.Bytes(16), Epoch: 1, EncMeta: []byte("m")}, // also "new": a conflict
 	}}, &cr, 200)
-	if err := a.Jobs.RunOnce(context.Background()); err != nil {
-		t.Fatal(err)
-	}
 	// Spend the rest of the address's login budget: refused with 429.
 	for i := 0; i < 2; i++ {
 		c.call("POST", "/v1/auth/login", &obsyncv1.LoginRequest{Username: "metricsuser", Password: "wrong one"}, nil, 401)
 	}
 	c.call("POST", "/v1/auth/login", &obsyncv1.LoginRequest{Username: "metricsuser", Password: "wrong one"}, nil, 429)
 
-	status, body := get(t, metricsURL)
-	if status != 200 {
-		t.Fatalf("GET /metrics = %d", status)
+	// Serve's maintenance runner makes its first pass at once.
+	var status int
+	var body string
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		status, body = get(t, metricsURL)
+		if status != 200 {
+			t.Fatalf("GET /metrics = %d", status)
+		}
+		if !strings.Contains(body, `obsync_maintenance_runs_total{result="ok"} 0`) || time.Now().After(deadline) {
+			break
+		}
 	}
 	for _, want := range []string{
 		`obsync_build_info{version="9.9.9-test"} 1`,
@@ -140,7 +146,7 @@ func TestMetricsListener(t *testing.T) {
 		`obsync_commits_total{result="ok"} 1`, `obsync_commits_total{result="conflict"} 1`,
 		"obsync_chunk_uploads_total 1", "obsync_chunk_upload_bytes_total 10", "obsync_chunk_downloads_total 1",
 		`obsync_rate_limited_total{limiter="ip"} 1`,
-		`obsync_maintenance_runs_total{result="ok"} 1`,
+		`obsync_maintenance_runs_total{result="ok"} 1`, `obsync_maintenance_runs_total{result="failed"} 0`,
 		"obsync_users 1", "obsync_vaults 1", "obsync_devices_active 1", "obsync_storage_used_bytes 10",
 	} {
 		if !strings.Contains(body, "\n"+want+"\n") {
@@ -170,7 +176,9 @@ func TestMetricsListener(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("Serve did not return")
 	}
-	if _, err := http.Get(metricsURL); err == nil {
+	req, _ := http.NewRequest("GET", metricsURL, nil)
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		resp.Body.Close()
 		t.Fatal("the metrics listener still answers after shutdown")
 	}
 	deadline := time.Now().Add(2 * time.Second)

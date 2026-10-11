@@ -18,6 +18,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/bus"
 	obsyncv1 "github.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1"
 	"github.com/jfms7s/obsidian-sync/server/internal/ids"
+	"github.com/jfms7s/obsidian-sync/server/internal/metrics"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/vaultsvc"
 )
@@ -60,6 +61,8 @@ type Options struct {
 	// therefore cut off at its first frame after this interval (or by the
 	// idle timeout if it stops sending), or at its next HTTP request.
 	TokenRecheckInterval time.Duration
+	// Metrics counts open sockets; nil records nothing.
+	Metrics *metrics.Obsync
 }
 
 type Hub struct {
@@ -112,6 +115,8 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return // Accept has already written the HTTP error
 	}
+	h.opts.Metrics.WebSocketOpened()
+	defer h.opts.Metrics.WebSocketClosed()
 	defer ws.CloseNow()
 	ws.SetReadLimit(maxFrameBytes)
 

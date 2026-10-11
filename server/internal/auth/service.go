@@ -14,6 +14,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/apperr"
 	"github.com/jfms7s/obsidian-sync/server/internal/ids"
 	"github.com/jfms7s/obsidian-sync/server/internal/limits"
+	"github.com/jfms7s/obsidian-sync/server/internal/metrics"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 )
 
@@ -52,9 +53,12 @@ type Options struct {
 	// MaxConcurrentVerifies bounds how many password checks (each allocating
 	// Params.Memory) run at once. Zero = runtime.GOMAXPROCS(0).
 	MaxConcurrentVerifies int
+	// Metrics counts login results; nil records nothing.
+	Metrics *metrics.Obsync
 }
 
 type Service struct {
+	metrics   *metrics.Obsync
 	st        Store
 	now       func() time.Time
 	limiter   *LoginLimiter
@@ -81,7 +85,7 @@ func NewService(st Store, opts Options) (*Service, error) {
 		return nil, fmt.Errorf("dummy hash: %w", err)
 	}
 	return &Service{st: st, now: opts.Now, limiter: opts.Limiter, dummyHash: dummy,
-		verifying: make(chan struct{}, opts.MaxConcurrentVerifies), verify: VerifyPassword}, nil
+		verifying: make(chan struct{}, opts.MaxConcurrentVerifies), verify: VerifyPassword, metrics: opts.Metrics}, nil
 }
 
 // checkPassword runs verify once a semaphore slot is free. If ctx ends while
@@ -119,6 +123,20 @@ func errPasswordTooLong() error {
 }
 
 func (s *Service) Login(ctx context.Context, req LoginRequest) (LoginResult, error) {
+	res, err := s.login(ctx, req)
+	switch {
+	case err == nil:
+		s.metrics.Login(metrics.LoginOK)
+	case errors.Is(err, ErrRateLimited):
+		s.metrics.Login(metrics.LoginLocked)
+		s.metrics.RateLimited(metrics.LimiterLogin)
+	default:
+		s.metrics.Login(metrics.LoginFailed)
+	}
+	return res, err
+}
+
+func (s *Service) login(ctx context.Context, req LoginRequest) (LoginResult, error) {
 	if len(req.Password) > maxPasswordBytes {
 		return LoginResult{}, errPasswordTooLong()
 	}
