@@ -136,3 +136,38 @@ func TestAdminMaintenanceRun(t *testing.T) {
 		t.Fatalf("output = %q", out.String())
 	}
 }
+
+// An export is a data directory: obsync started on it sees the same accounts.
+func TestAdminExportIsADataDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OBSYNC_DATA_DIR", dir)
+	restore := swapStdout(&bytes.Buffer{})
+	defer func() { restore() }()
+	if err := run(context.Background(), []string{"migrate"}); err != nil {
+		t.Fatal(err)
+	}
+	stdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	_, _ = w.WriteString("correct horse\n")
+	w.Close()
+	err := run(context.Background(), []string{"admin", "user", "create", "--username", "alice"})
+	os.Stdin = stdin
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "export", "today")
+	if err := run(context.Background(), []string{"admin", "export", "--out", out}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OBSYNC_DATA_DIR", out)
+	var list bytes.Buffer
+	restore()
+	restore = swapStdout(&list)
+	if err := run(context.Background(), []string{"admin", "user", "list"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(list.String(), "alice") {
+		t.Fatalf("users in the export = %q", list.String())
+	}
+}
