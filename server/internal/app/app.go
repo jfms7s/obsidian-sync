@@ -22,6 +22,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/jobs"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/syncsvc"
+	"github.com/jfms7s/obsidian-sync/server/internal/vaultsvc"
 )
 
 // shutdownTimeout fits inside the 10s grace period `docker stop` gives
@@ -76,12 +77,13 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts Option
 	h := hub.New(authSvc, st, b, log, hub.Options{})
 	syncSvc := syncsvc.New(st, blobs, b, syncsvc.Limits{MaxFileSizeBytes: cfg.MaxFileSizeBytes}, log)
 	handler := api.NewHandler(api.Deps{
-		Auth:  authSvc,
-		Sync:  syncSvc,
-		Store: st,
-		Hub:   h,
-		Ready: readiness(st, blobs, b),
-		Log:   log,
+		Auth:   authSvc,
+		Sync:   syncSvc,
+		Vaults: vaultsvc.New(st, authSvc),
+		Store:  st,
+		Hub:    h,
+		Ready:  readiness(st, blobs, b),
+		Log:    log,
 		RateLimits: api.RateLimits{
 			DeviceRPS:      cfg.RateLimit.DeviceRPS,
 			DeviceBurst:    cfg.RateLimit.DeviceBurst,
