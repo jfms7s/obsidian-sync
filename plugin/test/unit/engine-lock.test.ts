@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createEngineLock, type LockManagerLike } from '../../src/shell/engine-lock';
 import { formatIgnoreText, parseIgnoreText } from '../../src/shell/ignore-text';
 
@@ -86,5 +86,31 @@ describe('ignore text', () => {
 
   it('formats globs one per line', () => {
     expect(formatIgnoreText(['a/', 'b'])).toBe('a/\nb');
+  });
+});
+
+describe('the fallback queue in Obsidian', () => {
+  it('is shared on the window, so a reloaded plugin (the module evaluated again) waits for the old engine', async () => {
+    vi.stubGlobal('window', {});
+    try {
+      vi.resetModules();
+      const first = await import('../../src/shell/engine-lock');
+      vi.resetModules();
+      const second = await import('../../src/shell/engine-lock');
+      expect(second).not.toBe(first);
+      const releaseOld = await first.createEngineLock('vault-1', { locks: null }).acquire();
+      let newHeld = false;
+      const waiting = second.createEngineLock('vault-1', { locks: null }).acquire().then((release) => {
+        newHeld = true;
+        return release;
+      });
+      await flush();
+      expect(newHeld).toBe(false);
+      releaseOld();
+      (await waiting)();
+      expect(newHeld).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
