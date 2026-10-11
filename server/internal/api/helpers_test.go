@@ -23,6 +23,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/store/storetest"
 	"github.com/jfms7s/obsidian-sync/server/internal/syncsvc"
+	"github.com/jfms7s/obsidian-sync/server/internal/vaultsvc"
 )
 
 var ctx = context.Background()
@@ -113,10 +114,13 @@ func newTestEnvFull(t *testing.T, wrap func(*store.Store) api.Store, rl api.Rate
 	failBlobReads := new(atomic.Bool)
 	syncSvc := syncsvc.New(st, faultyBlobs{Store: blobs, fail: failBlobReads}, bus.NewMemory(), syncsvc.Limits{MaxFileSizeBytes: 64 << 20}, log)
 	var apiStore api.Store = st
+	var vaultStore vaultsvc.Store = st
 	if wrap != nil {
-		apiStore = wrap(st)
+		w := wrap(st)
+		apiStore, vaultStore = w, w.(vaultsvc.Store) // wrappers embed *store.Store
 	}
-	h := api.NewHandler(api.Deps{Auth: authSvc, Sync: syncSvc, Store: apiStore, Hub: hub, Ready: st.Ping, Log: log, RateLimits: rl})
+	h := api.NewHandler(api.Deps{Auth: authSvc, Sync: syncSvc, Vaults: vaultsvc.New(vaultStore, authSvc), Store: apiStore,
+		Hub: hub, Ready: st.Ping, Log: log, RateLimits: rl})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	return &testEnv{t: t, url: srv.URL, st: st, blobRoot: blobRoot, failBlobReads: failBlobReads, handler: h, clk: clk}

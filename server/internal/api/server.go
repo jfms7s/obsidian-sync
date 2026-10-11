@@ -18,26 +18,23 @@ import (
 	obsyncv1 "github.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/syncsvc"
+	"github.com/jfms7s/obsidian-sync/server/internal/vaultsvc"
 )
 
+// Store is what the handlers still read directly: a user's own devices.
 type Store interface {
 	ListDevices(ctx context.Context, userID string) ([]store.Device, error)
 	RevokeDevice(ctx context.Context, userID, deviceID string) error
-	KeyBundle(ctx context.Context, userID string) (store.KeyBundle, error)
-	PutKeyBundle(ctx context.Context, userID string, kb store.KeyBundle) error
-	CreateVault(ctx context.Context, v store.Vault, keys []store.VaultKey) error
-	ListVaults(ctx context.Context, userID string) ([]store.Vault, error)
-	VaultForMember(ctx context.Context, vaultID, userID string) (store.Vault, error)
-	VaultKeys(ctx context.Context, vaultID, userID string) ([]store.VaultKey, error)
 }
 
 type Deps struct {
-	Auth  *auth.Service
-	Sync  *syncsvc.Service
-	Store Store
-	Hub   http.Handler
-	Ready func(ctx context.Context) error
-	Log   *slog.Logger
+	Auth   *auth.Service
+	Sync   *syncsvc.Service
+	Vaults *vaultsvc.Service
+	Store  Store
+	Hub    http.Handler
+	Ready  func(ctx context.Context) error
+	Log    *slog.Logger
 	// RateLimits bounds request rates; the zero value disables limiting.
 	// Health checks are never limited.
 	RateLimits RateLimits
@@ -46,6 +43,7 @@ type Deps struct {
 type handlers struct {
 	auth   *auth.Service
 	sync   *syncsvc.Service
+	vaults *vaultsvc.Service
 	store  Store
 	ready  func(ctx context.Context) error
 	log    *slog.Logger
@@ -55,7 +53,7 @@ type handlers struct {
 }
 
 func NewHandler(d Deps) http.Handler {
-	h := &handlers{auth: d.Auth, sync: d.Sync, store: d.Store, ready: d.Ready, log: d.Log, limits: newLimiters(d.RateLimits)}
+	h := &handlers{auth: d.Auth, sync: d.Sync, vaults: d.Vaults, store: d.Store, ready: d.Ready, log: d.Log, limits: newLimiters(d.RateLimits)}
 	if h.ready == nil {
 		h.ready = func(context.Context) error { return nil }
 	}
