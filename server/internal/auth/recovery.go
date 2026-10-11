@@ -42,12 +42,12 @@ func NewRecoveryCodes() (shown []string, hashes [][]byte, err error) {
 func NormalizeRecoveryCode(s string) (string, bool) {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
-		switch {
-		case r == '-' || r == ' ':
+		switch r {
+		case '-', ' ':
 			continue
-		case r == 'i' || r == 'l':
+		case 'i', 'l':
 			r = '1'
-		case r == 'o':
+		case 'o':
 			r = '0'
 		}
 		if r > 127 || !strings.ContainsRune(recoveryAlphabet, r) {
