@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -89,6 +90,9 @@ func run(ctx context.Context, args []string) error {
 	}
 	log := newLogger(cfg.LogLevel)
 
+	if cmd != "health" {
+		makeDataPrivate(cfg.DataDir, log)
+	}
 	switch cmd {
 	case "serve":
 		return serve(ctx, cfg, log)
@@ -98,6 +102,21 @@ func run(ctx context.Context, args []string) error {
 		return health(ctx, cfg)
 	default:
 		return adminCmd(ctx, cfg, rest)
+	}
+}
+
+// makeDataPrivate keeps what obsync creates readable by its own user only:
+// the database holds password hashes, token hashes and wrapped key bundles.
+// The umask covers new files and directories (meta.db, its WAL, blob
+// directories); the chmod covers a data dir that already exists with a looser
+// mode, such as an image's /data. A dir the process does not own (a
+// Kubernetes volume with fsGroup) cannot be chmodded; that only warns.
+func makeDataPrivate(dataDir string, log *slog.Logger) {
+	syscall.Umask(0o077)
+	//nolint:gosec // G302 wants files at 0600; this is a directory, which needs x.
+	if err := os.Chmod(dataDir, 0o700); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		log.Warn("cannot make the data directory private (mode 0700); files obsync creates in it are still private",
+			"data_dir", dataDir, "err", err)
 	}
 }
 

@@ -15,10 +15,10 @@ import (
 // mount) must still end up private, and so must the files obsync creates.
 func TestDataFilesArePrivate(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "data")
-	if err := os.Mkdir(dir, 0o755); err != nil {
+	if err := os.Mkdir(dir, 0o755); err != nil { //nolint:gosec // the loose mode under test
 		t.Fatal(err)
 	}
-	if err := os.Chmod(dir, 0o755); err != nil {
+	if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // the loose mode under test
 		t.Fatal(err)
 	}
 	t.Setenv("OBSYNC_DATA_DIR", dir)
