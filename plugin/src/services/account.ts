@@ -101,6 +101,36 @@ export class PassphraseIsPasswordError extends Error {
   }
 }
 
+/** The strength rule for a new passphrase (owner decision 2026-10-09): at least this many words, or this many characters. */
+export const PASSPHRASE_MIN_WORDS = 4;
+export const PASSPHRASE_MIN_CHARS = 16;
+/** Shorter tokens ("a", "of") do not count as words. */
+const MIN_WORD_CHARS = 3;
+
+/**
+ * Whether passphrase meets the strength rule: at least PASSPHRASE_MIN_WORDS
+ * words of 3 or more characters (separated by spaces, hyphens, dots, commas
+ * or underscores), or at least PASSPHRASE_MIN_CHARS characters. Spaces at
+ * either end do not count.
+ */
+export function isStrongPassphrase(passphrase: string): boolean {
+  const trimmed = passphrase.trim();
+  if (Array.from(trimmed).length >= PASSPHRASE_MIN_CHARS) return true;
+  const words = trimmed.split(/[\s\-_.,]+/u).filter((w) => Array.from(w).length >= MIN_WORD_CHARS);
+  return words.length >= PASSPHRASE_MIN_WORDS;
+}
+
+/** Thrown for a new passphrase that does not meet isStrongPassphrase. */
+export class WeakPassphraseError extends Error {
+  constructor() {
+    super(
+      `Use at least ${PASSPHRASE_MIN_WORDS} words or ${PASSPHRASE_MIN_CHARS} characters. ` +
+      'Four or more random words, for example picked by rolling dice on a word list (diceware), are strong and easy to remember.',
+    );
+    this.name = 'WeakPassphraseError';
+  }
+}
+
 /**
  * A salted digest of the account password, so the setup screen can refuse a
  * passphrase equal to it without keeping the password. Keep it in memory
@@ -289,12 +319,14 @@ export async function loadUserKeys(state: LocalState, userId: string): Promise<U
  * Changes the encryption passphrase. The server requires the account
  * (login) password to replace the bundle: a wrong one is ApiError
  * WRONG_PASSWORD (403). A new passphrase equal to the account password is
- * PassphraseIsPasswordError, before any request.
+ * PassphraseIsPasswordError, and one that is not isStrongPassphrase is
+ * WeakPassphraseError, before any request.
  */
 export async function changePassphrase(
   api: ApiClient, session: Session, keys: UserKeys, newPassphrase: string, accountPassword: string, random: Random = cryptoRandom,
 ): Promise<void> {
   if (newPassphrase === accountPassword) throw new PassphraseIsPasswordError();
+  if (!isStrongPassphrase(newPassphrase)) throw new WeakPassphraseError();
   const current = await bundleOrThrow(api);
   await api.putKeyBundle(await rewrapPassphrase(current, session.userId, keys, newPassphrase, random), accountPassword);
 }

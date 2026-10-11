@@ -4,7 +4,7 @@
 import { Notice, PluginSettingTab, Setting, type App, type ButtonComponent, type Plugin } from 'obsidian';
 import type { FetchLike } from '../api/client';
 import * as account from '../services/account';
-import { KeysAlreadySetUpError, PassphraseIsPasswordError, type PasswordFingerprint } from '../services/account';
+import { KeysAlreadySetUpError, PASSPHRASE_MIN_CHARS, PASSPHRASE_MIN_WORDS, PassphraseIsPasswordError, WeakPassphraseError, type PasswordFingerprint } from '../services/account';
 import * as vaults from '../services/vaults';
 import type { LocalState, Session } from '../state/store';
 import type { ShellController } from './controller';
@@ -14,8 +14,6 @@ import { formatIgnoreText, parseIgnoreText } from './ignore-text';
 import { describePlatform } from './platform';
 import { nextStep, type SetupStep } from './steps';
 import { statusLabel } from './status';
-
-export const MIN_PASSPHRASE_LENGTH = 10;
 
 const START_FAILURES: Record<Extract<Awaited<ReturnType<ShellController['start']>>, { ok: false }>['reason'], string> = {
   'not-logged-in': 'this device is not signed in.',
@@ -164,13 +162,16 @@ export class ObsyncSettingTab extends PluginSettingTab {
         ? 'The server lost the keys of your account, but this device still has them. Choose a passphrase, different from your account password, to store them again; you will get new recovery words.'
         : 'This passphrase protects your notes. It must be different from your account password: the server sees that password at every sign-in, but never this passphrase. Nobody can reset it for you. You will also get recovery words as a backup.',
     });
-    this.text('Passphrase', `At least ${MIN_PASSPHRASE_LENGTH} characters.`, () => f.passphrase, (v) => (f.passphrase = v), { secret: true, autocomplete: 'new-password' });
+    this.containerEl.createEl('p', {
+      text: 'A good passphrase is four or more random words, for example picked by rolling dice on a word list (diceware): strong, and easy to remember.',
+    });
+    this.text('Passphrase', `At least ${PASSPHRASE_MIN_WORDS} words or ${PASSPHRASE_MIN_CHARS} characters.`, () => f.passphrase, (v) => (f.passphrase = v), { secret: true, autocomplete: 'new-password' });
     this.text('Repeat the passphrase', '', () => f.passphrase2, (v) => (f.passphrase2 = v), { secret: true, autocomplete: 'new-password' });
     new Setting(this.containerEl).setDesc('Creating the keys takes a few seconds, longer on a phone.').addButton((b) => b.setButtonText('Create keys').setCta().onClick(this.action(b, async () => {
-      if (f.passphrase.length < MIN_PASSPHRASE_LENGTH) throw new Error(`The passphrase must have at least ${MIN_PASSPHRASE_LENGTH} characters.`);
-      if (f.passphrase !== f.passphrase2) throw new Error('The two passphrases are not the same.');
       // Without a fingerprint (the plugin was reloaded between signing in and this step) the check is skipped: the password is never stored.
       if (f.passwordFingerprint && await account.matchesPassword(f.passwordFingerprint, f.passphrase)) throw new PassphraseIsPasswordError();
+      if (!account.isStrongPassphrase(f.passphrase)) throw new WeakPassphraseError();
+      if (f.passphrase !== f.passphrase2) throw new Error('The two passphrases are not the same.');
       const session = await this.session();
       try {
         const { recoveryWords } = await account.setupKeys(this.state, account.apiFor(session, { fetch: this.fetch }), session, f.passphrase);
