@@ -33,13 +33,17 @@ export class TruncatedBodyError extends NetworkError {
 }
 
 /**
- * The server says the vault is gone or this account lost access to it. The
- * protocol has no separate code for this: chunk and vault lookups both
- * answer NOT_FOUND, told apart by the server's message ("vault not found",
- * "chunk not found"; server/internal/syncsvc).
+ * The server says the vault is gone or this account lost access to it
+ * (VAULT_NOT_FOUND). A missing chunk or an unknown route stays NOT_FOUND.
  */
 export function isVaultNotFound(err: unknown): boolean {
-  return err instanceof ApiError && err.code === ErrorCode.NOT_FOUND && /\bvault not found\b/i.test(err.message);
+  if (!(err instanceof ApiError)) return false;
+  if (err.code === ErrorCode.VAULT_NOT_FOUND) return true;
+  // 0.1.x servers answer a lost vault with NOT_FOUND "vault not found"
+  // (and a missing chunk with NOT_FOUND "chunk not found"). Remove this
+  // fallback once those servers are no longer supported, after the next
+  // minor release.
+  return err.code === ErrorCode.NOT_FOUND && /\bvault not found\b/i.test(err.message);
 }
 
 /** Errors worth retrying later without anyone acting. */

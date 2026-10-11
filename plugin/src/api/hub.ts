@@ -33,7 +33,10 @@ export interface HubHandlers {
   onDisconnected(): void;
   /** DEVICE_REVOKED or UNAUTHORIZED: the client has stopped and will not reconnect. */
   onAuthFailure(code: ErrorCode, message: string): void;
-  /** NOT_FOUND "vault not found": a subscribed vault is gone or access was removed. */
+  /**
+   * VAULT_NOT_FOUND (NOT_FOUND from a 0.1.x server): a subscribed vault is
+   * gone or access was removed. The frame does not say which vault.
+   */
   onVaultNotFound(): void;
 }
 
@@ -204,7 +207,8 @@ export class HubClient {
         if (code === ErrorCode.DEVICE_REVOKED || code === ErrorCode.UNAUTHORIZED) {
           this.stop();
           this.handlers.onAuthFailure(code, message);
-        } else if (code === ErrorCode.NOT_FOUND) {
+        } else if (code === ErrorCode.VAULT_NOT_FOUND || code === ErrorCode.NOT_FOUND) {
+          // A 0.1.x server sends NOT_FOUND here; the hub has no other not-found.
           this.handlers.onVaultNotFound();
         }
         // RATE_LIMITED and other errors are followed by the server closing
