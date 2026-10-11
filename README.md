@@ -53,26 +53,30 @@ Create an account. The password is read from the terminal (or from standard inpu
 docker compose run --rm obsync admin user create --username alice
 ```
 
-Everything the server stores (the database and the encrypted chunks) is in the `obsync-data` volume, which is also all you need to back up. `docker compose logs -f obsync` shows what it does. The server never logs tokens, keys, passphrases or encrypted payloads.
+Everything the server stores (the database and the encrypted chunks) is in the `obsync-data` volume (Docker names it `obsync_obsync-data`), which is also all you need to back up. `docker compose logs -f obsync` shows what it does. The server never logs tokens, keys, passphrases or encrypted payloads.
 
 The image is published as `ghcr.io/jfms7s/obsync` with a tag for every release. Pin a release in `.env` (`OBSYNC_VERSION=0.1.0`) rather than following `latest`.
 
 ### Without Docker
 
-Release archives contain the `obsync` binary for Linux (amd64 and arm64) and the example systemd unit.
+Release archives contain the `obsync` binary for Linux (amd64 and arm64) and the example systemd unit. Run the steps below from inside the extracted archive:
 
 ```bash
+tar -xzf obsync_X.Y.Z_linux_amd64.tar.gz      # or _arm64
+cd obsync_X.Y.Z_linux_amd64
 sudo install -m 0755 obsync /usr/local/bin/obsync
 sudo install -m 0644 deploy/systemd/obsync.sysusers /usr/lib/sysusers.d/obsync.conf && sudo systemd-sysusers
 sudo install -d /etc/obsync
 sudo cp deploy/systemd/obsync.env.example /etc/obsync/obsync.env      # edit it
 sudo cp deploy/systemd/obsync.service /etc/systemd/system/
 sudo systemctl enable --now obsync
-# Accounts are created as the service's user, with the service's environment:
-sudo -u obsync env OBSYNC_DATA_DIR=/var/lib/obsync obsync admin user create --username alice
+# Accounts are created as the service's user, with the service's settings: the
+# unit's data directory, then the env file (readable only by root, so root reads
+# it and then drops to the obsync user):
+sudo sh -c 'set -a; OBSYNC_DATA_DIR=/var/lib/obsync; . /etc/obsync/obsync.env; exec setpriv --reuid=obsync --regid=obsync --init-groups obsync admin user create --username alice'
 ```
 
-Put a reverse proxy with TLS in front of it (the compose example's `Caddyfile` is two lines). The server itself speaks plain HTTP on `OBSYNC_LISTEN` (default `:8080`; the systemd unit binds `127.0.0.1:8080`).
+Put a reverse proxy with TLS in front of it (the compose example's `Caddyfile` is a few lines). The server itself speaks plain HTTP on `OBSYNC_LISTEN` (default `:8080`; the systemd unit binds `127.0.0.1:8080`). With the proxy on the same machine, set `OBSYNC_TRUSTED_PROXIES=127.0.0.1,::1` in `/etc/obsync/obsync.env`, so that rate limits see each client's own address instead of the proxy's.
 
 - The server is built for Linux. On any other system (macOS, Windows) run the Docker image.
 

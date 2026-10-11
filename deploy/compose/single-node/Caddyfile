@@ -1,3 +1,19 @@
+{
+	# For "localhost" Caddy uses its internal CA. Installing that CA into the
+	# container's own trust store helps no client and fails on the read-only
+	# root, so it is skipped; trust it on the client if needed.
+	skip_install_trust
+
+	servers {
+		timeouts {
+			# A client gets 10 s to send its request headers, so slow-header
+			# (slowloris) connections cannot pile up. Bodies and responses keep
+			# Caddy's unbounded defaults for long chunk transfers (see below).
+			read_header 10s
+		}
+	}
+}
+
 # {$OBSYNC_DOMAIN} comes from the environment (see compose.yaml). A public
 # name gets a Let's Encrypt certificate automatically; "localhost" gets one
 # from Caddy's internal CA, which is handy for a local trial.
@@ -11,8 +27,9 @@
 		# Nothing else is tuned on purpose. Caddy streams request bodies
 		# (request_buffers is off) and has no body size limit unless
 		# request_body { max_size } is set, so 4 MiB+ chunk uploads and 8 MiB
-		# commits pass unchanged; its default timeouts are unbounded, which
-		# suits long chunk transfers. WebSocket upgrades (/v1/ws) are proxied
+		# commits pass unchanged; apart from the header timeout set above, its
+		# default read and write timeouts are unbounded, which suits long
+		# chunk transfers. WebSocket upgrades (/v1/ws) are proxied
 		# automatically.
 	}
 }
