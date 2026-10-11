@@ -6,12 +6,12 @@ import { merge3 } from '../merge/merge3';
 import type { FileRecord, PendingCommit } from '../state/store';
 import { equalBytes, toHex, utf8 } from '../util/bytes';
 import { caseFold, conflictCopyName } from '../util/path';
-import { expectFor } from '../vault/adapter';
+import { expectFor, isCoarseMtime } from '../vault/adapter';
 import { evictBlockingFile, moveToCopy, saveBeside } from './collisions';
 import { decodeText, downloadContent, hashHex } from './content';
 import type { SyncContext } from './context';
 import { applyKey, clearFailure, isFileError, recordFailure } from './failures';
-import { isSyncedHere, readLocal } from './local';
+import { isSyncedHere, readLocal, type LocalFile } from './local';
 
 export { isSyncedHere, readLocal, type LocalFile } from './local';
 
@@ -183,6 +183,20 @@ async function adoptLanded(ctx: SyncContext, p: PendingCommit, v: RemoteVersion)
   if (!matches) await ctx.state.markDirty(p.path);
 }
 
+/**
+ * Whether the file at path still holds what was read as local (whose
+ * content hashes to localHash), checked right before a write or remove
+ * guarded by expectFor(local.stat). With whole-second mtimes an edit saved
+ * within the same second keeps size and mtime, so that precondition holds
+ * although the file changed; only the content tells, and reading it again
+ * costs one read on such devices only.
+ */
+async function stillAsRead(ctx: SyncContext, path: string, local: LocalFile, localHash: string): Promise<boolean> {
+  if (!isCoarseMtime(local.stat.mtime)) return true;
+  const now = await ctx.adapter.read(path);
+  return now !== null && (await hashHex(now)) === localHash;
+}
+
 /** One attempt; false when a write precondition failed because the local file changed meanwhile. */
 async function tryApply(
   ctx: SyncContext, v: RemoteVersion, meta: FileMeta, rec: FileRecord | undefined, fileId: string, versionId: string,
@@ -219,7 +233,8 @@ async function tryApply(
           if (!(await adapter.rename(st.path, path, expectFor(st)))) return false;
           const data = await remote();
           const renamed = await adapter.stat(path);
-          if (!renamed || !(await adapter.write(path, data, expectFor(renamed)))) return false;
+          if (!renamed || !(await stillAsRead(ctx, path, { data: local, stat: renamed }, old.contentHash))) return false;
+          if (!(await adapter.write(path, data, expectFor(renamed)))) return false;
           const after = await adapter.stat(path);
           await state.recordSynced(record(fileId, path, versionId, v, contentHash, after?.mtime ?? -1), decodeText(path, data));
           ctx.emit({ type: 'remote-change', path, action: 'write' });
@@ -254,6 +269,7 @@ async function tryApply(
 
   if (v.deleted) {
     if (local && !localChanged) {
+      if (!(await stillAsRead(ctx, path, local, localHash!))) return false;
       if (!(await adapter.remove(path, expectFor(local.stat)))) return false;
       ctx.emit({ type: 'remote-change', path, action: 'delete' });
     }
@@ -269,6 +285,7 @@ async function tryApply(
 
   if (!local || !localChanged) {
     // New here, unchanged here, or deleted here (a remote edit wins over a local delete).
+    if (local && !(await stillAsRead(ctx, path, local, localHash!))) return false;
     if (!(await adapter.write(path, data, expectFor(local?.stat ?? null)))) return false;
     const after = await adapter.stat(path);
     await state.recordSynced(record(fileId, path, versionId, v, contentHash, after?.mtime ?? -1), text);
@@ -286,7 +303,10 @@ async function tryApply(
     const base = liveBase && rec.hasBase ? await baseText() : '';
     const m = merge3(base, localText, text);
     if (m.clean) {
-      if (m.text !== localText && !(await adapter.write(path, utf8(m.text), expectFor(local.stat)))) return false;
+      if (m.text !== localText) {
+        if (!(await stillAsRead(ctx, path, local, localHash!))) return false;
+        if (!(await adapter.write(path, utf8(m.text), expectFor(local.stat)))) return false;
+      }
       await state.recordSynced(record(fileId, path, versionId, v, contentHash, -1), text);
       if (m.text !== text) await state.markDirty(path);
       ctx.emit({ type: 'merged', path });

@@ -53,6 +53,31 @@ describe('history and trash', () => {
     expect(files(a.adapter)).toEqual({ 'n.md': 'unsynced\n' });
   });
 
+  it('refuses to overwrite an edit saved during the restore when mtimes are whole seconds', async () => {
+    const user = await newUser(srv);
+    const a = await makeClient(srv, user, { name: 'A', vault: 'create', coarseMtime: true });
+    const ring = await keyringFromStored((await a.state.getVault())!);
+    await a.adapter.write('n.md', text('v1\n'));
+    await settle([a]);
+    await a.adapter.write('n.md', text('v2\n'));
+    await settle([a]);
+    const hist = await fileHistory(a.api, ring, 'n.md');
+    // The first read of n.md during the restore is followed by a same-size edit in the same second.
+    const read = a.adapter.read.bind(a.adapter);
+    let edited = false;
+    a.adapter.read = async (p) => {
+      const data = await read(p);
+      if (p === 'n.md' && !edited) {
+        edited = true;
+        a.adapter.writeSilently('n.md', text('v3\n'));
+      }
+      return data;
+    };
+    await expect(restore(a.api, ring, a.adapter, a.state, hist[1]!)).rejects.toBeInstanceOf(UnsyncedChangesError);
+    expect(edited).toBe(true);
+    expect(files(a.adapter)).toEqual({ 'n.md': 'v3\n' });
+  });
+
   it('refuses to restore a deleted file over an unsynced local file at its path', async () => {
     const user = await newUser(srv);
     const a = await makeClient(srv, user, { name: 'A', vault: 'create' });

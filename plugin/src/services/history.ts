@@ -6,7 +6,7 @@ import type { VaultKeyring } from '../crypto/vaultkeys';
 import type { LocalState } from '../state/store';
 import { toHex } from '../util/bytes';
 import { normalizePath } from '../util/path';
-import { expectFor, type VaultAdapter } from '../vault/adapter';
+import { expectFor, isCoarseMtime, type VaultAdapter } from '../vault/adapter';
 import { downloadContent, hashHex } from '../sync/content';
 
 /** The file has local changes that have not been synced yet; restoring now would overwrite them. */
@@ -118,6 +118,12 @@ export async function restore(api: ApiClient, ring: VaultKeyring, adapter: Vault
   const rec = await state.getFile(fileId);
   if (local) {
     if (!rec || rec.deleted || rec.contentHash !== (await hashHex(local))) throw new UnsyncedChangesError(path);
+    // With whole-second mtimes an edit saved since the read can keep size
+    // and mtime, so the write precondition cannot see it: compare again.
+    if (isCoarseMtime(stat!.mtime)) {
+      const now = await adapter.read(path);
+      if (!now || (await hashHex(now)) !== rec.contentHash) throw new UnsyncedChangesError(path);
+    }
   } else if (rec && !rec.deleted) {
     // Synced as live but gone here: a local delete (or rename) not pushed yet.
     throw new UnsyncedChangesError(path);

@@ -34,6 +34,21 @@ describe('MemoryAdapter', () => {
     expect((await a.stat('x'))!.mtime).toBeGreaterThan(m1);
   });
 
+  it('can keep whole-second mtimes, so writes within one second share an mtime', async () => {
+    const clock = new ManualClock(Date.UTC(2026, 0, 1) + 250);
+    const a = new MemoryAdapter(false, clock, { coarseMtime: true });
+    await a.write('x', t('a'));
+    const st = (await a.stat('x'))!;
+    expect(st.mtime).toBe(Date.UTC(2026, 0, 1));
+    clock.advance(500);
+    a.writeSilently('x', t('b')); // same size, same second
+    expect((await a.stat('x'))!.mtime).toBe(st.mtime);
+    expect(await a.write('x', t('c'), { mtime: st.mtime, size: st.size })).toBe(true); // the precondition cannot tell
+    clock.advance(500);
+    await a.write('x', t('d'));
+    expect((await a.stat('x'))!.mtime).toBe(Date.UTC(2026, 0, 1) + 1000);
+  });
+
   it('acts like a case-insensitive file system when asked, including case-only renames', async () => {
     const a = new MemoryAdapter(true);
     await a.write('Readme.md', t('x'));
