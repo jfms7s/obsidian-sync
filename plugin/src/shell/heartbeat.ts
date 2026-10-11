@@ -35,10 +35,18 @@ export function parseHeartbeat(text: string): Heartbeat | null {
   }
 }
 
-/** Whether a heartbeat written at `at` still means the plugin is syncing (one from the future, a clock set back, counts until it is stale from now on). */
+/**
+ * Whether a heartbeat written at `at` still means the plugin is syncing. One
+ * a little in the future (a clock set back) counts; one further ahead than
+ * HEARTBEAT_STALE_MS (a skewed clock, a copied folder) does not, so it cannot
+ * hold obsync-cli off for long.
+ */
 export function isFresh(hb: Heartbeat, now: number): boolean {
-  return now - hb.at < HEARTBEAT_STALE_MS;
+  return now - hb.at < HEARTBEAT_STALE_MS && hb.at - now < HEARTBEAT_STALE_MS;
 }
+
+/** How long stopping waits for a heartbeat write in flight before removing the file anyway. */
+export const HEARTBEAT_STOP_WAIT_MS = 2000;
 
 /**
  * Writes the heartbeat now and every interval until the returned stop is
@@ -60,7 +68,10 @@ export function startHeartbeat(sink: HeartbeatSink, clock: Clock, device: string
   return async () => {
     stopped = true;
     if (timer) clock.clearTimeout(timer);
-    await writing;
+    // A write that never settles must not hold up the engine's stop (and its lock).
+    let wait: TimerHandle | null = null;
+    await Promise.race([writing, new Promise<void>((r) => (wait = clock.setTimeout(r, HEARTBEAT_STOP_WAIT_MS)))]);
+    if (wait) clock.clearTimeout(wait);
     await sink.remove().catch(() => undefined);
   };
 }

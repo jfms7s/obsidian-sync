@@ -154,6 +154,8 @@ export class ShellController {
         release();
         return r;
       }
+      // Read before the engine starts: a failure after it would leave an engine no stop() reaches.
+      const device = (await o.state.getSession())?.deviceName ?? '';
       const off = r.engine.on((e) => {
         for (const l of [...this.listeners]) l(e);
       });
@@ -164,7 +166,6 @@ export class ShellController {
         await r.engine.stop().catch(() => undefined);
         throw err;
       }
-      const device = (await o.state.getSession())?.deviceName ?? '';
       const stopHeartbeat = o.heartbeat ? startHeartbeat(o.heartbeat, o.clock ?? systemClock, device) : async () => undefined;
       this.running = { engine: r.engine, history: new HistoryController({ api: r.api, ring: r.ring, adapter: o.adapter, state: o.state }), release, off, stopHeartbeat };
       this.phase = 'running';

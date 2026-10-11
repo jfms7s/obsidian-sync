@@ -249,9 +249,10 @@ export class SyncEngine {
   /** Starts watching the vault and, with autoRun, syncing. */
   async start(): Promise<void> {
     if (!this.stopped || this.halted) return;
+    // Watching first: if it throws, the engine is still stopped and a later start() tries again.
+    this.unwatch = this.opts.adapter.watch((ev) => this.onAdapterEvent(ev));
     this.stopped = false;
     this.reconcileDue = true;
-    this.unwatch = this.opts.adapter.watch((ev) => this.onAdapterEvent(ev));
     this.setStatus('syncing');
     this.hubDownAt = this.reconcilesStarted;
     if (this.opts.webSocket && this.opts.api.token) {
