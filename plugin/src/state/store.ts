@@ -257,9 +257,17 @@ export class LocalState {
     });
   }
 
-  /** The records whose version sits at server seq `seq`: normally none or one (a seq names one version). */
-  filesAtSeq(seq: number): Promise<FileRecord[]> {
-    return inTx(this.db, [FILES], 'readonly', (t) => req(t.objectStore(FILES).index('seq').getAll(seq)) as Promise<FileRecord[]>);
+  /**
+   * The records whose version sits at any of seqs (normally none or one per
+   * seq: a seq names one version), in one transaction for a page of pulled
+   * versions.
+   */
+  filesAtSeqs(seqs: readonly number[]): Promise<FileRecord[]> {
+    return inTx(this.db, [FILES], 'readonly', async (t) => {
+      const index = t.objectStore(FILES).index('seq');
+      const found = await Promise.all([...new Set(seqs)].map((s) => req(index.getAll(s)) as Promise<FileRecord[]>));
+      return found.flat();
+    });
   }
 
   getBase(fileId: string): Promise<string | undefined> {
