@@ -22,8 +22,16 @@ export async function sha256(data: Uint8Array): Promise<Uint8Array<ArrayBuffer>>
 }
 
 export async function hmacSha256(key: Uint8Array, data: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
-  const k = await crypto.subtle.importKey('raw', bs(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  return new Uint8Array(await crypto.subtle.sign('HMAC', k, bs(data)));
+  return hmacSha256Key(await importHmacKey(key), data);
+}
+
+/** An HMAC-SHA256 key for hmacSha256Key, imported once for many messages. */
+export function importHmacKey(key: Uint8Array): Promise<CryptoKey> {
+  return crypto.subtle.importKey('raw', bs(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+}
+
+export async function hmacSha256Key(key: CryptoKey, data: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
+  return new Uint8Array(await crypto.subtle.sign('HMAC', key, bs(data)));
 }
 
 /** HKDF-SHA256 (RFC 5869). An empty salt means HashLen zero bytes. */

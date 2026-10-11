@@ -3,6 +3,7 @@
 // restored from a backup.
 import { CHANGES_PAGE_SIZE, HEADS_PAGE_SIZE } from '../api/limits';
 import type { RemoteHead, RemoteVersion } from '../api/types';
+import type { FileRecord } from '../state/store';
 import { equalBytes, toHex } from '../util/bytes';
 import { alreadyApplied, applyHead } from './apply';
 import { ServerRollbackError, type SyncContext } from './context';
@@ -43,9 +44,9 @@ export async function remoteHeads(ctx: SyncContext, pageSize = HEADS_PAGE_SIZE):
  * version at s means the server was restored from a backup. Independent of the vault's seq, which
  * other devices may have pushed past the lost range again.
  */
-export async function serverLostHistory(ctx: SyncContext, heads?: RemoteHead[]): Promise<boolean> {
+export async function serverLostHistory(ctx: SyncContext, heads?: RemoteHead[], records?: Iterable<FileRecord>): Promise<boolean> {
   const byFile = new Map((heads ?? (await remoteHeads(ctx))).map((h) => [toHex(h.fileId), h]));
-  for (const rec of await ctx.state.allFiles()) {
+  for (const rec of records ?? (await ctx.state.allFiles())) {
     if (rec.versionId === null || !rec.seq) continue;
     const head = byFile.get(rec.fileId);
     // The same seq with another version: the server was restored and its new commits reused the seq.

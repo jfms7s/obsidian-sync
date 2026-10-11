@@ -9,13 +9,27 @@ import { normalizePath } from '../util/path';
 import type { Random } from '../util/random';
 import { chunkAad, metaAad, vaultNameAad, vaultNameSigMessage } from './labels';
 import { pad, unpad } from './padding';
-import { aesGcmOpen, aesGcmSeal, CryptoError, hmacSha256, NONCE_LEN } from './primitives';
+import { aesGcmOpen, aesGcmSeal, CryptoError, hmacSha256, hmacSha256Key, importHmacKey, NONCE_LEN } from './primitives';
 import type { EpochKeys, VaultKeyring } from './vaultkeys';
 import { epochKeys } from './vaultkeys';
 
+/** Naming keys imported into WebCrypto, by the keyring's key bytes (a reconcile derives a file id per file). */
+const importedNamingKeys = new WeakMap<Uint8Array, Promise<CryptoKey>>();
+
+function namingCryptoKey(namingKey: Uint8Array): Promise<CryptoKey> {
+  let k = importedNamingKeys.get(namingKey);
+  if (!k) {
+    k = importHmacKey(namingKey);
+    importedNamingKeys.set(namingKey, k);
+    k.catch(() => importedNamingKeys.delete(namingKey));
+  }
+  return k;
+}
+
 /** file_id = HMAC-SHA256(naming_key, UTF-8(normalized path)). An invalid path rejects with InvalidPathError. */
 export async function fileIdFor(namingKey: Uint8Array, path: string): Promise<Uint8Array> {
-  return hmacSha256(namingKey, utf8(normalizePath(path)));
+  const data = utf8(normalizePath(path));
+  return hmacSha256Key(await namingCryptoKey(namingKey), data);
 }
 
 /** chunk_id = HMAC-SHA256(chunk_id_key[e], plaintext chunk). */
