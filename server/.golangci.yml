@@ -59,7 +59,13 @@ linters:
       # database's non-negative int/int64 columns (seq, size, epoch) and the
       # protobuf schema's unsigned fields, and argon2 parameters whose bit
       # width parseHash checks first. Wrapping would need a corrupt database.
-      - linters: [gosec]
+      # G115 (integer conversion overflow), only where the conversions are:
+      # the database's non-negative int/int64 columns (seq, size, epoch) to and
+      # from the protobuf schema's unsigned fields (api, hub), and argon2
+      # parameters whose bit width parseHash checks first (auth). Wrapping
+      # would need a corrupt database. Tests build small fixture bytes.
+      - path: internal/api/(convert|sync|vaults)\.go|internal/hub/hub\.go|internal/auth/password\.go|_test\.go
+        linters: [gosec]
         text: "G115:"
       # Test fixtures hold made-up credentials and print URLs on purpose.
       - path: _test\.go

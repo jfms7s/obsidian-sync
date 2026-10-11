@@ -211,16 +211,16 @@ func TestDeadChunks(t *testing.T) {
 	if after, _ := f.st.UsageBytes(ctx, f.vault.OwnerID); after != before-dead[0].Size {
 		t.Fatalf("usage %d → %d", before, after)
 	}
-	if ok, _ := f.st.DeleteDeadChunk(ctx, dead[0], start+1); ok {
-		t.Fatal("deleted twice")
+	if ok, err := f.st.DeleteDeadChunk(ctx, dead[0], start+1); err != nil || ok {
+		t.Fatalf("second delete ok=%v err=%v, want false and no error", ok, err)
 	}
 	// Touching a chunk (an exists-check before commit) rescues it.
 	f.clk.Advance(time.Minute)
 	if _, err := f.st.TouchChunks(ctx, f.vault.ID, [][]byte{dead[1].ChunkID}); err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := f.st.DeleteDeadChunk(ctx, dead[1], start+1); ok {
-		t.Fatal("deleted a chunk that was just touched")
+	if ok, err := f.st.DeleteDeadChunk(ctx, dead[1], start+1); err != nil || ok {
+		t.Fatalf("delete of a just-touched chunk ok=%v err=%v, want false and no error", ok, err)
 	}
 }
 
