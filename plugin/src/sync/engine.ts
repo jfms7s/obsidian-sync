@@ -16,6 +16,7 @@ import { toHex } from '../util/bytes';
 import { errorMessage } from '../util/errors';
 import { cryptoRandom, type Random } from '../util/random';
 import type { AdapterEvent, VaultAdapter } from '../vault/adapter';
+import { ConfigCarveOut, SETTINGS_SYNC_OFF, type SettingsSyncPolicy } from '../vault/config-policy';
 import { IgnoreRules, parseIgnoreFile, VAULT_IGNORE_FILE, type ParsedIgnoreFile } from '../vault/ignore';
 import { DEFAULT_MAX_FILE_BYTES, ServerRollbackError, type SyncContext } from './context';
 import { pathOfPushKey } from '../state/failure-keys';
@@ -45,9 +46,14 @@ export interface EngineOptions {
   /**
    * The vault's configuration folder (Vault.configDir, usually .obsidian).
    * The engine never syncs it, whatever ignoreGlobs say: it holds this
-   * device's own settings and plugins, this one's code among them.
+   * device's own settings and plugins, this one's code among them. The
+   * only exception is settingsSync.
    */
   configDir: string;
+  /** Which settings files in configDir this device syncs (config-policy.ts); default SETTINGS_SYNC_OFF. */
+  settingsSync?: SettingsSyncPolicy;
+  /** The folder name(s) of this plugin under plugins/ when not OBSYNC_PLUGIN_ID: never synced. */
+  ownPluginFolders?: readonly string[];
   /**
    * The user's ignore patterns (gitignore-like globs), on top of the
    * defaults, the config folder and the vault's .obsyncignore (which the
@@ -84,8 +90,18 @@ export interface EngineOptions {
  * one place they are composed; the settings use it to tell what a change
  * of either list newly ignores.
  */
-export function composeIgnoreRules(o: { configDir: string; caseInsensitive: boolean; ignoreGlobs: readonly string[]; vaultGlobs: readonly string[] }): IgnoreRules {
-  return new IgnoreRules(o.ignoreGlobs, { caseInsensitive: o.caseInsensitive, configDir: o.configDir, vaultGlobs: o.vaultGlobs });
+export function composeIgnoreRules(o: {
+  configDir: string;
+  caseInsensitive: boolean;
+  ignoreGlobs: readonly string[];
+  vaultGlobs: readonly string[];
+  settingsSync?: SettingsSyncPolicy | undefined;
+  ownPluginFolders?: readonly string[] | undefined;
+}): IgnoreRules {
+  return new IgnoreRules(o.ignoreGlobs, {
+    caseInsensitive: o.caseInsensitive, configDir: o.configDir, vaultGlobs: o.vaultGlobs,
+    configSync: new ConfigCarveOut(o.configDir, o.settingsSync ?? SETTINGS_SYNC_OFF, o.ownPluginFolders ?? []),
+  });
 }
 
 export class SyncEngine {
@@ -165,7 +181,10 @@ export class SyncEngine {
 
   private buildRules(): IgnoreRules {
     const o = this.opts;
-    return composeIgnoreRules({ configDir: o.configDir, caseInsensitive: o.adapter.caseInsensitive, ignoreGlobs: o.ignoreGlobs ?? [], vaultGlobs: this.vaultIgnore.globs });
+    return composeIgnoreRules({
+      configDir: o.configDir, caseInsensitive: o.adapter.caseInsensitive, ignoreGlobs: o.ignoreGlobs ?? [], vaultGlobs: this.vaultIgnore.globs,
+      settingsSync: o.settingsSync, ownPluginFolders: o.ownPluginFolders,
+    });
   }
 
   /**
