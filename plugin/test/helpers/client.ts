@@ -1,6 +1,7 @@
 // Simulated devices running the real engine (no UI): a fixture Device plus
 // a SyncEngine over the same state, adapter and network.
 import { SyncEngine } from '../../src/sync/engine';
+import { SETTINGS_SYNC_OFF, type SettingsSyncPolicy } from '../../src/vault/config-policy';
 import { newDevice, type Device, type DeviceOptions, type User } from './fixture';
 import type { TestServer } from './server';
 
@@ -12,6 +13,8 @@ export interface SimClient extends Device {
   restart(): Promise<void>;
   /** Changes the ignore globs and restarts the engine, as the settings tab does. */
   setIgnore(globs: string[]): Promise<void>;
+  /** Changes the settings sync policy and restarts the engine, as the settings tab does. */
+  setSettingsSync(policy: SettingsSyncPolicy): Promise<void>;
 }
 
 export interface ClientOptions extends DeviceOptions {
@@ -19,15 +22,18 @@ export interface ClientOptions extends DeviceOptions {
   autoRun?: boolean;
   /** Default false: no hub WebSocket. */
   webSocket?: boolean;
+  /** Default SETTINGS_SYNC_OFF. */
+  settingsSync?: SettingsSyncPolicy;
 }
 
 export async function makeClient(srv: TestServer, user: User, o: ClientOptions): Promise<SimClient> {
   const dev = await newDevice(srv, user, o);
   let ignoreGlobs = [...(o.ignoreGlobs ?? [])];
+  let settingsSync = o.settingsSync ?? SETTINGS_SYNC_OFF;
   const build = () => {
     const engine = new SyncEngine({
       api: dev.api, state: dev.state, adapter: dev.adapter, ring: dev.ring, deviceName: dev.name, clock: dev.clock,
-      random: dev.random, configDir: '.obsidian', ignoreGlobs, webSocket: o.webSocket ? dev.net.webSocket : null,
+      random: dev.random, configDir: '.obsidian', ignoreGlobs, settingsSync, webSocket: o.webSocket ? dev.net.webSocket : null,
       autoRun: o.autoRun ?? false, backoff: { baseMs: 20, maxMs: 200 }, maxFileBytes: dev.ctx.maxFileBytes,
     });
     engine.on((e) => dev.events.push(e));
@@ -44,6 +50,10 @@ export async function makeClient(srv: TestServer, user: User, o: ClientOptions):
     },
     setIgnore: async (globs) => {
       ignoreGlobs = [...globs];
+      await client.restart();
+    },
+    setSettingsSync: async (policy) => {
+      settingsSync = policy;
       await client.restart();
     },
     restart: async () => {
