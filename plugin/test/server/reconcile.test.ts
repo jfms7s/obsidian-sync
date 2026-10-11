@@ -99,14 +99,19 @@ it('tells the adapter which folders its ignore rules skip, so ignored trees are 
   await d.adapter.write('Scratch/b.md', text('b\n'));
   await d.adapter.write('.git/objects/ab', text('g\n'));
   let skip: ((folder: string) => boolean) | undefined;
+  const listed: string[] = [];
   const list = d.adapter.list.bind(d.adapter);
   d.adapter.list = async (s) => {
     skip = s;
-    return list(s);
+    const paths = await list(s);
+    listed.push(...paths);
+    return paths;
   };
   await reconcile(d.ctx);
   expect(skip).toBeDefined();
   expect([skip!('Scratch'), skip!('.git'), skip!('Notes'), skip!('Notes/Deep')]).toEqual([true, true, false, false]);
+  // The ignore rules would leave those files out anyway; what matters is that the walk never went into them.
+  expect(listed).toEqual(['Notes/a.md']);
   expect((await d.state.dirtyEntries()).map((e) => e.path)).toEqual(['Notes/a.md']);
 });
 

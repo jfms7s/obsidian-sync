@@ -35,7 +35,9 @@ export interface VaultAdapter {
   /**
    * Every file in the vault (not folders), hidden ones included. A folder
    * for which skip returns true (it is given the folder's path, top-down) is
-   * not entered, so a huge ignored tree such as .git is never walked.
+   * not entered, so a huge ignored tree such as .git is never walked. skip
+   * may be asked about the same folder more than once (an adapter may check
+   * each file's folders), so it must answer the same way each time.
    */
   list(skip?: (folder: string) => boolean): Promise<string[]>;
   /** null means no file is at path (a folder is not a file); any other problem (permissions, I/O) must throw. */

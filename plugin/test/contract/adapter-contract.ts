@@ -148,19 +148,20 @@ export function describeAdapterContract(name: string, make: () => Promise<Contra
       const { adapter, settle } = await make();
       const events: AdapterEvent[] = [];
       const off = adapter.watch((e) => events.push(e));
-      await adapter.write('x.md', bytes('1'));
-      await adapter.write('x.md', bytes('22'));
-      await adapter.rename('x.md', 'y.md');
-      await adapter.remove('y.md');
-      await settle();
-      const kinds = events.map((e) => e.type);
-      // An adapter may report more than it must (a write as create + modify), never less.
-      expect(kinds).toContain('create');
-      expect(kinds).toContain('modify');
-      expect(kinds).toContain('rename');
-      expect(kinds).toContain('delete');
-      expect(events).toContainEqual({ type: 'rename', path: 'y.md', oldPath: 'x.md' });
-      expect(events).toContainEqual({ type: 'delete', path: 'y.md' });
+      /** The events one operation caused: each required one, and nothing but the allowed extras. */
+      const expectEvents = async (op: () => Promise<unknown>, required: AdapterEvent[], extras: AdapterEvent[] = []) => {
+        const from = events.length;
+        await op();
+        await settle();
+        const got = events.slice(from);
+        for (const e of required) expect(got).toContainEqual(e);
+        for (const e of got) expect([...required, ...extras]).toContainEqual(e);
+      };
+      // An adapter may report more than it must (a new file's write as create + modify), never less.
+      await expectEvents(() => adapter.write('x.md', bytes('1')), [{ type: 'create', path: 'x.md' }], [{ type: 'modify', path: 'x.md' }]);
+      await expectEvents(() => adapter.write('x.md', bytes('22')), [{ type: 'modify', path: 'x.md' }]);
+      await expectEvents(() => adapter.rename('x.md', 'y.md'), [{ type: 'rename', path: 'y.md', oldPath: 'x.md' }]);
+      await expectEvents(() => adapter.remove('y.md'), [{ type: 'delete', path: 'y.md' }]);
       const count = events.length;
       off();
       await adapter.write('z.md', bytes('z'));
