@@ -40,7 +40,7 @@ function withTimeout<T>(call: Promise<T>, ms: number, clock: Clock, what: string
       },
       (e: unknown) => {
         clock.clearTimeout(timer);
-        reject(e instanceof Error ? e : new Error(String(e)));
+        reject(e instanceof Error ? e : new Error(String(e), { cause: e }));
       },
     );
   });
@@ -62,7 +62,7 @@ export function createRequestUrlTransport(o: TransportOptions = {}): FetchLike {
     if (contentType !== undefined) param.contentType = contentType;
     // A view into a larger buffer must not send the buffer behind it.
     if (req.body) param.body = req.body.buffer.slice(req.body.byteOffset, req.body.byteOffset + req.body.byteLength);
-    const long = /\/chunks\/[0-9a-f]+$/.test(url) || (req.body?.byteLength ?? 0) > BIG_BODY_BYTES;
+    const long = /\/chunks\/[0-9a-f]+(\?|$)/.test(url) || (req.body?.byteLength ?? 0) > BIG_BODY_BYTES;
     const res = await withTimeout(request(param), long ? longTimeoutMs : timeoutMs, clock, `${req.method} ${new URL(url).pathname}`);
     return {
       status: res.status,
