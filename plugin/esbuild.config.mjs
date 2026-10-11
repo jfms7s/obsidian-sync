@@ -12,22 +12,28 @@ import esbuild from 'esbuild';
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const mode = process.argv[2] ?? 'development';
 
-/** The options the bundle test also uses, so what it checks is what ships. */
-export const options = {
-  entryPoints: [here('./src/main.ts')],
-  bundle: true,
-  format: 'cjs',
-  platform: 'browser',
-  // BigInt literals (protobuf) need ES2020; Obsidian runs on Chromium and recent WebKit.
-  target: 'es2020',
-  // Provided by Obsidian at run time.
-  external: ['obsidian', 'electron', '@codemirror/*', '@lezer/*'],
-  outfile: here('./dist/main.js'),
-  sourcemap: mode === 'production' ? false : 'inline',
-  minify: false,
-  legalComments: 'none',
-  logLevel: 'info',
-};
+/** The build options for a mode; the bundle test uses them too, so what it checks is what ships. */
+export function optionsFor(mode) {
+  return {
+    entryPoints: [here('./src/main.ts')],
+    bundle: true,
+    format: 'cjs',
+    platform: 'browser',
+    // BigInt literals (protobuf) need ES2020; Obsidian runs on Chromium and recent WebKit.
+    target: 'es2020',
+    // Provided by Obsidian at run time.
+    external: ['obsidian', 'electron', '@codemirror/*', '@lezer/*'],
+    outfile: here('./dist/main.js'),
+    sourcemap: mode === 'production' ? false : 'inline',
+    // A release is minified (about half the size to load on a phone); stack
+    // traces in bug reports then need a development build to read.
+    minify: mode === 'production',
+    legalComments: 'none',
+    logLevel: 'info',
+  };
+}
+
+export const options = optionsFor(mode);
 
 export function copyStatic() {
   mkdirSync(here('./dist'), { recursive: true });

@@ -101,9 +101,10 @@ describe('content', () => {
       fileId: new Uint8Array(32), versionId: new Uint8Array(16), baseVersionId: new Uint8Array(0), epoch: 1, encMeta: new Uint8Array(1),
       chunkIds, size, deleted: false, deviceId: 'd', createdAtMs: 0, seq: 1,
     });
-    // A repeated small chunk posing as a two-chunk file: the first, not the last, is short.
-    await expect(downloadContent(api, ring, v([id, id], CHUNK_SIZE + 10), small.contentHash)).rejects.toBeInstanceOf(CryptoError);
-    expect(fetches).toBe(1);
+    // A repeated small chunk posing as a ten-chunk file: the first, not the last, is short, and the
+    // download stops there (the chunks already on their way, at most DOWNLOAD_CONCURRENCY, finish).
+    await expect(downloadContent(api, ring, v(Array.from({ length: 10 }, () => id), 9 * CHUNK_SIZE + 10), small.contentHash)).rejects.toBeInstanceOf(CryptoError);
+    expect(fetches).toBeLessThanOrEqual(DOWNLOAD_CONCURRENCY);
     fetches = 0;
     await expect(downloadContent(api, ring, v([id, id, id], 30), small.contentHash)).rejects.toBeInstanceOf(CryptoError); // 3 chunks for 30 bytes
     await expect(downloadContent(api, ring, v([id], 0), small.contentHash)).rejects.toBeInstanceOf(CryptoError); // an empty file has none

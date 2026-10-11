@@ -115,6 +115,8 @@ export async function moveToCopy(ctx: SyncContext, st: FileStat, code: 'PATH_COL
  */
 export async function evictBlockingFile(ctx: SyncContext, path: string): Promise<boolean> {
   const parts = path.split('/');
+  // The parent folder already holds files: no file can stand anywhere above it.
+  if (parts.length > 1 && (await ctx.adapter.hasFolder(parts.slice(0, -1).join('/')))) return true;
   for (let i = 1; i < parts.length; i++) {
     const st = await ctx.adapter.stat(parts.slice(0, i).join('/'));
     if (st && !(await moveToCopy(ctx, st, 'PATH_COLLISION', 'is a folder on another device'))) return false;

@@ -60,6 +60,8 @@ export interface EngineOptions {
   debounceMaxWaitMs?: number;
   /** Default 256 MiB (DEFAULT_MAX_FILE_BYTES): larger files are neither uploaded nor downloaded. */
   maxFileBytes?: number;
+  /** Bytes of file content one push round takes on at most (default MAX_BYTES_PER_ROUND, 64 MiB). */
+  maxBytesPerRound?: number;
   /**
    * Fetches the vault's keys again: after STALE_EPOCH, or when a version uses
    * an epoch this device has no key for (sub-project 3). Without it, such a
@@ -123,6 +125,7 @@ export class SyncEngine {
       random: this.random,
       ignore: new IgnoreRules(opts.ignoreGlobs ?? [], { caseInsensitive: opts.adapter.caseInsensitive, configDir: opts.configDir }),
       maxFileBytes: opts.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES,
+      ...(opts.maxBytesPerRound !== undefined ? { maxBytesPerRound: opts.maxBytesPerRound } : {}),
       unavailableEpochs: this.unavailableEpochs,
       emit: (e) => this.emit(e),
       onShadowed: () => {

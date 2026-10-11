@@ -19,6 +19,8 @@ export interface SyncContext {
   ignore: IgnoreRules;
   /** Files larger than this are neither uploaded nor downloaded by this device. */
   maxFileBytes: number;
+  /** Bytes of file content one push round takes on at most (default MAX_BYTES_PER_ROUND); less on a phone, to hold less in memory. */
+  maxBytesPerRound?: number;
   /**
    * Epochs a keyring refresh did not provide a key for: versions that use
    * them fail per file (failures.ts) instead of failing the cycle, so the

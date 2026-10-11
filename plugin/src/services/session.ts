@@ -23,6 +23,8 @@ export interface SyncSessionOptions extends ClientDeps {
    * (.obsidian-mobile, say), and it is never synced under any name.
    */
   configDir: string;
+  /** SyncEngine's maxBytesPerRound (the shell sets less on a phone). */
+  maxBytesPerRound?: number;
 }
 
 export type SyncSessionResult =
@@ -53,6 +55,7 @@ export async function openSyncSession(o: SyncSessionOptions): Promise<SyncSessio
     ...(o.random ? { random: o.random } : {}),
     ...(o.clock ? { clock: o.clock } : {}),
     ...(o.autoRun !== undefined ? { autoRun: o.autoRun } : {}),
+    ...(o.maxBytesPerRound !== undefined ? { maxBytesPerRound: o.maxBytesPerRound } : {}),
   });
   return { ok: true, engine, api, ring };
 }

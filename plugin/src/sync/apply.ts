@@ -49,10 +49,10 @@ function checkConsistent(v: RemoteVersion, meta: FileMeta): void {
  * failures.ts) are recorded and skipped (the result is then false); only
  * cycle errors are thrown.
  */
-export async function applyVersion(ctx: SyncContext, v: RemoteVersion): Promise<boolean> {
+export async function applyVersion(ctx: SyncContext, v: RemoteVersion, prefetched?: Promise<Uint8Array>): Promise<boolean> {
   const fileId = toHex(v.fileId);
   try {
-    await applyOne(ctx, v, fileId);
+    await applyOne(ctx, v, fileId, prefetched);
     await clearFailure(ctx, applyKey(fileId));
     return true;
   } catch (err) {
@@ -69,7 +69,8 @@ export async function applyVersion(ctx: SyncContext, v: RemoteVersion): Promise<
 }
 
 /**
- * Applies head, a file's newest version, after first applying this
+ * Applies head, a file's newest version (prefetched: its content, already
+ * on its way, see pull), after first applying this
  * device's own pending commit if it is among known (other versions the
  * caller fetched: a change-log page or the file's history). That pending
  * commit landed although its response was lost, and newer versions built
@@ -94,16 +95,16 @@ export async function ensureHeadApplied(ctx: SyncContext, fileId: Uint8Array, he
   return true;
 }
 
-export async function applyHead(ctx: SyncContext, head: RemoteVersion, known: readonly RemoteVersion[]): Promise<boolean> {
+export async function applyHead(ctx: SyncContext, head: RemoteVersion, known: readonly RemoteVersion[], prefetched?: Promise<Uint8Array>): Promise<boolean> {
   const pending = await ctx.state.getPending(toHex(head.fileId));
   if (pending && pending.versionId !== toHex(head.versionId)) {
     const own = known.find((v) => toHex(v.versionId) === pending.versionId && equalBytes(v.fileId, head.fileId) && v.seq < head.seq);
     if (own && !(await applyVersion(ctx, own))) return false;
   }
-  return applyVersion(ctx, head);
+  return applyVersion(ctx, head, prefetched);
 }
 
-async function applyOne(ctx: SyncContext, v: RemoteVersion, fileId: string): Promise<void> {
+async function applyOne(ctx: SyncContext, v: RemoteVersion, fileId: string, prefetched?: Promise<Uint8Array>): Promise<void> {
   const versionId = toHex(v.versionId);
   const stored = await ctx.state.getFile(fileId);
   if (alreadyApplied(stored, versionId, ctx)) return;
@@ -156,7 +157,7 @@ async function applyOne(ctx: SyncContext, v: RemoteVersion, fileId: string): Pro
   }
 
   let content: Uint8Array | null = null;
-  const remote = async (): Promise<Uint8Array> => (content ??= await downloadContent(ctx.api, ctx.ring, v, meta.contentHash));
+  const remote = async (): Promise<Uint8Array> => (content ??= await (prefetched ?? downloadContent(ctx.api, ctx.ring, v, meta.contentHash)));
 
   for (let attempt = 0; attempt < 5; attempt++) {
     if (await tryApply(ctx, v, meta, rec, fileId, versionId, contentHash, remote, baseText)) return;

@@ -8,6 +8,7 @@ import { CryptoError, sha256 } from '../crypto/primitives';
 import { epochKeys, type EpochKeys, type VaultKeyring } from '../crypto/vaultkeys';
 import { equalBytes, fromUtf8Strict, toHex } from '../util/bytes';
 import { extension } from '../util/path';
+import { mapConcurrently } from '../util/pool';
 import { FileSyncError } from './failures';
 
 /** Merged as text (spec §5.5); everything else is binary and conflicts as a whole. */
@@ -68,6 +69,9 @@ async function fetchChunk(api: ApiClient, vaultId: string, chunkId: Uint8Array):
   }
 }
 
+/** How many chunks of one version download at once. */
+export const DOWNLOAD_CONCURRENCY = 4;
+
 /**
  * Downloads, decrypts and reassembles a version's content, then checks it
  * against the content hash and size from its metadata. The chunk list must
@@ -82,15 +86,14 @@ export async function downloadContent(api: ApiClient, ring: VaultKeyring, v: Rem
   const want = Math.ceil(v.size / CHUNK_SIZE);
   if (v.chunkIds.length !== want) throw new CryptoError(`a ${v.size}-byte version has ${want} chunks, not ${v.chunkIds.length}`);
   const out = new Uint8Array(v.size);
-  let off = 0;
-  for (let i = 0; i < want; i++) {
-    const id = v.chunkIds[i]!;
+  // A few chunks at a time; each lands at its own offset, so the order they arrive in does not matter.
+  await mapConcurrently(v.chunkIds, DOWNLOAD_CONCURRENCY, async (id, i) => {
     const pt = await decryptChunk(ring.vaultId, keys, id, await fetchChunk(api, ring.vaultId, id));
+    const off = i * CHUNK_SIZE;
     const expected = i < want - 1 ? CHUNK_SIZE : v.size - off;
     if (pt.length !== expected) throw new CryptoError(`chunk ${i} has ${pt.length} bytes, not ${expected}`);
     out.set(pt, off);
-    off += pt.length;
-  }
+  });
   if (!equalBytes(await sha256(out), contentHash)) throw new CryptoError('content does not match its hash');
   return out;
 }

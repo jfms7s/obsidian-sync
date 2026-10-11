@@ -1,5 +1,10 @@
 import { Platform } from 'obsidian';
 
+/** Bytes of file content a push round holds on this device: less on a phone, whose memory is tighter. */
+export function pushRoundBytes(): number | undefined {
+  return Platform.isMobile ? 16 << 20 : undefined;
+}
+
 /** A default device name and the platform the server lists it under. */
 export function describePlatform(): { name: string; platform: string } {
   if (Platform.isIosApp) return { name: 'iPhone or iPad', platform: 'ios' };
