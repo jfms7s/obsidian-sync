@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -24,6 +25,21 @@ func (s *Store) AcquireLease(ctx context.Context, name, holder string, ttl time.
 		return false, fmt.Errorf("acquire lease: %w", err)
 	}
 	return n == 1, nil
+}
+
+// LeaseExpiry returns when the named lease runs out; held is false when no
+// holder's lease is unexpired.
+func (s *Store) LeaseExpiry(ctx context.Context, name string) (until time.Time, held bool, err error) {
+	var ms int64
+	err = s.db.QueryRowContext(ctx,
+		`SELECT expires_at FROM job_leases WHERE name = ? AND expires_at >= ?`, name, s.nowMs()).Scan(&ms)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("lease expiry: %w", err)
+	}
+	return time.UnixMilli(ms).UTC(), true, nil
 }
 
 // ReleaseLease gives up the named lease if holder still holds it, so another
