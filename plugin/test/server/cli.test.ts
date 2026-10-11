@@ -167,8 +167,11 @@ describe('obsync-cli against the real server', () => {
   });
 
   it('holds off while Obsidian\'s plugin syncs the folder (fresh heartbeat), and resumes with a full check once it stops', async () => {
-    const beat = join(vaultDir, '.obsidian', 'plugins', 'obsync', 'active');
-    await mkdir(join(vaultDir, '.obsidian', 'plugins', 'obsync'), { recursive: true });
+    // The plugin installed under another folder name (a dev copy): its heartbeat counts all the same.
+    const beat = join(vaultDir, '.obsidian', 'plugins', 'obsync-dev', 'active');
+    await mkdir(join(vaultDir, '.obsidian', 'plugins', 'obsync-dev'), { recursive: true });
+    await mkdir(join(vaultDir, '.obsidian', 'plugins', 'other-plugin'), { recursive: true });
+    await writeFile(join(vaultDir, '.obsidian', 'plugins', 'other-plugin', 'active'), 'not a heartbeat');
     const fresh = () => writeFile(beat, JSON.stringify({ obsync: 1, at: Date.now(), device: 'Laptop' }));
     await fresh();
     await writeFile(join(vaultDir, 'while-obsidian-runs.md'), 'Obsidian would sync this one\n');
@@ -207,6 +210,26 @@ describe('obsync-cli against the real server', () => {
     expect(r.code, r.err).toBe(0);
     expect(r.err).toMatch(/pausing/);
     expect(r.err).toMatch(/resuming with a full check/);
+  });
+
+  it('ends with an error, for the service manager to restart it, when it cannot resume (the folder is gone)', async () => {
+    const plugin = join(vaultDir, '.obsidian', 'plugins', 'obsync');
+    await mkdir(plugin, { recursive: true });
+    await writeFile(join(plugin, 'active'), JSON.stringify({ obsync: 1, at: Date.now(), device: 'Laptop' }));
+    const daemon = start(['sync', '--vault-dir', vaultDir, ...S()]);
+    const away = `${vaultDir}-gone`;
+    try {
+      await until('the daemon to start paused', async () => (await cli(['status', ...S()])).out.includes('paused since'));
+      await rename(vaultDir, away); // the heartbeat goes with it: the daemon tries to resume
+      const r = await daemon.done;
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/cannot resume/);
+    } finally {
+      daemon.child.kill('SIGTERM');
+      await daemon.done;
+      await rename(away, vaultDir).catch(() => undefined);
+      await rm(join(plugin, 'active'), { force: true });
+    }
   });
 
   it('refuses a vault folder that is empty when files were synced from it (a disk not mounted)', async () => {
