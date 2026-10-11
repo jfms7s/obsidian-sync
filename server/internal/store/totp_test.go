@@ -127,3 +127,49 @@ func TestTOTPMigrationOnAnOldDatabase(t *testing.T) {
 	}
 	storetest.SeedUser(t, st, "bob") // its INSERT still works
 }
+
+func TestTOTPEnrolment(t *testing.T) {
+	st, _ := storetest.New(t)
+	u := storetest.SeedUser(t, st, "alice")
+	if ok, err := st.SetPendingTOTP(ctx, u.ID, []byte("first")); !ok || err != nil {
+		t.Fatalf("begin: %v %v", ok, err)
+	}
+	if ok, _ := st.SetPendingTOTP(ctx, u.ID, []byte("second")); !ok {
+		t.Fatal("a second begin did not replace the first")
+	}
+	got, _ := st.TOTP(ctx, u.ID)
+	if !bytes.Equal(got.PendingSecret, []byte("second")) || got.Secret != nil {
+		t.Fatalf("pending = %+v", got)
+	}
+	// Confirming the replaced secret does nothing.
+	if ok, _ := st.ConfirmTOTP(ctx, u.ID, []byte("first"), 7, [][]byte{[]byte("x")}); ok {
+		t.Fatal("a replaced pending secret was confirmed")
+	}
+	if ok, err := st.ConfirmTOTP(ctx, u.ID, []byte("second"), 7, [][]byte{[]byte("h1"), []byte("h2")}); !ok || err != nil {
+		t.Fatalf("confirm: %v %v", ok, err)
+	}
+	got, _ = st.TOTP(ctx, u.ID)
+	if !bytes.Equal(got.Secret, []byte("second")) || got.PendingSecret != nil || got.LastStep != 7 || got.RecoveryLeft != 2 {
+		t.Fatalf("after confirm = %+v", got)
+	}
+	// While on, begin and confirm change nothing.
+	if ok, _ := st.SetPendingTOTP(ctx, u.ID, []byte("third")); ok {
+		t.Fatal("begin accepted while TOTP is on")
+	}
+	if ok, _ := st.ConfirmTOTP(ctx, u.ID, []byte("second"), 9, nil); ok {
+		t.Fatal("confirm accepted while TOTP is on")
+	}
+	if ok, err := st.ReplaceRecoveryCodes(ctx, u.ID, [][]byte{[]byte("n1")}); !ok || err != nil {
+		t.Fatalf("replace codes: %v %v", ok, err)
+	}
+	if ok, _ := st.UseRecoveryCode(ctx, u.ID, []byte("h1")); ok {
+		t.Fatal("an old recovery code survived the replacement")
+	}
+	if ok, _ := st.UseRecoveryCode(ctx, u.ID, []byte("n1")); !ok {
+		t.Fatal("the new recovery code was refused")
+	}
+	_ = st.DisableTOTP(ctx, u.ID)
+	if ok, _ := st.ReplaceRecoveryCodes(ctx, u.ID, [][]byte{[]byte("n2")}); ok {
+		t.Fatal("recovery codes replaced with TOTP off")
+	}
+}

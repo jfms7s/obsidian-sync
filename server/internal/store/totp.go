@@ -117,3 +117,67 @@ func (s *Store) UseRecoveryCode(ctx context.Context, userID string, hash []byte)
 	}
 	return n == 1, nil
 }
+
+// SetPendingTOTP stores secret as the account's enrolment in progress,
+// replacing an earlier one. It reports false, storing nothing, when TOTP is
+// already on.
+func (s *Store) SetPendingTOTP(ctx context.Context, userID string, secret []byte) (bool, error) {
+	if len(secret) == 0 {
+		return false, fmt.Errorf("%w: empty totp secret", ErrInvalid)
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE users SET totp_pending_secret = ? WHERE id = ? AND totp_secret IS NULL`, secret, userID)
+	if err != nil {
+		return false, fmt.Errorf("begin totp: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("begin totp: %w", err)
+	}
+	return n == 1, nil
+}
+
+// ConfirmTOTP turns TOTP on with the pending secret, if it is still pending,
+// accepted at step, with recoveryHashes as the recovery codes. It reports
+// false, changing nothing, when pending is no longer the pending secret or
+// TOTP is already on (a concurrent begin or confirm won).
+func (s *Store) ConfirmTOTP(ctx context.Context, userID string, pending []byte, step int64, recoveryHashes [][]byte) (bool, error) {
+	var done bool
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE users SET totp_secret = totp_pending_secret, totp_pending_secret = NULL, totp_last_step = ?
+			 WHERE id = ? AND totp_secret IS NULL AND totp_pending_secret = ?`, step, userID, pending)
+		if err != nil {
+			return fmt.Errorf("confirm totp: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("confirm totp: %w", err)
+		}
+		if n != 1 {
+			return nil
+		}
+		done = true
+		return replaceRecoveryCodes(ctx, tx, userID, recoveryHashes)
+	})
+	return done && err == nil, err
+}
+
+// ReplaceRecoveryCodes replaces the recovery codes of an account with TOTP
+// on. It reports false, changing nothing, when TOTP is off.
+func (s *Store) ReplaceRecoveryCodes(ctx context.Context, userID string, hashes [][]byte) (bool, error) {
+	var done bool
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		var on int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM users WHERE id = ? AND totp_secret IS NOT NULL`, userID).Scan(&on); err != nil {
+			return fmt.Errorf("replace recovery codes: %w", err)
+		}
+		if on != 1 {
+			return nil
+		}
+		done = true
+		return replaceRecoveryCodes(ctx, tx, userID, hashes)
+	})
+	return done && err == nil, err
+}
