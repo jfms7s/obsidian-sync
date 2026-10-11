@@ -144,7 +144,7 @@ func statusFor(code obsyncv1.ErrorCode) int {
 	case apperr.WrongPassword:
 		// Not 401: the token is fine, only the password was refused.
 		return http.StatusForbidden
-	case apperr.NotFound:
+	case apperr.NotFound, apperr.VaultNotFound:
 		return http.StatusNotFound
 	case apperr.Conflict, apperr.StaleEpoch:
 		return http.StatusConflict

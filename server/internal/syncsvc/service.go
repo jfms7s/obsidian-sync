@@ -64,7 +64,6 @@ func New(st Store, blobs blob.Store, b bus.Bus, limits Limits, log *slog.Logger)
 }
 
 var (
-	errVaultNotFound = apperr.New(apperr.NotFound, "vault not found")
 	errQuotaExceeded = apperr.New(apperr.QuotaExceeded, "storage quota exceeded")
 )
 
@@ -72,11 +71,11 @@ var (
 // vault's existence never leaks to outsiders.
 func (s *Service) vault(ctx context.Context, userID, vaultID string) (store.Vault, error) {
 	if !ids.Valid(vaultID) {
-		return store.Vault{}, errVaultNotFound
+		return store.Vault{}, apperr.ErrVaultNotFound
 	}
 	v, err := s.st.VaultForMember(ctx, vaultID, userID)
 	if errors.Is(err, store.ErrNotFound) {
-		return store.Vault{}, errVaultNotFound
+		return store.Vault{}, apperr.ErrVaultNotFound
 	}
 	if err != nil {
 		return store.Vault{}, fmt.Errorf("load vault: %w", err)
@@ -157,7 +156,7 @@ func (s *Service) PutChunk(ctx context.Context, userID, vaultID string, chunkID 
 		case errors.Is(err, store.ErrQuotaExceeded):
 			return errQuotaExceeded
 		case errors.Is(err, store.ErrNotFound):
-			return errVaultNotFound // deleted while the chunk was uploading
+			return apperr.ErrVaultNotFound // deleted while the chunk was uploading
 		}
 		return err
 	}
@@ -235,7 +234,7 @@ func (s *Service) Commit(ctx context.Context, userID, deviceID, vaultID string, 
 	outs, err := s.st.CommitAll(ctx, valid)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, 0, errVaultNotFound // deleted concurrently
+			return nil, 0, apperr.ErrVaultNotFound // deleted concurrently
 		}
 		return nil, 0, fmt.Errorf("commit: %w", err)
 	}
