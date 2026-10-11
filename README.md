@@ -131,6 +131,19 @@ Settings come from environment variables (or a YAML file named by `OBSYNC_CONFIG
 | `OBSYNC_JOBS_INTERVAL_MINUTES` | 60 | How often history pruning and chunk cleanup run |
 | `OBSYNC_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 | `OBSYNC_RATE_LIMIT_DEVICE_RPS`, `_BURST`, `OBSYNC_RATE_LIMIT_IP_RPS`, `_BURST` | 100 / 1000, 1 / 10 | Request limits per device and per address (0 turns one off) |
+| `OBSYNC_METRICS_LISTEN` | none (off) | Address (`host:port`, e.g. `:9090`) of a second listener that serves Prometheus metrics at `/metrics`. Keep it off the public route: scrape it from inside your network (see [Metrics](#metrics)) |
+
+#### Metrics
+
+With `OBSYNC_METRICS_LISTEN` set, `GET /metrics` on that address returns Prometheus text. The main listener never serves it. No metric is labelled with a user, vault, device or path:
+
+- `obsync_build_info{version}`, `obsync_websocket_connections`, `obsync_go_goroutines`, `obsync_go_heap_inuse_bytes`
+- `obsync_commits_total{result}` (`ok`, `conflict`, `stale_epoch`, `missing_chunk`, `invalid`), `obsync_chunk_uploads_total`, `obsync_chunk_upload_bytes_total`, `obsync_chunk_downloads_total`, `obsync_quota_refusals_total`
+- `obsync_logins_total{result}` (`ok`, `failed`, `locked`), `obsync_rate_limited_total{limiter}` (`device`, `ip`, `bad_token`, `login`)
+- `obsync_maintenance_runs_total{result}` (`ok`, `failed`, `skipped_lease`), `obsync_maintenance_last_success_timestamp_seconds`, `obsync_maintenance_versions_pruned_total`, `obsync_maintenance_files_purged_total`, `obsync_maintenance_chunks_deleted_total`
+- counted at each scrape from the database: `obsync_users`, `obsync_vaults`, `obsync_devices_active`, `obsync_storage_used_bytes` (left out of a scrape whose query fails, counted in `obsync_scrape_errors_total`)
+
+A useful alert: `time() - obsync_maintenance_last_success_timestamp_seconds > 3 * 86400` (maintenance has not succeeded for three days).
 
 `deploy/systemd/obsync.env.example` lists the rest, with comments. `obsync health` checks the server's own `/readyz` (it is what the container's health check runs). `obsync migrate` applies database migrations and exits; `obsync serve` does it by itself on start.
 

@@ -25,6 +25,9 @@ services:
       # Believe X-Forwarded-For only from Caddy's fixed address (see the
       # network below); everyone else's TCP peer address is the client.
       OBSYNC_TRUSTED_PROXIES: 10.241.0.2
+      # Prometheus metrics at http://obsync:9090/metrics, on the private
+      # network only (no port is published). Off unless set.
+      # OBSYNC_METRICS_LISTEN: ":9090"
     volumes:
       - obsync-data:/data # the only writable path
     # The image's own HEALTHCHECK (obsync health) is what Caddy waits for.
