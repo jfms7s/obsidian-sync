@@ -114,6 +114,34 @@ func TestValidateRejectsBadDatabaseScheme(t *testing.T) {
 	}
 }
 
+func TestDatabaseSynchronous(t *testing.T) {
+	cfg, err := config.Load("", env(nil))
+	if err != nil || cfg.DatabaseSynchronous != "full" {
+		t.Fatalf("default = %q, err %v; want full", cfg.DatabaseSynchronous, err)
+	}
+	cfg, err = config.Load("", env(map[string]string{"OBSYNC_DATABASE_SYNCHRONOUS": "normal"}))
+	if err != nil || cfg.DatabaseSynchronous != "normal" {
+		t.Fatalf("env = %q, err %v; want normal", cfg.DatabaseSynchronous, err)
+	}
+	cfg, err = config.Load(writeFile(t, "database_synchronous: normal\n"), env(nil))
+	if err != nil || cfg.DatabaseSynchronous != "normal" {
+		t.Fatalf("yaml = %q, err %v; want normal", cfg.DatabaseSynchronous, err)
+	}
+	for _, bad := range []string{"off", "FULL", "extra"} {
+		_, err := config.Load("", env(map[string]string{"OBSYNC_DATABASE_SYNCHRONOUS": bad}))
+		if err == nil || !strings.Contains(err.Error(), "database_synchronous") {
+			t.Errorf("%q: err = %v, want a database_synchronous error", bad, err)
+		}
+	}
+	// The setting only applies to a local file; on a remote database it
+	// would silently do nothing.
+	_, err = config.Load("", env(map[string]string{
+		"OBSYNC_DATABASE_SYNCHRONOUS": "normal", "OBSYNC_DATABASE_URL": "libsql://db.example"}))
+	if err == nil || !strings.Contains(err.Error(), "database_synchronous") {
+		t.Errorf("normal with a remote database: err = %v", err)
+	}
+}
+
 func TestValidateRejectsNonPositiveLimits(t *testing.T) {
 	_, err := config.Load("", env(map[string]string{"OBSYNC_DEFAULT_QUOTA_BYTES": "0", "OBSYNC_GC_GRACE_HOURS": "0"}))
 	if err == nil {
