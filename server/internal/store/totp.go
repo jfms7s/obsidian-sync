@@ -129,7 +129,7 @@ func (s *Store) SetPendingTOTP(ctx context.Context, userID string, secret []byte
 		return false, fmt.Errorf("%w: empty totp secret", ErrInvalid)
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE users SET totp_pending_secret = ? WHERE id = ? AND totp_secret IS NULL`, secret, userID)
+		`UPDATE users SET totp_pending_secret = ?, totp_pending_at = ? WHERE id = ? AND totp_secret IS NULL`, secret, s.nowMs(), userID)
 	if err != nil {
 		return false, fmt.Errorf("begin totp: %w", err)
 	}
@@ -148,7 +148,7 @@ func (s *Store) ConfirmTOTP(ctx context.Context, userID string, pending []byte, 
 	var done bool
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
-			`UPDATE users SET totp_secret = totp_pending_secret, totp_pending_secret = NULL, totp_last_step = ?
+			`UPDATE users SET totp_secret = totp_pending_secret, totp_pending_secret = NULL, totp_pending_at = NULL, totp_last_step = ?
 			 WHERE id = ? AND totp_secret IS NULL AND totp_pending_secret = ?`, step, userID, pending)
 		if err != nil {
 			return fmt.Errorf("confirm totp: %w", err)
