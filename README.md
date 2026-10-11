@@ -53,7 +53,7 @@ Create an account. The password is read from the terminal (or from standard inpu
 docker compose run --rm obsync admin user create --username alice
 ```
 
-Everything the server stores (the database and the encrypted chunks) is in the `obsync-data` volume (Docker names it `obsync_obsync-data`), which is also all you need to back up. `docker compose logs -f obsync` shows what it does. The server never logs tokens, keys, passphrases or encrypted payloads.
+Everything the server stores (the database and the encrypted chunks) is in the `obsync-data` volume (Docker names it `obsync_obsync-data`), which is also all you need to back up. Stop the server while you copy it (`docker compose stop obsync`, copy the volume, `docker compose start obsync`): a copy taken while the server writes can catch the database half-way through a write. The convergence suite restores both copies of a stopped server and copies of a running one taken between two requests. `docker compose logs -f obsync` shows what it does. The server never logs tokens, keys, passphrases or encrypted payloads.
 
 The image is published as `ghcr.io/jfms7s/obsync` with a tag for every release. Pin a release in `.env` (`OBSYNC_VERSION=0.1.0`) rather than following `latest`.
 
@@ -182,7 +182,7 @@ make docker-build     # image for this machine
 
 Dependabot proposes grouped updates every week for the workflows' actions, the images, the Go modules and both npm packages, and CI runs `govulncheck` on the server.
 
-The plugin tests start the real `obsync` server; the convergence suite runs three simulated devices through hundreds of random operations (edits, renames, deletes, going offline, crashes, server restores, case-only renames, folder and file clashes) and checks that every device ends with the same vault and that no edit is lost. A failing seed prints its whole history and can be replayed with `CONVERGENCE_SEED=<n> make convergence`.
+The plugin tests start the real `obsync` server; the convergence suite runs three simulated devices through 60 random operations per seed (edits, edits made while a sync cycle is running, renames, deletes, going offline, crashes, server backups and restores, case-only renames, folder and file clashes, one device with whole-second mtimes in a third of the seeds) and checks that every device ends with the same vault and that no edit is lost. CI runs 100 seeds on every push, 1,000 before every release, and 1,000 new seeds every night. A failing seed prints its whole history and can be replayed with `CONVERGENCE_SEED=<n> make convergence`.
 
 Releases are made by pushing a tag `X.Y.Z` that matches `manifest.json` (no `v`): the release workflow runs 1,000 convergence seeds, builds the binaries, the plugin files and the multi-arch image, and publishes them together.
 

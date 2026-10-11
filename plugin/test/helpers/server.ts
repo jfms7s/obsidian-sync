@@ -14,6 +14,11 @@ export interface TestServer {
   createUser(username: string, password: string): Promise<void>;
   /** Stops the server, copies its data directory (a backup) and starts it again. */
   snapshot(): Promise<string>;
+  /**
+   * Copies the data directory while the server keeps running (a hot backup):
+   * meta.db with its WAL as they are between two requests, and the blobs.
+   */
+  hotSnapshot(): Promise<string>;
   /** Stops the server, replaces its data with a snapshot (a restore from backup) and starts it again on the same port. */
   restore(snapshot: string): Promise<void>;
   stop(): Promise<void>;
@@ -160,6 +165,12 @@ export async function startServer(bin: string, opts: { env?: Record<string, stri
       cpSync(dataDir, copy, { recursive: true });
       snapshots.push(copy);
       await relaunch(listen);
+      return copy;
+    },
+    hotSnapshot: async () => {
+      const copy = mkdtempSync(join(tmpdir(), 'obsync-hot-'));
+      cpSync(dataDir, copy, { recursive: true });
+      snapshots.push(copy);
       return copy;
     },
     restore: async (snapshot) => {

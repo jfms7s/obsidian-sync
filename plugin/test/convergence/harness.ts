@@ -28,6 +28,19 @@
 // of three fleets: `mixed` (the last device is case-insensitive; the paths
 // never differ only in case), `sensitive` and `insensitive` (all devices
 // alike; case-only renames and case variants of paths are in play).
+//
+// In a third of the seeds (spread over all three fleets) dev1 keeps
+// whole-second mtimes, like a phone or a FAT card: an edit within the same
+// second as another write keeps the file's size and mtime when its length
+// does not change, so only the content tells it changed.
+//
+// Edits during a cycle. Most operations happen between cycles. The
+// 'edit-mid-cycle' operation arms the device's adapter so that the engine's
+// next read of a chosen file is followed at once by a user edit of that file
+// (keeping its length half the time), and then runs a cycle: the engine
+// carries on with what it read while the file has already changed under it.
+// Tokens all have the same width within a seed, so replacing one keeps the
+// file's length.
 import type { ApiClient } from '../../src/api/client';
 import { NetworkError } from '../../src/api/errors';
 import { CHUNK_SIZE } from '../../src/api/limits';
@@ -37,7 +50,7 @@ import { fileHistory, listTrash, NotInTrashError, PathOccupiedError, restore, Un
 import { hashHex } from '../../src/sync/content';
 import { equalBytes, toHex } from '../../src/util/bytes';
 import { ManualClock } from '../../src/util/clock';
-import { CONFLICT_COPY_PATTERN } from '../../src/util/path';
+import { caseFold, CONFLICT_COPY_PATTERN } from '../../src/util/path';
 import { seededRandom } from '../../src/util/random';
 import { makeClient, settle, type SimClient } from '../helpers/client';
 import type { User } from '../helpers/fixture';
@@ -51,16 +64,25 @@ export function fleetFor(seed: number): Fleet {
   return FLEETS[seed % FLEETS.length]!;
 }
 
+/** Whether dev1 keeps whole-second mtimes: a third of the seeds, in every fleet (seeds 3-5, 12-14, …). */
+export function coarseMtimeFor(seed: number): boolean {
+  return Math.floor(seed / FLEETS.length) % 3 === 1;
+}
+
 export interface SeedOptions {
   seed: number;
   clients?: number;
   steps?: number;
   fleet?: Fleet;
+  /** Whether dev1 keeps whole-second mtimes; default coarseMtimeFor(seed). */
+  coarseMtime?: boolean;
 }
 
 export interface SeedReport {
   seed: number;
   fleet: Fleet;
+  /** Whether dev1 kept whole-second mtimes. */
+  coarseMtime: boolean;
   files: number;
   conflictCopies: number;
   tokens: number;
@@ -95,12 +117,27 @@ const tokensIn = (data: Uint8Array) => latin1.decode(data).match(/<<s\d+\.c\d+\.
 const isExpectedRestoreError = (err: unknown) =>
   err instanceof UnsyncedChangesError || err instanceof PathOccupiedError || err instanceof NotInTrashError || err instanceof NetworkError;
 
+/**
+ * The result of a request the harness makes itself (listing history or the
+ * trash), or null when the network failed, as the restore screens would show
+ * an error. A pooled connection to a server that a backup or restore just
+ * restarted can be reset.
+ */
+async function unlessNetworkFails<T>(f: () => Promise<T>): Promise<T | null> {
+  try {
+    return await f();
+  } catch (err) {
+    if (err instanceof NetworkError) return null;
+    throw err;
+  }
+}
+
 /** Weights of the random operations; a roll picks the first one whose running total exceeds it. */
 const OPS: ReadonlyArray<readonly [string, number]> = [
-  ['create', 0.2], ['edit', 0.26], ['rename', 0.07], ['case-rename', 0.04], ['delete', 0.07],
+  ['create', 0.2], ['edit', 0.22], ['edit-mid-cycle', 0.04], ['rename', 0.07], ['case-rename', 0.04], ['delete', 0.07],
   ['network', 0.07], ['lose-commit', 0.03], ['crash-after-commit', 0.02], ['restart', 0.03],
-  ['history-restore', 0.02], ['trash-restore', 0.02], ['ignore', 0.02], ['backup', 0.01], ['restore-backup', 0.01],
-  ['sync', 0.13],
+  ['history-restore', 0.02], ['trash-restore', 0.02], ['ignore', 0.02], ['backup', 0.01], ['hot-backup', 0.01], ['restore-backup', 0.01],
+  ['sync', 0.12],
 ];
 
 export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedReport> {
@@ -108,6 +145,8 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
   const n = o.clients ?? 3;
   const steps = o.steps ?? 60;
   const fleet = o.fleet ?? fleetFor(o.seed);
+  const coarse = o.coarseMtime ?? coarseMtimeFor(o.seed);
+  const label = coarse ? `${fleet}, dev1 with whole-second mtimes` : fleet;
   const withBig = o.seed % 10 === 0;
   const caseOps = fleet !== 'mixed';
   const paths = [...TEXT_PATHS, ...BINARY_PATHS, ...(withBig ? [BIG_PATH] : [])];
@@ -126,6 +165,7 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
         name: `dev${i}`, vault: i === 0 ? 'create' : clients[0]!.vaultId,
         random: seededRandom(o.seed * 1000 + i + 1), clock,
         caseInsensitive: fleet === 'insensitive' || (fleet === 'mixed' && i === n - 1),
+        coarseMtime: coarse && i === 1,
       }));
     }
 
@@ -136,7 +176,8 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
     let backup: string | null = null;
     let tokenN = 0;
     const token = (c: number) => {
-      const t = `<<s${o.seed}.c${c}.t${tokenN++}>>`;
+      // Fixed width, so replacing one token with another keeps a file's length.
+      const t = `<<s${o.seed}.c${c}.t${String(tokenN++).padStart(4, '0')}>>`;
       written.add(t);
       return t;
     };
@@ -179,6 +220,35 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
       const after = new Set(tokensIn((await c.adapter.read(p)) ?? new Uint8Array(0)));
       for (const t of before) if (!after.has(t)) removed.add(t);
     };
+    /**
+     * A user edit of p (whose content is old) on device ci: a binary file is
+     * overwritten (same length: tokens have a fixed width); a text file gets a
+     * token line inserted, or with replace one of its token lines replaced,
+     * which keeps its length.
+     */
+    const userEdit = async (c: SimClient, ci: number, p: string, old: Uint8Array, replace: boolean): Promise<string> => {
+      const t = token(ci);
+      if (isBinary(p)) {
+        for (const x of tokensIn(old)) removed.add(x);
+        await c.adapter.write(p, payload(p, t));
+        return `overwrite ${p} ${t}`;
+      }
+      const lines = new TextDecoder().decode(old).split('\n');
+      const tokenLines = lines.map((l, i) => (/^<<s/.test(l) ? i : -1)).filter((i) => i >= 0);
+      let what: string;
+      if (replace && tokenLines.length > 0) {
+        const i = rnd.pick(tokenLines);
+        removed.add(lines[i]!);
+        lines[i] = t;
+        what = `replace-line ${p} ${t}`;
+      } else {
+        const at = rnd.int(lines.length);
+        lines.splice(at, 0, t);
+        what = `insert ${p}@${at} ${t}`;
+      }
+      await c.adapter.write(p, enc.encode(lines.join('\n')));
+      return what;
+    };
 
     for (let step = 0; step < steps; step++) {
       clock.advance(rnd.int(120_000));
@@ -213,27 +283,34 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
         case 'edit': {
           if (existing.length === 0) break;
           const p = rnd.pick(existing);
-          const old = (await c.adapter.read(p))!;
-          const t = token(ci);
-          if (isBinary(p)) {
-            for (const x of tokensIn(old)) removed.add(x);
-            await c.adapter.write(p, payload(p, t));
-            did(`overwrite ${p} ${t}`);
-          } else {
-            const lines = new TextDecoder().decode(old).split('\n');
-            const at = rnd.int(lines.length);
-            const tokenLines = lines.map((l, i) => (/^<<s/.test(l) ? i : -1)).filter((i) => i >= 0);
-            if (tokenLines.length > 0 && rnd.float() < 0.3) {
-              const i = rnd.pick(tokenLines);
-              removed.add(lines[i]!);
-              lines[i] = t;
-              did(`replace-line ${p} ${t}`);
-            } else {
-              lines.splice(at, 0, t);
-              did(`insert ${p}@${at} ${t}`);
-            }
-            await c.adapter.write(p, enc.encode(lines.join('\n')));
+          did(await userEdit(c, ci, p, (await c.adapter.read(p))!, rnd.float() < 0.3));
+          break;
+        }
+        case 'edit-mid-cycle': {
+          // The user saves p right after the engine read it in a cycle, so the
+          // engine carries on with content that is already out of date. Half
+          // the time p was edited just before (so the push reads it); else
+          // only a pull, an apply or a reconcile in this cycle reads it.
+          if (existing.length === 0) break;
+          const p = rnd.pick(existing);
+          const replace = rnd.float() < 0.5;
+          if (rnd.float() < 0.5) log.push(`${step} ${c.name} ${await userEdit(c, ci, p, (await c.adapter.read(p))!, false)} (before the cycle)`);
+          const adapter = c.adapter;
+          const read = adapter.read;
+          const fold = (q: string) => (adapter.caseInsensitive ? caseFold(q) : q);
+          let edited: string | null = null;
+          adapter.read = async (path: string) => {
+            const data = await read.call(adapter, path);
+            if (edited === null && data !== null && fold(path) === fold(p)) edited = await userEdit(c, ci, path, data, replace);
+            return data;
+          };
+          try {
+            await c.engine.runCycle();
+          } finally {
+            adapter.read = read;
           }
+          if (edited === null) log.push(`${step} ${c.name} edit of ${p} during a cycle: the cycle did not read it`);
+          else did(`${edited} (during a cycle, right after the engine read it)`);
           break;
         }
         case 'rename': {
@@ -292,7 +369,12 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
         case 'history-restore': {
           if (!c.net.online || existing.length === 0) break;
           const p = rnd.pick(existing);
-          const older = (await fileHistory(c.api, c.ring, p)).slice(1).filter((e) => !e.version.deleted && e.meta);
+          const history = await unlessNetworkFails(() => fileHistory(c.api, c.ring, p));
+          if (history === null) {
+            log.push(`${step} ${c.name} history of ${p} not loaded: network error`);
+            break;
+          }
+          const older = history.slice(1).filter((e) => !e.version.deleted && e.meta);
           if (older.length === 0) break;
           const entry = rnd.pick(older);
           const before = tokensIn((await c.adapter.read(p)) ?? new Uint8Array(0));
@@ -309,7 +391,11 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
         }
         case 'trash-restore': {
           if (!c.net.online) break;
-          const trash = await listTrash(c.api, c.ring);
+          const trash = await unlessNetworkFails(() => listTrash(c.api, c.ring));
+          if (trash === null) {
+            log.push(`${step} ${c.name} trash not loaded: network error`);
+            break;
+          }
           if (trash.length === 0) break;
           const entry = rnd.pick(trash);
           const p = entry.meta?.path;
@@ -332,6 +418,10 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
         case 'backup':
           backup = await srv.snapshot();
           did('backup of the server');
+          break;
+        case 'hot-backup':
+          backup = await srv.hotSnapshot();
+          did('hot backup of the running server');
           break;
         case 'restore-backup':
           if (backup === null) break;
@@ -378,16 +468,16 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
           const b = snaps[i]!.get(p);
           if (!a || !b || !equalBytes(a, b)) differing.add(p);
         }
-        throw new Error(`seed ${o.seed} (${fleet}): ${clients[i]!.name} differs from dev0\n--- dev0\n${show(first)}\n--- ${clients[i]!.name}\n${show(snaps[i]!)}\n--- state of the differing paths\n${await recordsFor(differing)}\n--- log\n${log.join('\n')}`);
+        throw new Error(`seed ${o.seed} (${label}): ${clients[i]!.name} differs from dev0\n--- dev0\n${show(first)}\n--- ${clients[i]!.name}\n${show(snaps[i]!)}\n--- state of the differing paths\n${await recordsFor(differing)}\n--- log\n${log.join('\n')}`);
       }
     }
     const seqs = await Promise.all(clients.map((c) => c.state.getCursor()));
     const serverSeq = (await clients[0]!.api.changes(clients[0]!.vaultId, 0, 1)).vaultSeq;
-    if (seqs.some((s) => s !== serverSeq)) throw new Error(`seed ${o.seed} (${fleet}): cursors ${seqs} != server seq ${serverSeq}\n--- log\n${log.join('\n')}`);
+    if (seqs.some((s) => s !== serverSeq)) throw new Error(`seed ${o.seed} (${label}): cursors ${seqs} != server seq ${serverSeq}\n--- log\n${log.join('\n')}`);
 
     const present = new Set([...first.values()].flatMap((d) => tokensIn(d)));
     const lost = [...written].filter((t) => !present.has(t) && !removed.has(t));
-    if (lost.length > 0) throw new Error(`seed ${o.seed} (${fleet}): lost edits ${lost.join(', ')}\n--- final\n${show(first)}\n--- log\n${log.join('\n')}`);
+    if (lost.length > 0) throw new Error(`seed ${o.seed} (${label}): lost edits ${lost.join(', ')}\n--- final\n${show(first)}\n--- log\n${log.join('\n')}`);
 
     // Copies come from merge conflicts (conflict events) and from collisions (notices that name the copy).
     const copies = [...first.keys()].filter((p) => CONFLICT_COPY_PATTERN.test(p));
@@ -397,11 +487,11 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
       return [];
     })));
     const unexplained = copies.filter((p) => !reported.has(p) && !renamedCopies.has(p));
-    if (unexplained.length > 0) throw new Error(`seed ${o.seed} (${fleet}): conflict copies without an event: ${unexplained.join(', ')}\n--- final\n${show(first)}\n--- log\n${log.join('\n')}`);
+    if (unexplained.length > 0) throw new Error(`seed ${o.seed} (${label}): conflict copies without an event: ${unexplained.join(', ')}\n--- final\n${show(first)}\n--- log\n${log.join('\n')}`);
 
     const missingCopies = [...new Set(clients.flatMap((c) => c.events.flatMap((e) => (e.type === 'conflict' ? [e.conflictPath] : []))))]
       .filter((p) => !first.has(p) && (copyRemovedAfter.get(p) ?? -1) < conflictEventsFor(p));
-    if (missingCopies.length > 0) throw new Error(`seed ${o.seed} (${fleet}): conflict events whose copy is gone: ${missingCopies.join(', ')}\n--- final\n${show(first)}\n--- log\n${log.join('\n')}`);
+    if (missingCopies.length > 0) throw new Error(`seed ${o.seed} (${label}): conflict events whose copy is gone: ${missingCopies.join(', ')}\n--- final\n${show(first)}\n--- log\n${log.join('\n')}`);
 
     const server = await serverFiles(clients[0]!.api, clients[0]!.ring);
     const describeHashes = (m: Map<string, string>) => [...m.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([p, h]) => `${p} ${h}`).join('\n');
@@ -409,12 +499,12 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
       const local = new Map<string, string>();
       for (const [p, d] of snaps[i]!) local.set(p, await hashHex(d));
       if (describeHashes(local) !== describeHashes(server)) {
-        throw new Error(`seed ${o.seed} (${fleet}): ${clients[i]!.name} differs from the server's live heads\n--- server\n${describeHashes(server)}\n--- ${clients[i]!.name}\n${describeHashes(local)}\n--- log\n${log.join('\n')}`);
+        throw new Error(`seed ${o.seed} (${label}): ${clients[i]!.name} differs from the server's live heads\n--- server\n${describeHashes(server)}\n--- ${clients[i]!.name}\n${describeHashes(local)}\n--- log\n${log.join('\n')}`);
       }
     }
 
     ok = true;
-    return { seed: o.seed, fleet, files: first.size, conflictCopies: copies.length, tokens: written.size, ops, log };
+    return { seed: o.seed, fleet, coarseMtime: coarse, files: first.size, conflictCopies: copies.length, tokens: written.size, ops, log };
   } finally {
     let stopError: unknown = null;
     for (const c of clients) {
