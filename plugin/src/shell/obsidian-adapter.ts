@@ -68,6 +68,9 @@ export async function probeCaseInsensitive(vault: Vault, probeDir: string): Prom
 }
 
 export class ObsidianAdapter implements VaultAdapter {
+  /** Folders (as the engine names them) already seen in their parent's listing, and their spelling on disk; see checkFolderNames. */
+  private readonly listedFolders = new Map<string, string>();
+
   private constructor(private readonly vault: Vault, private readonly fileManager: Pick<FileManager, 'trashFile'>, readonly caseInsensitive: boolean) {}
 
   /**
@@ -189,6 +192,38 @@ export class ObsidianAdapter implements VaultAdapter {
 
   // ----- changing things -----
 
+  /**
+   * Refuses a path through a folder that the disk opens but its parent
+   * does not list under that name (case and normalization aside). On
+   * Windows an 8.3 short name (OBSIDI~1), a name with trailing dots or
+   * spaces, or a stream suffix opens another folder, such as the config
+   * folder or .git, past every rule written for its real name.
+   * normalizePath already rejects such names; this is the second line, for
+   * whatever spelling it does not know. A folder seen listed once is not
+   * looked up again (a real name stays a real name).
+   */
+  private async checkFolderNames(path: string): Promise<void> {
+    const parts = path.split('/');
+    parts.pop();
+    let dir = '';
+    let parentOnDisk = '/';
+    for (const part of parts) {
+      dir = dir === '' ? part : `${dir}/${part}`;
+      const known = this.listedFolders.get(dir);
+      if (known !== undefined) {
+        parentOnDisk = known;
+        continue;
+      }
+      const onDisk = await this.folderAt(dir);
+      if (onDisk === null) return; // not there: it will be created under this very name
+      const want = fold(part);
+      const listed = (await this.vault.adapter.list(parentOnDisk)).folders.some((f) => fold(f.slice(f.lastIndexOf('/') + 1)) === want);
+      if (!listed) throw new Error(`refusing ${path}: the disk opens ${dir} but its folder does not list that name, so it is another name for some other folder`);
+      this.listedFolders.set(dir, onDisk);
+      parentOnDisk = onDisk;
+    }
+  }
+
   private holds(cur: Resolved | null, expect?: Expect): boolean {
     if (!expect) return true;
     if ('absent' in expect) return cur === null;
@@ -247,6 +282,7 @@ export class ObsidianAdapter implements VaultAdapter {
   }
 
   async write(path: string, data: Uint8Array, expect?: Expect): Promise<boolean> {
+    await this.checkFolderNames(path);
     const cur = await this.resolve(path);
     if (!this.holds(cur, expect)) return false;
     const buf = toArrayBuffer(data);
@@ -272,6 +308,7 @@ export class ObsidianAdapter implements VaultAdapter {
   }
 
   async remove(path: string, expect?: Expect): Promise<boolean> {
+    await this.checkFolderNames(path);
     const cur = await this.resolve(path);
     if (!this.holds(cur, expect)) return false;
     if (!cur) return true;
@@ -283,6 +320,8 @@ export class ObsidianAdapter implements VaultAdapter {
   }
 
   async rename(oldPath: string, newPath: string, expect?: Expect): Promise<boolean> {
+    await this.checkFolderNames(oldPath);
+    await this.checkFolderNames(newPath);
     const cur = await this.resolve(oldPath);
     if (!cur || !this.holds(cur, expect)) return false;
     const target = await this.resolve(newPath);

@@ -100,6 +100,26 @@ describe('ObsidianAdapter', () => {
     expect(new TextDecoder().decode(local.vault.fs.read('.trash/a.md'))).toBe('kept');
   });
 
+  it('refuses to write through a folder the disk opens under a name its parent does not list (an NTFS short name)', async () => {
+    const { vault, adapter } = await build({ caseInsensitive: true });
+    await adapter.write('.obsidian/app.json', bytes('{}'));
+    // NTFS: OBSIDI~1 opens .obsidian, while listings show only the long name.
+    const disk = vault.adapter as unknown as Record<string, (p: string, ...rest: unknown[]) => unknown>;
+    const alias = (p: string) => p.replace(/^OBSIDI~1(?=\/|$)/i, '.obsidian');
+    for (const m of ['exists', 'stat', 'list', 'readBinary', 'writeBinary', 'mkdir', 'remove', 'rename']) {
+      const real = disk[m]!.bind(vault.adapter);
+      disk[m] = (p, ...rest) => real(alias(p), ...rest.map((r) => (typeof r === 'string' ? alias(r) : r)));
+    }
+    const before = vault.fs.paths().sort();
+    await expect(adapter.write('OBSIDI~1/plugins/x/main.js', bytes('evil()'))).rejects.toThrow(/does not list/);
+    await expect(adapter.write('OBSIDI~1/app.json', bytes('{"x":1}'))).rejects.toThrow(/does not list/);
+    await expect(adapter.remove('OBSIDI~1/app.json')).rejects.toThrow(/does not list/);
+    await adapter.write('notes/a.md', bytes('fine'));
+    await expect(adapter.rename('notes/a.md', 'OBSIDI~1/a.md')).rejects.toThrow(/does not list/);
+    expect(vault.fs.paths().sort()).toEqual([...before, 'notes', 'notes/a.md'].sort());
+    expect(new TextDecoder().decode(await vault.adapter.readBinary('.obsidian/app.json'))).toBe('{}');
+  });
+
   it('replaces an empty folder, indexed or not, when a file takes its name', async () => {
     const { vault, adapter } = await build();
     await vault.createFolder('indexed');

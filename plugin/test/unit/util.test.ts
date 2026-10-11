@@ -37,6 +37,21 @@ describe('paths', () => {
   it.each(['a\uD800.md', 'dir/\uDC00x.md', 'end\uD83D'])('rejects the unpaired surrogate in %j', (p) => {
     expect(() => normalizePath(p)).toThrow(InvalidPathError);
   });
+  // Windows opens another name for these (8.3 short names, NTFS streams,
+  // dropped trailing dots and spaces, device names): `OBSIDI~1` is the
+  // config folder there, past every rule written for `.obsidian/`.
+  it.each([
+    'OBSIDI~1/plugins/x/main.js', 'GIT~1/hooks/pre-commit', 'x~1.md', '.obsidian::$INDEX_ALLOCATION/x', 'a/b:c.md',
+    '.obsidian./x', '.git /x', 'note.md.', 'note.md ', 'a/CON', 'a/nul.txt', 'COM1.md', 'lpt9', 'Aux.tar.gz',
+  ])('rejects %j, a name Windows could resolve to another', (p) => {
+    expect(() => normalizePath(p)).toThrow(InvalidPathError);
+  });
+  it.each([
+    'notes/a~b.md', '~/x.md', 'notes/my notes~draft.md', '.obsidian/app.json', 'LONGNAME~1.md', 'a/console.md', 'COM10.md',
+    'conference/notes.md', 'a/ CON.md', '.hidden', 'v1.2/x.md',
+  ])('accepts %j', (p) => {
+    expect(normalizePath(p)).toBe(p);
+  });
   it('accepts surrogate pairs', () => {
     expect(normalizePath('Ideas \uD83D\uDCA1.md')).toBe('Ideas 💡.md');
   });
