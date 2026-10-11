@@ -1,0 +1,18 @@
+{
+  "generated_by": "server/cmd/vectorgen (do not edit; run make vectors)",
+  "vectors": {
+    "chunk_size": 4194304,
+    "commit_body_limit": 8388608,
+    "login_body_limit": 16384,
+    "max_argon2_iterations": 64,
+    "max_argon2_memory_kib": 4194304,
+    "max_argon2_parallelism": 16,
+    "max_chunk_exists_batch": 1000,
+    "max_commits_per_request": 500,
+    "max_enc_meta_bytes": 65536,
+    "max_heads_page_size": 5000,
+    "max_page_size": 1000,
+    "max_password_bytes": 1024,
+    "min_argon2_memory_kib": 8192
+  }
+}

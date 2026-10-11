@@ -16,6 +16,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
 	obsyncv1 "github.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1"
 	"github.com/jfms7s/obsidian-sync/server/internal/ids"
+	"github.com/jfms7s/obsidian-sync/server/internal/limits"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 )
 
@@ -28,10 +29,10 @@ const (
 	// from storing parameters too weak to protect the wrapped keys; the
 	// ceilings matter because every device runs whatever is stored, so an
 	// absurd value would lock the user out of all of them.
-	MinArgon2MemoryKib   = 8192    // 8 MiB
-	MaxArgon2MemoryKib   = 4 << 20 // 4 GiB
-	MaxArgon2Iterations  = 64
-	MaxArgon2Parallelism = 16
+	MinArgon2MemoryKib   = limits.MinArgon2MemoryKib
+	MaxArgon2MemoryKib   = limits.MaxArgon2MemoryKib
+	MaxArgon2Iterations  = limits.MaxArgon2Iterations
+	MaxArgon2Parallelism = limits.MaxArgon2Parallelism
 )
 
 type Store interface {

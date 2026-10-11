@@ -18,7 +18,7 @@ export interface Argon2Params {
 /** About 1 s on a mid-range phone with the pure-JS Argon2id (0.5 s on a laptop). */
 export const DEFAULT_ARGON2: Argon2Params = { memoryKib: 19456, iterations: 2, parallelism: 1 };
 
-/** The server's bounds (server/internal/api/keys.go). */
+/** The server's bounds (server/internal/limits; test/unit/limits.test.ts checks they match). */
 export const ARGON2_LIMITS = { minMemoryKib: 8192, maxMemoryKib: 4 << 20, maxIterations: 64, maxParallelism: 16 } as const;
 
 /**
