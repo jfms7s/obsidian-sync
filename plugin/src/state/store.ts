@@ -37,6 +37,8 @@ export interface FileRecord {
   hasBase: boolean;
   /** Not written locally: another file differs from it only in letter case (case-insensitive file systems), or a folder holds its name. */
   shadowed?: boolean;
+  /** Why it is shadowed (absent in records from before this was kept). */
+  shadowedBy?: 'case' | 'folder';
   /** Not written locally: the path matches this device's ignore rules. */
   ignored?: boolean;
   /** Not written locally: the version is larger than this device's maximum file size. */

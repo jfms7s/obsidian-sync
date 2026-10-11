@@ -235,7 +235,8 @@ async function tryApply(
         if (copy === null) return false;
         ctx.emit({ type: 'notice', code: 'PATH_COLLISION', persistent: false, path, conflictPath: copy, message: `${path} is a folder on this device; the file was saved as ${copy}` });
       }
-      await state.recordSynced(record(fileId, path, versionId, v, contentHash, -1, { shadowed: true }), null);
+      await state.recordSynced(record(fileId, path, versionId, v, contentHash, -1, { shadowed: true, shadowedBy: 'folder' }), null);
+      ctx.onShadowed?.();
       return true;
     }
     if (!(await evictBlockingFile(ctx, path))) return false;
@@ -277,7 +278,8 @@ async function tryApply(
           if (copy === null) return false;
           ctx.emit({ type: 'notice', code: 'CASE_COLLISION', persistent: false, path, conflictPath: copy, message: `${path} differs only in letter case from ${st.path}; this device saved it as ${copy}` });
         }
-        await state.recordSynced(record(fileId, path, versionId, v, contentHash, -1, { shadowed: true }), null);
+        await state.recordSynced(record(fileId, path, versionId, v, contentHash, -1, { shadowed: true, shadowedBy: 'case' }), null);
+        ctx.onShadowed?.();
         return true;
       }
     }
