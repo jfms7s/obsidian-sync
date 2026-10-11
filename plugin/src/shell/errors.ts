@@ -41,6 +41,18 @@ function apiMessage(err: ApiError): UserError {
   }
 }
 
+/** message as a sentence: capitalised, ending with a full stop; fallback when it is empty. */
+function sentence(message: string, fallback: string): string {
+  if (message === '') return fallback;
+  return message[0]!.toUpperCase() + message.slice(1) + (message.endsWith('.') ? '' : '.');
+}
+
+function fallbackText(err: InvalidRecoveryWordsError | KeysAlreadySetUpError | SetupPassphraseMismatchError): string {
+  if (err instanceof InvalidRecoveryWordsError) return 'Those recovery words are not valid.';
+  if (err instanceof KeysAlreadySetUpError) return 'This account already has keys.';
+  return 'The keys were already set up with another passphrase.';
+}
+
 export function describeError(err: unknown): UserError {
   if (err instanceof ApiError) return apiMessage(err);
   if (err instanceof NetworkError) return { kind: 'retry', message: 'Cannot reach the server. Check the address and your connection.' };
@@ -53,7 +65,7 @@ export function describeError(err: unknown): UserError {
   // Any other decryption or verification failure: a damaged or tampered object, not something the user typed.
   if (err instanceof CryptoError) return { kind: 'none', message: 'This data could not be decrypted or verified; it may be damaged on the server.' };
   if (err instanceof InvalidRecoveryWordsError || err instanceof KeysAlreadySetUpError || err instanceof SetupPassphraseMismatchError) {
-    return { kind: 'fix-input', message: err.message[0]!.toUpperCase() + err.message.slice(1) + (err.message.endsWith('.') ? '' : '.') };
+    return { kind: 'fix-input', message: sentence(err.message, fallbackText(err)) };
   }
   if (err instanceof PassphraseIsPasswordError || err instanceof WeakPassphraseError) return { kind: 'fix-input', message: err.message };
   if (err instanceof UnsyncedChangesError) return { kind: 'retry', message: `${err.path} has changes that are not synced yet. Wait for the sync to finish, then restore.` };
