@@ -58,7 +58,7 @@ func (f *FS) SweepTemp(ctx context.Context, olderThan time.Duration) (removed in
 			return nil
 		}
 		if info, err := d.Info(); err == nil && info.ModTime().Before(cutoff) {
-			//nolint:gosec // G122: the blob tree is private to the server process (data dir mode 0700)
+			//nolint:gosec // G122: only the server user can write the blob tree (created 0750; by default under the 0700 data dir), so nothing else can swap a path during the walk
 			if os.Remove(p) == nil {
 				removed++
 			}

@@ -17,8 +17,9 @@ func TestRecovererDoesNotWriteTwice(t *testing.T) {
 	rec := httptest.NewRecorder()
 	func() {
 		defer func() {
-			if p, _ := recover().(error); !errors.Is(p, http.ErrAbortHandler) {
-				t.Errorf("recovered %v, want http.ErrAbortHandler", p)
+			got := recover()
+			if err, _ := got.(error); !errors.Is(err, http.ErrAbortHandler) {
+				t.Errorf("recovered %#v, want http.ErrAbortHandler", got)
 			}
 		}()
 		h.recoverer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
