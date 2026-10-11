@@ -123,12 +123,29 @@ export class FsAdapter implements VaultAdapter {
     readonly root: string,
     readonly caseInsensitive: boolean,
     private readonly options: FsAdapterOptions,
+    /** The folder's device and inode when the adapter was made: see checkRoot. */
+    private readonly rootId: { dev: number; ino: number },
   ) {}
 
   static async create(root: string, options: FsAdapterOptions = {}): Promise<FsAdapter> {
     const real = await realpath(root);
-    if (!(await lstat(real)).isDirectory()) throw new Error(`${root} is not a folder`);
-    return new FsAdapter(real, await probeCaseInsensitive(real), options);
+    const st = await lstat(real);
+    if (!st.isDirectory()) throw new Error(`${root} is not a folder`);
+    return new FsAdapter(real, await probeCaseInsensitive(real), options, { dev: st.dev, ino: st.ino });
+  }
+
+  /**
+   * Throws unless the vault folder is still the one the adapter was made
+   * for. A disk unmounted under it leaves an empty folder of the same name
+   * (another device and inode): its files would all look deleted, and the
+   * deletions would reach every device. So nothing is reported missing
+   * then; the engine's cycle fails and is retried until the folder is back.
+   */
+  private async checkRoot(): Promise<void> {
+    const st = await lstatOrNull(this.root);
+    if (!st?.isDirectory() || st.dev !== this.rootId.dev || st.ino !== this.rootId.ino) {
+      throw new Error(`the vault folder ${this.root} is gone or is another folder now (a disk unmounted?): no file is taken for deleted until it is back`);
+    }
   }
 
   private abs(rel: string): string {
@@ -183,9 +200,10 @@ export class FsAdapter implements VaultAdapter {
       if (st.isSymbolicLink()) throw new Error(`${path} is a symbolic link: links are not synced`);
       if (!st.isFile()) return null;
       const disk = await this.storedCase(spelling);
-      if (disk === null) return null;
+      if (disk === null) break;
       return { disk, engine: disk.normalize('NFC'), stat: st };
     }
+    await this.checkRoot(); // "not there" only counts while the vault folder is the real one
     return null;
   }
 
@@ -237,7 +255,9 @@ export class FsAdapter implements VaultAdapter {
   /** Every file, hidden ones included; the trash folder is this adapter's own and not part of the vault. */
   async list(skip?: (folder: string) => boolean): Promise<string[]> {
     const out = new Set<string>();
+    await this.checkRoot();
     await this.walk('', (folder) => this.isTrash(folder) || (skip?.(folder) ?? false), out, true);
+    await this.checkRoot(); // a folder unmounted during the walk lists short
     // A name on disk in both NFC and NFD is one path for the engine, which
     // reaches the NFC one (as ObsidianAdapter does).
     return [...new Set([...out].map((p) => p.normalize('NFC')))].sort();
@@ -542,6 +562,7 @@ export class FsAdapter implements VaultAdapter {
   private async check(rel: string): Promise<void> {
     if (!this.watcher || this.ignored(rel)) return;
     const st = await lstatOrNull(this.abs(rel));
+    if (!st) await this.checkRoot(); // throws to onWatchError instead of reporting deletions
     if (st?.isDirectory()) {
       await this.rescan(rel);
       return;
@@ -576,6 +597,7 @@ export class FsAdapter implements VaultAdapter {
         await this.check(p);
       }
     }
+    await this.checkRoot();
     for (const [k, was] of [...this.known]) {
       if (!k.startsWith(prefix) || present.has(k)) continue;
       if (await lstatOrNull(this.abs(was.disk))) continue;

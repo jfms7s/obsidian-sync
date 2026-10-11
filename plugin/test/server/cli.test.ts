@@ -2,7 +2,7 @@
 // run by Node as a user would, logs in, unlocks, chooses the vault and
 // syncs a real folder with the test server, next to an engine device.
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { build } from 'esbuild';
@@ -107,7 +107,7 @@ describe('obsync-cli against the real server', () => {
 
   it('refuses to sync a folder for the first time without --init', async () => {
     const r = await cli(['sync', '--vault-dir', vaultDir, '--once', ...S()]);
-    expect(r.code).toBe(1);
+    expect(r.code).toBe(2);
     expect(r.err).toMatch(/--init/);
   });
 
@@ -162,7 +162,7 @@ describe('obsync-cli against the real server', () => {
     expect(files(phone.adapter)['once.md']).toBe('one round\n');
     const other = await mkdtemp(join(work, 'other-'));
     const refused = await cli(['sync', '--vault-dir', other, '--once', '--init', ...S()]);
-    expect(refused.code).toBe(1);
+    expect(refused.code).toBe(2);
     expect(refused.err).toMatch(/this state syncs/);
   });
 
@@ -207,6 +207,20 @@ describe('obsync-cli against the real server', () => {
     expect(r.code, r.err).toBe(0);
     expect(r.err).toMatch(/pausing/);
     expect(r.err).toMatch(/resuming with a full check/);
+  it('refuses a vault folder that is empty when files were synced from it (a disk not mounted)', async () => {
+    const away = `${vaultDir}-away`;
+    await rename(vaultDir, away);
+    await mkdir(vaultDir);
+    try {
+      const r = await cli(['sync', '--vault-dir', vaultDir, '--once', ...S()]);
+      expect(r.code).toBe(2);
+      expect(r.err).toMatch(/is empty, but \d+ files were synced from it/);
+      await phone.engine.runCycle();
+      expect(files(phone.adapter)['once.md']).toBe('one round\n'); // nothing was deleted
+    } finally {
+      await rm(vaultDir, { recursive: true });
+      await rename(away, vaultDir);
+    }
   });
 
   it('logs out: the device is revoked and the state deleted', async () => {

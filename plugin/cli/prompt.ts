@@ -26,6 +26,8 @@ export function promptHidden(question: string, what: string, flag: string): Prom
   process.stderr.write(question);
   return new Promise((resolve, reject) => {
     let value = '';
+    /** Inside a terminal escape sequence (an arrow or function key): not part of the secret. */
+    let escape: 'no' | 'esc' | 'csi' = 'no';
     const done = (err: Error | null) => {
       stdin.setRawMode(false);
       stdin.pause();
@@ -36,7 +38,17 @@ export function promptHidden(question: string, what: string, flag: string): Prom
     };
     const onData = (chunk: Buffer) => {
       for (const ch of chunk.toString('utf8')) {
-        if (ch === '\u0003') {
+        if (escape === 'esc') {
+          escape = ch === '[' || ch === 'O' ? 'csi' : 'no';
+          continue;
+        }
+        if (escape === 'csi') {
+          if (ch >= '@' && ch <= '~') escape = 'no'; // the sequence's final byte
+          continue;
+        }
+        if (ch === '\u001b') {
+          escape = 'esc';
+        } else if (ch === '\u0003') {
           stdin.setRawMode(false);
           process.stderr.write('\n');
           process.exit(130);

@@ -1,9 +1,9 @@
 // obsync-cli's command line, in process: arguments, help, the state
 // directory, and the commands that need no server.
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { build } from 'esbuild';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { cliOptions } from '../../esbuild.config.mjs';
@@ -73,19 +73,31 @@ describe('obsync-cli arguments', () => {
     expect(c.r.out).toMatch(/No deletions are on hold/);
   });
 
-  it('refuses a state-changing command while another process holds the state', async () => {
+  it('refuses a state-changing command while another obsync-cli holds the state, and takes over a lock left behind', async () => {
     const dir = await temp();
-    // Another live process holds it: the lock file names our parent.
-    await writeFile(join(dir, 'lock'), `${process.ppid}\n`);
-    await expect(acquireLock(dir)).rejects.toThrow(StateLockedError);
-    const a = io();
-    expect(await run(['logout', '--state-dir', dir], a.io)).toBe(1);
-    expect(a.r.log).toMatch(/another obsync-cli \(pid \d+\)/);
-    // A lock whose process is gone is taken over.
+    // Another obsync-cli: a live process whose command line names it.
+    const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', 'obsync-cli.mjs', 'sync'], { stdio: 'ignore' });
+    try {
+      await writeFile(join(dir, 'lock'), `${other.pid}\n`);
+      await expect(acquireLock(dir)).rejects.toThrow(StateLockedError);
+      const a = io();
+      expect(await run(['logout', '--state-dir', dir], a.io)).toBe(1);
+      expect(a.r.log).toMatch(/another obsync-cli \(pid \d+\)/);
+    } finally {
+      other.kill();
+    }
+    // A lock whose process is gone is taken over…
     await writeFile(join(dir, 'lock'), '999999999\n');
     const again = await acquireLock(dir);
     expect((await readFile(join(dir, 'lock'), 'utf8')).trim()).toBe(String(process.pid));
     await again();
+    // …and so is one whose pid now belongs to some other program (after a reboot): here, our parent.
+    if (process.platform === 'linux') {
+      await writeFile(join(dir, 'lock'), `${process.ppid}\n`);
+      const third = await acquireLock(dir);
+      await third();
+    }
+    expect(await readdir(dir)).not.toContain('lock');
   });
 });
 
