@@ -388,7 +388,7 @@ func TestMaintenanceRun(t *testing.T) {
 
 	d, _ = deps(t, st, blobs, "")
 	d.Maintenance = func(context.Context, time.Time) (jobs.Report, error) { return jobs.Report{}, jobs.ErrLeaseHeld }
-	if err := admin.Run(ctx, []string{"maintenance", "run"}, d); err == nil || !strings.Contains(err.Error(), "stop the server") {
-		t.Fatalf("err = %v, want advice to stop the server", err)
+	if err := admin.Run(ctx, []string{"maintenance", "run"}, d); err == nil || !strings.Contains(err.Error(), "try again") {
+		t.Fatalf("err = %v, want advice to try again", err)
 	}
 }

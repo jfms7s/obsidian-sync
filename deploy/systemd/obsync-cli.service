@@ -1,0 +1,35 @@
+# obsync-cli as a systemd user unit: syncs one vault folder whenever you are
+# logged in (and, with lingering, when you are not), so edits made while
+# Obsidian is closed reach your other devices in seconds. While Obsidian's own
+# plugin syncs the same folder, the daemon waits. See README.md, "Sync
+# without Obsidian".
+#
+#   install -D -m 0644 deploy/systemd/obsync-cli.service ~/.config/systemd/user/obsync-cli.service
+#   # edit ExecStart: your Node 22.12+ and your vault folder (the one you ran `sync --init` on)
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now obsync-cli
+#   journalctl --user -u obsync-cli -f
+#
+# For a second vault, copy this file under another name and add --name NAME
+# to ExecStart (each name has its own login and state).
+
+[Unit]
+Description=obsync-cli: sync an Obsidian vault folder without Obsidian
+Documentation=https://github.com/jfms7s/obsidian-sync#sync-without-obsidian-obsync-cli
+After=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/node %h/.local/lib/obsync/obsync-cli.mjs sync --vault-dir %h/Documents/Vault
+# Exit code 2: log in, unlock or choose a vault first (obsync-cli status says
+# which); restarting would not help. Other failures are retried.
+Restart=on-failure
+RestartSec=30s
+RestartPreventExitStatus=2
+# On SIGTERM the daemon finishes the cycle in progress and saves its state; a
+# cycle longer than this is killed, and the next start replays it safely.
+TimeoutStopSec=60s
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
