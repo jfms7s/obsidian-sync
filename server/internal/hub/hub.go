@@ -19,6 +19,7 @@ import (
 	obsyncv1 "github.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1"
 	"github.com/jfms7s/obsidian-sync/server/internal/ids"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
+	"github.com/jfms7s/obsidian-sync/server/internal/vaultsvc"
 )
 
 const (
@@ -30,8 +31,9 @@ type Authenticator interface {
 	Authenticate(ctx context.Context, token string) (auth.Session, error)
 }
 
+// Vaults is the vault access check (vaultsvc.Service).
 type Vaults interface {
-	VaultForMember(ctx context.Context, vaultID, userID string) (store.Vault, error)
+	Authorize(ctx context.Context, userID, vaultID string, action vaultsvc.Action) (store.Vault, error)
 }
 
 type Options struct {
@@ -239,10 +241,10 @@ func (c *conn) subscribe(vaultIDs []string) {
 		// Subscribe before reading the seq, so a commit landing in between is
 		// delivered rather than missed.
 		ch, cancel := c.hub.bus.Subscribe(id)
-		v, err := c.hub.vaults.VaultForMember(c.ctx, id, c.sess.UserID)
+		v, err := c.hub.vaults.Authorize(c.ctx, c.sess.UserID, id, vaultsvc.ActionRead)
 		if err != nil {
 			cancel()
-			if errors.Is(err, store.ErrNotFound) {
+			if errors.Is(err, apperr.ErrVaultNotFound) {
 				c.sendError(apperr.ErrVaultNotFound)
 			} else {
 				c.hub.log.Error("subscribe", "vault", id, "err", err)
@@ -302,10 +304,10 @@ func (c *conn) recheckMembership() {
 	}
 	c.mu.Unlock()
 	for _, id := range vaultIDs {
-		_, err := c.hub.vaults.VaultForMember(c.ctx, id, c.sess.UserID)
+		_, err := c.hub.vaults.Authorize(c.ctx, c.sess.UserID, id, vaultsvc.ActionRead)
 		switch {
 		case err == nil:
-		case errors.Is(err, store.ErrNotFound):
+		case errors.Is(err, apperr.ErrVaultNotFound):
 			c.mu.Lock()
 			cancel, ok := c.subs[id]
 			if ok {

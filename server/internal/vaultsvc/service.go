@@ -232,15 +232,41 @@ func validateNewVault(nv NewVault) error {
 	return nil
 }
 
-// VaultKeys returns the vault's keys sealed to userID. A malformed id, an
-// unknown vault and a vault userID is not a member of all answer
-// VAULT_NOT_FOUND.
-func (s *Service) VaultKeys(ctx context.Context, userID, vaultID string) ([]store.VaultKey, error) {
+// Action is what a caller wants to do with a vault.
+type Action int
+
+const (
+	ActionRead Action = iota
+	ActionWrite
+)
+
+// Authorize is the one access check for a vault: it returns the vault if
+// userID may do action on it. A malformed id, an unknown vault and a vault
+// userID is not a member of all answer VAULT_NOT_FOUND, so a vault's
+// existence never leaks to outsiders. Today every member may read and
+// write; roles will tell the actions apart here and nowhere else.
+func (s *Service) Authorize(ctx context.Context, userID, vaultID string, action Action) (store.Vault, error) {
+	_ = action // every member may do everything until roles exist
 	if !ids.Valid(vaultID) {
-		return nil, apperr.ErrVaultNotFound
+		return store.Vault{}, apperr.ErrVaultNotFound
 	}
-	// VaultKeys is scoped to the caller's membership and reports a
-	// non-member as not found, so this one query is also the access check.
+	v, err := s.st.VaultForMember(ctx, vaultID, userID)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.Vault{}, apperr.ErrVaultNotFound
+	}
+	if err != nil {
+		return store.Vault{}, fmt.Errorf("load vault: %w", err)
+	}
+	return v, nil
+}
+
+// VaultKeys returns the vault's keys sealed to userID, after Authorize.
+func (s *Service) VaultKeys(ctx context.Context, userID, vaultID string) ([]store.VaultKey, error) {
+	if _, err := s.Authorize(ctx, userID, vaultID, ActionRead); err != nil {
+		return nil, err
+	}
+	// The query is scoped to the caller's membership too: a membership
+	// removed since Authorize answers not found.
 	keys, err := s.st.VaultKeys(ctx, vaultID, userID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apperr.ErrVaultNotFound
