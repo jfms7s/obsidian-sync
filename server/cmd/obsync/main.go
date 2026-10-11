@@ -22,7 +22,6 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/admin"
 	"github.com/jfms7s/obsidian-sync/server/internal/app"
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
-	"github.com/jfms7s/obsidian-sync/server/internal/blob"
 	"github.com/jfms7s/obsidian-sync/server/internal/config"
 )
 
@@ -199,7 +198,7 @@ func adminCmd(ctx context.Context, cfg config.Config, args []string) error {
 		return err
 	}
 	defer st.Close()
-	blobs, err := blob.NewFS(cfg.BlobFSDir)
+	blobs, err := app.OpenBlobs(cfg)
 	if err != nil {
 		return err
 	}
