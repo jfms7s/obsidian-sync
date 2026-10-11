@@ -51,3 +51,16 @@ const DriverName = driverName
 
 // BundledSQLiteVersion is the SQLite version the driver ships.
 const BundledSQLiteVersion = bundledSQLiteVersion
+
+// MigrateUpTo applies the migrations up to version, as an older binary would.
+func MigrateUpTo(ctx context.Context, s *Store, version int) error { return s.migrate(ctx, version) }
+
+// CountRows counts a table's rows, failing tb if the query fails.
+func CountRows(tb testing.TB, s *Store, table string) int {
+	tb.Helper()
+	var n int
+	if err := s.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM `+table).Scan(&n); err != nil {
+		tb.Fatalf("count %s: %v", table, err)
+	}
+	return n
+}

@@ -32,6 +32,7 @@ var errUsage = errors.New(`usage: obsync admin user create --username NAME [--qu
        obsync admin user list
        obsync admin user set-password --username NAME [--revoke-devices]   (password on stdin)
        obsync admin user delete --username NAME [--yes]
+       obsync admin user totp (status|disable) --username NAME
        obsync admin device list --username NAME
        obsync admin device revoke --username NAME (--id DEVICE_ID | --all)
        obsync admin maintenance run [--as-of RFC3339]
@@ -48,6 +49,8 @@ type Store interface {
 	ListDevices(ctx context.Context, userID string) ([]store.Device, error)
 	RevokeDevice(ctx context.Context, userID, deviceID string) error
 	RevokeAllDevices(ctx context.Context, userID string) (int, error)
+	TOTP(ctx context.Context, userID string) (store.TOTPState, error)
+	DisableTOTP(ctx context.Context, userID string) error
 	AcquireLease(ctx context.Context, name, holder string, ttl time.Duration) (bool, error)
 	ReleaseLease(ctx context.Context, name, holder string) error
 	Snapshot(ctx context.Context, path string) error
@@ -89,6 +92,8 @@ func Run(ctx context.Context, args []string, d Deps) error {
 		return userDelete(ctx, args[2:], d)
 	case "user set-password":
 		return userSetPassword(ctx, args[2:], d)
+	case "user totp":
+		return userTOTP(ctx, args[2:], d)
 	case "device list":
 		return deviceList(ctx, args[2:], d)
 	case "device revoke":
@@ -210,6 +215,40 @@ func userSetPassword(ctx context.Context, args []string, d Deps) error {
 		return fmt.Errorf("password changed, but revoking the devices failed: %w", err)
 	}
 	fmt.Fprintf(d.Stdout, "password changed for %s; revoked %s\n", u.Username, plural(n, "device"))
+	return nil
+}
+
+// userTOTP shows whether an account has two-step sign-in on, or turns it
+// off: the way back in for a user who lost both the authenticator and the
+// recovery codes. Turning it on is the user's own step, in the plugin.
+func userTOTP(ctx context.Context, args []string, d Deps) error {
+	if len(args) == 0 || (args[0] != "status" && args[0] != "disable") {
+		return errUsage
+	}
+	fs, username := userFlags("user totp " + args[0])
+	u, err := lookup(ctx, fs, args[1:], username, d)
+	if err != nil {
+		return err
+	}
+	if args[0] == "disable" {
+		if err := d.Store.DisableTOTP(ctx, u.ID); err != nil {
+			return err
+		}
+		fmt.Fprintf(d.Stdout, "two-step sign-in turned off for %s; signed-in devices stay signed in\n", u.Username)
+		return nil
+	}
+	st, err := d.Store.TOTP(ctx, u.ID)
+	if err != nil {
+		return err
+	}
+	switch {
+	case st.Secret != nil:
+		fmt.Fprintf(d.Stdout, "two-step sign-in is on for %s (%s left)\n", u.Username, plural(st.RecoveryLeft, "recovery code"))
+	case st.PendingSecret != nil:
+		fmt.Fprintf(d.Stdout, "two-step sign-in is off for %s (set-up started, not confirmed)\n", u.Username)
+	default:
+		fmt.Fprintf(d.Stdout, "two-step sign-in is off for %s\n", u.Username)
+	}
 	return nil
 }
 

@@ -27,6 +27,10 @@ enum ErrorCode {
   // bundle, a device) keep NOT_FOUND. 0.1.x servers sent NOT_FOUND with the
   // message "vault not found" instead.
   ERROR_CODE_VAULT_NOT_FOUND = 13;
+  // The password was right, and the account also needs a code from its
+  // authenticator app (or a recovery code): send the login again with
+  // totp_code. Answered only to a login without a code.
+  ERROR_CODE_SECOND_FACTOR_REQUIRED = 14;
 }
 
 message Error {
@@ -41,6 +45,9 @@ message LoginRequest {
   string password = 2;
   string device_name = 3;
   string platform = 4;
+  // For an account with two-step sign-in: the authenticator app's current
+  // code, or one of the account's recovery codes. Ignored otherwise.
+  string totp_code = 5;
 }
 
 message LoginResponse {

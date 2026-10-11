@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,7 +22,11 @@ var errMigrationApplied = errors.New("migration already applied")
 
 // Migrate applies every migration in migrations/ that has not run yet, each in
 // its own transaction, in file-name order.
-func (s *Store) Migrate(ctx context.Context) error {
+func (s *Store) Migrate(ctx context.Context) error { return s.migrate(ctx, math.MaxInt) }
+
+// migrate applies the migrations up to version upTo, as a binary that knows
+// only those would.
+func (s *Store) migrate(ctx context.Context, upTo int) error {
 	if _, err := s.db.ExecContext(ctx,
 		`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`); err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
@@ -32,6 +37,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	for _, m := range migrations {
 		version, name := m.version, m.name
+		if version > upTo {
+			break
+		}
 		var applied int
 		if err := s.db.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&applied); err != nil {

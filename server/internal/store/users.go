@@ -314,6 +314,7 @@ func (s *Store) DeleteUser(ctx context.Context, userID string) ([]string, error)
 			`DELETE FROM vault_members WHERE user_id = ?`,
 			`DELETE FROM devices WHERE user_id = ?`,
 			`DELETE FROM key_bundles WHERE user_id = ?`,
+			`DELETE FROM totp_recovery_codes WHERE user_id = ?`,
 		} {
 			if _, err := tx.ExecContext(ctx, stmt, userID); err != nil {
 				return fmt.Errorf("delete user data: %w", err)

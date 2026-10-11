@@ -44,6 +44,10 @@ const (
 	// bundle, a device) keep NOT_FOUND. 0.1.x servers sent NOT_FOUND with the
 	// message "vault not found" instead.
 	ErrorCode_ERROR_CODE_VAULT_NOT_FOUND ErrorCode = 13
+	// The password was right, and the account also needs a code from its
+	// authenticator app (or a recovery code): send the login again with
+	// totp_code. Answered only to a login without a code.
+	ErrorCode_ERROR_CODE_SECOND_FACTOR_REQUIRED ErrorCode = 14
 )
 
 // Enum value maps for ErrorCode.
@@ -63,22 +67,24 @@ var (
 		11: "ERROR_CODE_MISSING_CHUNK",
 		12: "ERROR_CODE_WRONG_PASSWORD",
 		13: "ERROR_CODE_VAULT_NOT_FOUND",
+		14: "ERROR_CODE_SECOND_FACTOR_REQUIRED",
 	}
 	ErrorCode_value = map[string]int32{
-		"ERROR_CODE_UNSPECIFIED":     0,
-		"ERROR_CODE_CONFLICT":        1,
-		"ERROR_CODE_QUOTA_EXCEEDED":  2,
-		"ERROR_CODE_UNAUTHORIZED":    3,
-		"ERROR_CODE_DEVICE_REVOKED":  4,
-		"ERROR_CODE_STALE_EPOCH":     5,
-		"ERROR_CODE_RATE_LIMITED":    6,
-		"ERROR_CODE_TOO_LARGE":       7,
-		"ERROR_CODE_NOT_FOUND":       8,
-		"ERROR_CODE_INTERNAL":        9,
-		"ERROR_CODE_INVALID":         10,
-		"ERROR_CODE_MISSING_CHUNK":   11,
-		"ERROR_CODE_WRONG_PASSWORD":  12,
-		"ERROR_CODE_VAULT_NOT_FOUND": 13,
+		"ERROR_CODE_UNSPECIFIED":            0,
+		"ERROR_CODE_CONFLICT":               1,
+		"ERROR_CODE_QUOTA_EXCEEDED":         2,
+		"ERROR_CODE_UNAUTHORIZED":           3,
+		"ERROR_CODE_DEVICE_REVOKED":         4,
+		"ERROR_CODE_STALE_EPOCH":            5,
+		"ERROR_CODE_RATE_LIMITED":           6,
+		"ERROR_CODE_TOO_LARGE":              7,
+		"ERROR_CODE_NOT_FOUND":              8,
+		"ERROR_CODE_INTERNAL":               9,
+		"ERROR_CODE_INVALID":                10,
+		"ERROR_CODE_MISSING_CHUNK":          11,
+		"ERROR_CODE_WRONG_PASSWORD":         12,
+		"ERROR_CODE_VAULT_NOT_FOUND":        13,
+		"ERROR_CODE_SECOND_FACTOR_REQUIRED": 14,
 	}
 )
 
@@ -162,11 +168,14 @@ func (x *Error) GetMessage() string {
 }
 
 type LoginRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
-	Password      string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
-	DeviceName    string                 `protobuf:"bytes,3,opt,name=device_name,json=deviceName,proto3" json:"device_name,omitempty"`
-	Platform      string                 `protobuf:"bytes,4,opt,name=platform,proto3" json:"platform,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Username   string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Password   string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
+	DeviceName string                 `protobuf:"bytes,3,opt,name=device_name,json=deviceName,proto3" json:"device_name,omitempty"`
+	Platform   string                 `protobuf:"bytes,4,opt,name=platform,proto3" json:"platform,omitempty"`
+	// For an account with two-step sign-in: the authenticator app's current
+	// code, or one of the account's recovery codes. Ignored otherwise.
+	TotpCode      string `protobuf:"bytes,5,opt,name=totp_code,json=totpCode,proto3" json:"totp_code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -225,6 +234,13 @@ func (x *LoginRequest) GetDeviceName() string {
 func (x *LoginRequest) GetPlatform() string {
 	if x != nil {
 		return x.Platform
+	}
+	return ""
+}
+
+func (x *LoginRequest) GetTotpCode() string {
+	if x != nil {
+		return x.TotpCode
 	}
 	return ""
 }
@@ -2267,13 +2283,14 @@ const file_obsync_v1_obsync_proto_rawDesc = "" +
 	"\x16obsync/v1/obsync.proto\x12\tobsync.v1\"K\n" +
 	"\x05Error\x12(\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x14.obsync.v1.ErrorCodeR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\x83\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xa0\x01\n" +
 	"\fLoginRequest\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
 	"\bpassword\x18\x02 \x01(\tR\bpassword\x12\x1f\n" +
 	"\vdevice_name\x18\x03 \x01(\tR\n" +
 	"deviceName\x12\x1a\n" +
-	"\bplatform\x18\x04 \x01(\tR\bplatform\"[\n" +
+	"\bplatform\x18\x04 \x01(\tR\bplatform\x12\x1b\n" +
+	"\ttotp_code\x18\x05 \x01(\tR\btotpCode\"[\n" +
 	"\rLoginResponse\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x17\n" +
@@ -2419,7 +2436,7 @@ const file_obsync_v1_obsync_proto_rawDesc = "" +
 	"\fcontent_hash\x18\x04 \x01(\fR\vcontentHash\x12!\n" +
 	"\frenamed_from\x18\x05 \x01(\tR\vrenamedFrom\x12\x1f\n" +
 	"\vdevice_name\x18\x06 \x01(\tR\n" +
-	"deviceName*\x96\x03\n" +
+	"deviceName*\xbd\x03\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13ERROR_CODE_CONFLICT\x10\x01\x12\x1d\n" +
@@ -2435,7 +2452,8 @@ const file_obsync_v1_obsync_proto_rawDesc = "" +
 	"\x12\x1c\n" +
 	"\x18ERROR_CODE_MISSING_CHUNK\x10\v\x12\x1d\n" +
 	"\x19ERROR_CODE_WRONG_PASSWORD\x10\f\x12\x1e\n" +
-	"\x1aERROR_CODE_VAULT_NOT_FOUND\x10\rBHZFgithub.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1;obsyncv1b\x06proto3"
+	"\x1aERROR_CODE_VAULT_NOT_FOUND\x10\r\x12%\n" +
+	"!ERROR_CODE_SECOND_FACTOR_REQUIRED\x10\x0eBHZFgithub.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1;obsyncv1b\x06proto3"
 
 var (
 	file_obsync_v1_obsync_proto_rawDescOnce sync.Once
