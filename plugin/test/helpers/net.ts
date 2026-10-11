@@ -12,6 +12,8 @@ export class Net {
   online = true;
   /** Requests whose response is thrown away after the server handled them. */
   private loseResponses: Array<(method: string, path: string) => boolean> = [];
+  /** Requests that fail before they reach the server. */
+  private failRequests: Array<(method: string, path: string) => boolean> = [];
   readonly log: RequestLog[] = [];
   private sockets = new Set<WebSocketLike>();
 
@@ -19,6 +21,11 @@ export class Net {
     const url = new URL(input);
     const method = req.method;
     if (!this.online) throw new TypeError('fetch failed: network is down');
+    const f = this.failRequests.findIndex((m) => m(method, url.pathname));
+    if (f >= 0) {
+      this.failRequests.splice(f, 1);
+      throw new TypeError('fetch failed: connection refused');
+    }
     this.log.push({ method, path: url.pathname });
     const resp = await fetchTransport(input, req);
     const i = this.loseResponses.findIndex((f) => f(method, url.pathname));
@@ -48,6 +55,11 @@ export class Net {
   /** The next request matching method and a path suffix reaches the server, but its response is lost. */
   loseNextResponse(method: string, pathSuffix: string): void {
     this.loseResponses.push((m, p) => m === method && p.endsWith(pathSuffix));
+  }
+
+  /** The next request matching method and a path suffix fails without reaching the server. */
+  failNextRequest(method: string, pathSuffix: string): void {
+    this.failRequests.push((m, p) => m === method && p.endsWith(pathSuffix));
   }
 
   setOnline(online: boolean): void {
