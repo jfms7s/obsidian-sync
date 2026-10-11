@@ -288,3 +288,84 @@ func TestRunOnceWithoutLeaseDoesNotSweep(t *testing.T) {
 		t.Fatalf("blob calls without the lease: %v", blobs.calls)
 	}
 }
+
+// countingStore counts the GC store calls.
+type countingStore struct {
+	*store.Store
+	batchDeletes int
+}
+
+func (s *countingStore) DeleteDeadChunks(ctx context.Context, cs []store.DeadChunk, touchedBeforeMs int64) ([]store.DeadChunk, error) {
+	s.batchDeletes++
+	return s.Store.DeleteDeadChunks(ctx, cs, touchedBeforeMs)
+}
+
+// GC deletes a batch of dead chunks with one store call (one transaction),
+// not one per chunk, and still removes every blob.
+func TestRunOnceCollectsChunksInBatches(t *testing.T) {
+	ctx := context.Background()
+	st, clk := storetest.New(t)
+	blobs, _ := blob.NewFS(t.TempDir())
+	user := storetest.SeedUser(t, st, "alice")
+	vault := storetest.SeedVault(t, st, user.ID)
+	const n = 600
+	keys := make([]string, n)
+	for i := range keys {
+		id := make([]byte, 32)
+		id[0], id[1] = byte(i>>8), byte(i)
+		keys[i] = "test/" + hex.EncodeToString(id)
+		if err := blobs.Put(ctx, keys[i], bytes.NewReader([]byte("c"))); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.InsertChunk(ctx, store.Chunk{VaultID: vault.ID, ChunkID: id, BlobKey: keys[i], Size: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clk.Advance(48 * time.Hour)
+	cs := &countingStore{Store: st}
+	r := jobs.New(cs, blobs, jobs.Config{Interval: time.Hour, Retention: config.Retention{TrashDays: 30}, GCGrace: time.Hour}, clk.Now, discard())
+	if err := r.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if cs.batchDeletes != 2 {
+		t.Fatalf("%d batch deletes for %d chunks, want 2 (batches of 500)", cs.batchDeletes, n)
+	}
+	for _, k := range keys {
+		if _, err := blobs.Get(ctx, k); !errors.Is(err, blob.ErrNotFound) {
+			t.Fatalf("blob %s survived: %v", k, err)
+		}
+	}
+	if used, _ := st.UsageBytes(ctx, user.ID); used != 0 {
+		t.Fatalf("usage = %d, want 0", used)
+	}
+}
+
+// Walking the whole blob tree every pass is wasted work: the temp sweep runs
+// on the first pass and then at most once a day.
+func TestRunOnceSweepsTempFilesAtMostDaily(t *testing.T) {
+	st, clk := storetest.New(t)
+	fsBlobs, _ := blob.NewFS(t.TempDir())
+	blobs := &recordingBlobs{Store: fsBlobs}
+	r := jobs.New(st, blobs, jobs.Config{Interval: time.Hour, GCGrace: time.Hour}, clk.Now, discard())
+	sweeps := func() int {
+		n := 0
+		for _, c := range blobs.calls {
+			if c == "sweep" {
+				n++
+			}
+		}
+		return n
+	}
+	for i, step := range []struct {
+		advance time.Duration
+		want    int
+	}{{0, 1}, {time.Hour, 1}, {22 * time.Hour, 1}, {time.Hour, 2}, {time.Hour, 2}} {
+		clk.Advance(step.advance)
+		if err := r.RunOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := sweeps(); got != step.want {
+			t.Fatalf("pass %d: %d sweeps, want %d", i, got, step.want)
+		}
+	}
+}
