@@ -21,10 +21,13 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/vaultsvc"
 )
 
-// Store is what the handlers still read directly: a user's own devices.
+// Store is what the handlers still read directly: a user's own devices and
+// storage usage.
 type Store interface {
 	ListDevices(ctx context.Context, userID string) ([]store.Device, error)
 	RevokeDevice(ctx context.Context, userID, deviceID string) error
+	UserByID(ctx context.Context, id string) (store.User, error)
+	OwnedVaultUsage(ctx context.Context, ownerID string) ([]store.VaultUsage, error)
 }
 
 type Deps struct {
@@ -67,6 +70,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("POST /v1/auth/logout", h.authed(h.logout))
 	mux.HandleFunc("GET /v1/devices", h.authed(h.listDevices))
 	mux.HandleFunc("DELETE /v1/devices/{device}", h.authed(h.revokeDevice))
+	mux.HandleFunc("GET /v1/account/usage", h.authed(h.usage))
 	mux.HandleFunc("GET /v1/keys", h.authed(h.getKeys))
 	mux.HandleFunc("PUT /v1/keys", h.authed(h.putKeys))
 	h.registerVaultRoutes(mux)

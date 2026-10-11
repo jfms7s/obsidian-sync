@@ -63,6 +63,22 @@ message ListDevicesResponse {
   repeated Device devices = 1;
 }
 
+// GET /v1/account/usage. Sizes are stored (ciphertext) chunk bytes, the unit
+// the quota counts.
+message GetUsageResponse {
+  // Every vault the account owns, history and trash included: the number
+  // the quota is checked against. Shared vaults count against their owner.
+  int64 used_bytes = 1;
+  int64 quota_bytes = 2;
+  // One entry per vault the account owns; vaults shared with it are left out.
+  repeated VaultUsage vaults = 3;
+}
+
+message VaultUsage {
+  string vault_id = 1;
+  int64 used_bytes = 2;
+}
+
 // ---------- User key material (opaque to the server) ----------
 
 message Argon2Params {

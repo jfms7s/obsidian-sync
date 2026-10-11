@@ -37,6 +37,15 @@ func AppliedMigrations(tb testing.TB, s *Store) int {
 	return n
 }
 
+// AddMember makes userID a member of vaultID with role, as sharing will.
+func AddMember(tb testing.TB, s *Store, vaultID, userID, role string) {
+	tb.Helper()
+	if _, err := s.db.ExecContext(context.Background(),
+		`INSERT INTO vault_members (vault_id, user_id, role) VALUES (?, ?, ?)`, vaultID, userID, role); err != nil {
+		tb.Fatalf("add member: %v", err)
+	}
+}
+
 // DriverName is the database/sql driver the store opens.
 const DriverName = driverName
 

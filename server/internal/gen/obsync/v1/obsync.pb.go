@@ -425,6 +425,123 @@ func (x *ListDevicesResponse) GetDevices() []*Device {
 	return nil
 }
 
+// GET /v1/account/usage. Sizes are stored (ciphertext) chunk bytes, the unit
+// the quota counts.
+type GetUsageResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Every vault the account owns, history and trash included: the number
+	// the quota is checked against. Shared vaults count against their owner.
+	UsedBytes  int64 `protobuf:"varint,1,opt,name=used_bytes,json=usedBytes,proto3" json:"used_bytes,omitempty"`
+	QuotaBytes int64 `protobuf:"varint,2,opt,name=quota_bytes,json=quotaBytes,proto3" json:"quota_bytes,omitempty"`
+	// One entry per vault the account owns; vaults shared with it are left out.
+	Vaults        []*VaultUsage `protobuf:"bytes,3,rep,name=vaults,proto3" json:"vaults,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetUsageResponse) Reset() {
+	*x = GetUsageResponse{}
+	mi := &file_obsync_v1_obsync_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetUsageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetUsageResponse) ProtoMessage() {}
+
+func (x *GetUsageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_obsync_v1_obsync_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetUsageResponse.ProtoReflect.Descriptor instead.
+func (*GetUsageResponse) Descriptor() ([]byte, []int) {
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *GetUsageResponse) GetUsedBytes() int64 {
+	if x != nil {
+		return x.UsedBytes
+	}
+	return 0
+}
+
+func (x *GetUsageResponse) GetQuotaBytes() int64 {
+	if x != nil {
+		return x.QuotaBytes
+	}
+	return 0
+}
+
+func (x *GetUsageResponse) GetVaults() []*VaultUsage {
+	if x != nil {
+		return x.Vaults
+	}
+	return nil
+}
+
+type VaultUsage struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	VaultId       string                 `protobuf:"bytes,1,opt,name=vault_id,json=vaultId,proto3" json:"vault_id,omitempty"`
+	UsedBytes     int64                  `protobuf:"varint,2,opt,name=used_bytes,json=usedBytes,proto3" json:"used_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VaultUsage) Reset() {
+	*x = VaultUsage{}
+	mi := &file_obsync_v1_obsync_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VaultUsage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VaultUsage) ProtoMessage() {}
+
+func (x *VaultUsage) ProtoReflect() protoreflect.Message {
+	mi := &file_obsync_v1_obsync_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VaultUsage.ProtoReflect.Descriptor instead.
+func (*VaultUsage) Descriptor() ([]byte, []int) {
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *VaultUsage) GetVaultId() string {
+	if x != nil {
+		return x.VaultId
+	}
+	return ""
+}
+
+func (x *VaultUsage) GetUsedBytes() int64 {
+	if x != nil {
+		return x.UsedBytes
+	}
+	return 0
+}
+
 type Argon2Params struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MemoryKib     uint32                 `protobuf:"varint,1,opt,name=memory_kib,json=memoryKib,proto3" json:"memory_kib,omitempty"`
@@ -436,7 +553,7 @@ type Argon2Params struct {
 
 func (x *Argon2Params) Reset() {
 	*x = Argon2Params{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[5]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -448,7 +565,7 @@ func (x *Argon2Params) String() string {
 func (*Argon2Params) ProtoMessage() {}
 
 func (x *Argon2Params) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[5]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -461,7 +578,7 @@ func (x *Argon2Params) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Argon2Params.ProtoReflect.Descriptor instead.
 func (*Argon2Params) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{5}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Argon2Params) GetMemoryKib() uint32 {
@@ -503,7 +620,7 @@ type KeyBundle struct {
 
 func (x *KeyBundle) Reset() {
 	*x = KeyBundle{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[6]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -515,7 +632,7 @@ func (x *KeyBundle) String() string {
 func (*KeyBundle) ProtoMessage() {}
 
 func (x *KeyBundle) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[6]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -528,7 +645,7 @@ func (x *KeyBundle) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyBundle.ProtoReflect.Descriptor instead.
 func (*KeyBundle) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{6}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *KeyBundle) GetPublicEncKey() []byte {
@@ -591,7 +708,7 @@ type VaultKey struct {
 
 func (x *VaultKey) Reset() {
 	*x = VaultKey{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[7]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -603,7 +720,7 @@ func (x *VaultKey) String() string {
 func (*VaultKey) ProtoMessage() {}
 
 func (x *VaultKey) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[7]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -616,7 +733,7 @@ func (x *VaultKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VaultKey.ProtoReflect.Descriptor instead.
 func (*VaultKey) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{7}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *VaultKey) GetEpoch() uint32 {
@@ -647,7 +764,7 @@ type Vault struct {
 
 func (x *Vault) Reset() {
 	*x = Vault{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[8]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -659,7 +776,7 @@ func (x *Vault) String() string {
 func (*Vault) ProtoMessage() {}
 
 func (x *Vault) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[8]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -672,7 +789,7 @@ func (x *Vault) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Vault.ProtoReflect.Descriptor instead.
 func (*Vault) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{8}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Vault) GetVaultId() string {
@@ -728,7 +845,7 @@ type CreateVaultRequest struct {
 
 func (x *CreateVaultRequest) Reset() {
 	*x = CreateVaultRequest{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[9]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -740,7 +857,7 @@ func (x *CreateVaultRequest) String() string {
 func (*CreateVaultRequest) ProtoMessage() {}
 
 func (x *CreateVaultRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[9]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -753,7 +870,7 @@ func (x *CreateVaultRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateVaultRequest.ProtoReflect.Descriptor instead.
 func (*CreateVaultRequest) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{9}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *CreateVaultRequest) GetVaultId() string {
@@ -786,7 +903,7 @@ type ListVaultsResponse struct {
 
 func (x *ListVaultsResponse) Reset() {
 	*x = ListVaultsResponse{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[10]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -798,7 +915,7 @@ func (x *ListVaultsResponse) String() string {
 func (*ListVaultsResponse) ProtoMessage() {}
 
 func (x *ListVaultsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[10]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -811,7 +928,7 @@ func (x *ListVaultsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListVaultsResponse.ProtoReflect.Descriptor instead.
 func (*ListVaultsResponse) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{10}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ListVaultsResponse) GetVaults() []*Vault {
@@ -830,7 +947,7 @@ type VaultKeysResponse struct {
 
 func (x *VaultKeysResponse) Reset() {
 	*x = VaultKeysResponse{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[11]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -842,7 +959,7 @@ func (x *VaultKeysResponse) String() string {
 func (*VaultKeysResponse) ProtoMessage() {}
 
 func (x *VaultKeysResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[11]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -855,7 +972,7 @@ func (x *VaultKeysResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VaultKeysResponse.ProtoReflect.Descriptor instead.
 func (*VaultKeysResponse) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{11}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *VaultKeysResponse) GetKeys() []*VaultKey {
@@ -881,7 +998,7 @@ type Commit struct {
 
 func (x *Commit) Reset() {
 	*x = Commit{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[12]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -893,7 +1010,7 @@ func (x *Commit) String() string {
 func (*Commit) ProtoMessage() {}
 
 func (x *Commit) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[12]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -906,7 +1023,7 @@ func (x *Commit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Commit.ProtoReflect.Descriptor instead.
 func (*Commit) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{12}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Commit) GetFileId() []byte {
@@ -974,7 +1091,7 @@ type CommitRequest struct {
 
 func (x *CommitRequest) Reset() {
 	*x = CommitRequest{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[13]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -986,7 +1103,7 @@ func (x *CommitRequest) String() string {
 func (*CommitRequest) ProtoMessage() {}
 
 func (x *CommitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[13]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -999,7 +1116,7 @@ func (x *CommitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitRequest.ProtoReflect.Descriptor instead.
 func (*CommitRequest) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{13}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *CommitRequest) GetCommits() []*Commit {
@@ -1022,7 +1139,7 @@ type CommitResult struct {
 
 func (x *CommitResult) Reset() {
 	*x = CommitResult{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[14]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1034,7 +1151,7 @@ func (x *CommitResult) String() string {
 func (*CommitResult) ProtoMessage() {}
 
 func (x *CommitResult) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[14]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1047,7 +1164,7 @@ func (x *CommitResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitResult.ProtoReflect.Descriptor instead.
 func (*CommitResult) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{14}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *CommitResult) GetFileId() []byte {
@@ -1095,7 +1212,7 @@ type CommitResponse struct {
 
 func (x *CommitResponse) Reset() {
 	*x = CommitResponse{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[15]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1107,7 +1224,7 @@ func (x *CommitResponse) String() string {
 func (*CommitResponse) ProtoMessage() {}
 
 func (x *CommitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[15]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1120,7 +1237,7 @@ func (x *CommitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitResponse.ProtoReflect.Descriptor instead.
 func (*CommitResponse) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{15}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *CommitResponse) GetResults() []*CommitResult {
@@ -1156,7 +1273,7 @@ type Version struct {
 
 func (x *Version) Reset() {
 	*x = Version{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[16]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1168,7 +1285,7 @@ func (x *Version) String() string {
 func (*Version) ProtoMessage() {}
 
 func (x *Version) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[16]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1181,7 +1298,7 @@ func (x *Version) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Version.ProtoReflect.Descriptor instead.
 func (*Version) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{16}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *Version) GetFileId() []byte {
@@ -1272,7 +1389,7 @@ type ChangesResponse struct {
 
 func (x *ChangesResponse) Reset() {
 	*x = ChangesResponse{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[17]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1284,7 +1401,7 @@ func (x *ChangesResponse) String() string {
 func (*ChangesResponse) ProtoMessage() {}
 
 func (x *ChangesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[17]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1297,7 +1414,7 @@ func (x *ChangesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChangesResponse.ProtoReflect.Descriptor instead.
 func (*ChangesResponse) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{17}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ChangesResponse) GetVersions() []*Version {
@@ -1333,7 +1450,7 @@ type Head struct {
 
 func (x *Head) Reset() {
 	*x = Head{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[18]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1345,7 +1462,7 @@ func (x *Head) String() string {
 func (*Head) ProtoMessage() {}
 
 func (x *Head) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[18]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1358,7 +1475,7 @@ func (x *Head) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Head.ProtoReflect.Descriptor instead.
 func (*Head) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{18}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *Head) GetFileId() []byte {
@@ -1399,7 +1516,7 @@ type HeadsResponse struct {
 
 func (x *HeadsResponse) Reset() {
 	*x = HeadsResponse{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[19]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1411,7 +1528,7 @@ func (x *HeadsResponse) String() string {
 func (*HeadsResponse) ProtoMessage() {}
 
 func (x *HeadsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[19]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1424,7 +1541,7 @@ func (x *HeadsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeadsResponse.ProtoReflect.Descriptor instead.
 func (*HeadsResponse) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{19}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *HeadsResponse) GetHeads() []*Head {
@@ -1451,7 +1568,7 @@ type VersionsResponse struct {
 
 func (x *VersionsResponse) Reset() {
 	*x = VersionsResponse{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[20]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1463,7 +1580,7 @@ func (x *VersionsResponse) String() string {
 func (*VersionsResponse) ProtoMessage() {}
 
 func (x *VersionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[20]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1476,7 +1593,7 @@ func (x *VersionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VersionsResponse.ProtoReflect.Descriptor instead.
 func (*VersionsResponse) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{20}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *VersionsResponse) GetVersions() []*Version {
@@ -1495,7 +1612,7 @@ type ChunkExistsRequest struct {
 
 func (x *ChunkExistsRequest) Reset() {
 	*x = ChunkExistsRequest{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[21]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1507,7 +1624,7 @@ func (x *ChunkExistsRequest) String() string {
 func (*ChunkExistsRequest) ProtoMessage() {}
 
 func (x *ChunkExistsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[21]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1520,7 +1637,7 @@ func (x *ChunkExistsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChunkExistsRequest.ProtoReflect.Descriptor instead.
 func (*ChunkExistsRequest) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{21}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ChunkExistsRequest) GetChunkIds() [][]byte {
@@ -1539,7 +1656,7 @@ type ChunkExistsResponse struct {
 
 func (x *ChunkExistsResponse) Reset() {
 	*x = ChunkExistsResponse{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[22]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1551,7 +1668,7 @@ func (x *ChunkExistsResponse) String() string {
 func (*ChunkExistsResponse) ProtoMessage() {}
 
 func (x *ChunkExistsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[22]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1564,7 +1681,7 @@ func (x *ChunkExistsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChunkExistsResponse.ProtoReflect.Descriptor instead.
 func (*ChunkExistsResponse) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{22}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ChunkExistsResponse) GetExists() []bool {
@@ -1583,7 +1700,7 @@ type Auth struct {
 
 func (x *Auth) Reset() {
 	*x = Auth{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[23]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1595,7 +1712,7 @@ func (x *Auth) String() string {
 func (*Auth) ProtoMessage() {}
 
 func (x *Auth) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[23]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1608,7 +1725,7 @@ func (x *Auth) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Auth.ProtoReflect.Descriptor instead.
 func (*Auth) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{23}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *Auth) GetToken() string {
@@ -1627,7 +1744,7 @@ type Subscribe struct {
 
 func (x *Subscribe) Reset() {
 	*x = Subscribe{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[24]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1639,7 +1756,7 @@ func (x *Subscribe) String() string {
 func (*Subscribe) ProtoMessage() {}
 
 func (x *Subscribe) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[24]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1652,7 +1769,7 @@ func (x *Subscribe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Subscribe.ProtoReflect.Descriptor instead.
 func (*Subscribe) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{24}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *Subscribe) GetVaultIds() []string {
@@ -1671,7 +1788,7 @@ type Ping struct {
 
 func (x *Ping) Reset() {
 	*x = Ping{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[25]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1683,7 +1800,7 @@ func (x *Ping) String() string {
 func (*Ping) ProtoMessage() {}
 
 func (x *Ping) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[25]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1696,7 +1813,7 @@ func (x *Ping) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ping.ProtoReflect.Descriptor instead.
 func (*Ping) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{25}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *Ping) GetNonce() uint64 {
@@ -1720,7 +1837,7 @@ type ClientFrame struct {
 
 func (x *ClientFrame) Reset() {
 	*x = ClientFrame{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[26]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1732,7 +1849,7 @@ func (x *ClientFrame) String() string {
 func (*ClientFrame) ProtoMessage() {}
 
 func (x *ClientFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[26]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1745,7 +1862,7 @@ func (x *ClientFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientFrame.ProtoReflect.Descriptor instead.
 func (*ClientFrame) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{26}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ClientFrame) GetFrame() isClientFrame_Frame {
@@ -1813,7 +1930,7 @@ type AuthOk struct {
 
 func (x *AuthOk) Reset() {
 	*x = AuthOk{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[27]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1825,7 +1942,7 @@ func (x *AuthOk) String() string {
 func (*AuthOk) ProtoMessage() {}
 
 func (x *AuthOk) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[27]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1838,7 +1955,7 @@ func (x *AuthOk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthOk.ProtoReflect.Descriptor instead.
 func (*AuthOk) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{27}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *AuthOk) GetDeviceId() string {
@@ -1858,7 +1975,7 @@ type Notify struct {
 
 func (x *Notify) Reset() {
 	*x = Notify{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[28]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1870,7 +1987,7 @@ func (x *Notify) String() string {
 func (*Notify) ProtoMessage() {}
 
 func (x *Notify) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[28]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1883,7 +2000,7 @@ func (x *Notify) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Notify.ProtoReflect.Descriptor instead.
 func (*Notify) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{28}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *Notify) GetVaultId() string {
@@ -1909,7 +2026,7 @@ type Pong struct {
 
 func (x *Pong) Reset() {
 	*x = Pong{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[29]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1921,7 +2038,7 @@ func (x *Pong) String() string {
 func (*Pong) ProtoMessage() {}
 
 func (x *Pong) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[29]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1934,7 +2051,7 @@ func (x *Pong) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Pong.ProtoReflect.Descriptor instead.
 func (*Pong) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{29}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *Pong) GetNonce() uint64 {
@@ -1959,7 +2076,7 @@ type ServerFrame struct {
 
 func (x *ServerFrame) Reset() {
 	*x = ServerFrame{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[30]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1971,7 +2088,7 @@ func (x *ServerFrame) String() string {
 func (*ServerFrame) ProtoMessage() {}
 
 func (x *ServerFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[30]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1984,7 +2101,7 @@ func (x *ServerFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerFrame.ProtoReflect.Descriptor instead.
 func (*ServerFrame) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{30}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ServerFrame) GetFrame() isServerFrame_Frame {
@@ -2073,7 +2190,7 @@ type FileMeta struct {
 
 func (x *FileMeta) Reset() {
 	*x = FileMeta{}
-	mi := &file_obsync_v1_obsync_proto_msgTypes[31]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2085,7 +2202,7 @@ func (x *FileMeta) String() string {
 func (*FileMeta) ProtoMessage() {}
 
 func (x *FileMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_obsync_v1_obsync_proto_msgTypes[31]
+	mi := &file_obsync_v1_obsync_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2098,7 +2215,7 @@ func (x *FileMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileMeta.ProtoReflect.Descriptor instead.
 func (*FileMeta) Descriptor() ([]byte, []int) {
-	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{31}
+	return file_obsync_v1_obsync_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *FileMeta) GetPath() string {
@@ -2170,7 +2287,18 @@ const file_obsync_v1_obsync_proto_rawDesc = "" +
 	"\acurrent\x18\x06 \x01(\bR\acurrent\x12\x18\n" +
 	"\arevoked\x18\a \x01(\bR\arevoked\"B\n" +
 	"\x13ListDevicesResponse\x12+\n" +
-	"\adevices\x18\x01 \x03(\v2\x11.obsync.v1.DeviceR\adevices\"o\n" +
+	"\adevices\x18\x01 \x03(\v2\x11.obsync.v1.DeviceR\adevices\"\x81\x01\n" +
+	"\x10GetUsageResponse\x12\x1d\n" +
+	"\n" +
+	"used_bytes\x18\x01 \x01(\x03R\tusedBytes\x12\x1f\n" +
+	"\vquota_bytes\x18\x02 \x01(\x03R\n" +
+	"quotaBytes\x12-\n" +
+	"\x06vaults\x18\x03 \x03(\v2\x15.obsync.v1.VaultUsageR\x06vaults\"F\n" +
+	"\n" +
+	"VaultUsage\x12\x19\n" +
+	"\bvault_id\x18\x01 \x01(\tR\avaultId\x12\x1d\n" +
+	"\n" +
+	"used_bytes\x18\x02 \x01(\x03R\tusedBytes\"o\n" +
 	"\fArgon2Params\x12\x1d\n" +
 	"\n" +
 	"memory_kib\x18\x01 \x01(\rR\tmemoryKib\x12\x1e\n" +
@@ -2322,7 +2450,7 @@ func file_obsync_v1_obsync_proto_rawDescGZIP() []byte {
 }
 
 var file_obsync_v1_obsync_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_obsync_v1_obsync_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_obsync_v1_obsync_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
 var file_obsync_v1_obsync_proto_goTypes = []any{
 	(ErrorCode)(0),              // 0: obsync.v1.ErrorCode
 	(*Error)(nil),               // 1: obsync.v1.Error
@@ -2330,59 +2458,62 @@ var file_obsync_v1_obsync_proto_goTypes = []any{
 	(*LoginResponse)(nil),       // 3: obsync.v1.LoginResponse
 	(*Device)(nil),              // 4: obsync.v1.Device
 	(*ListDevicesResponse)(nil), // 5: obsync.v1.ListDevicesResponse
-	(*Argon2Params)(nil),        // 6: obsync.v1.Argon2Params
-	(*KeyBundle)(nil),           // 7: obsync.v1.KeyBundle
-	(*VaultKey)(nil),            // 8: obsync.v1.VaultKey
-	(*Vault)(nil),               // 9: obsync.v1.Vault
-	(*CreateVaultRequest)(nil),  // 10: obsync.v1.CreateVaultRequest
-	(*ListVaultsResponse)(nil),  // 11: obsync.v1.ListVaultsResponse
-	(*VaultKeysResponse)(nil),   // 12: obsync.v1.VaultKeysResponse
-	(*Commit)(nil),              // 13: obsync.v1.Commit
-	(*CommitRequest)(nil),       // 14: obsync.v1.CommitRequest
-	(*CommitResult)(nil),        // 15: obsync.v1.CommitResult
-	(*CommitResponse)(nil),      // 16: obsync.v1.CommitResponse
-	(*Version)(nil),             // 17: obsync.v1.Version
-	(*ChangesResponse)(nil),     // 18: obsync.v1.ChangesResponse
-	(*Head)(nil),                // 19: obsync.v1.Head
-	(*HeadsResponse)(nil),       // 20: obsync.v1.HeadsResponse
-	(*VersionsResponse)(nil),    // 21: obsync.v1.VersionsResponse
-	(*ChunkExistsRequest)(nil),  // 22: obsync.v1.ChunkExistsRequest
-	(*ChunkExistsResponse)(nil), // 23: obsync.v1.ChunkExistsResponse
-	(*Auth)(nil),                // 24: obsync.v1.Auth
-	(*Subscribe)(nil),           // 25: obsync.v1.Subscribe
-	(*Ping)(nil),                // 26: obsync.v1.Ping
-	(*ClientFrame)(nil),         // 27: obsync.v1.ClientFrame
-	(*AuthOk)(nil),              // 28: obsync.v1.AuthOk
-	(*Notify)(nil),              // 29: obsync.v1.Notify
-	(*Pong)(nil),                // 30: obsync.v1.Pong
-	(*ServerFrame)(nil),         // 31: obsync.v1.ServerFrame
-	(*FileMeta)(nil),            // 32: obsync.v1.FileMeta
+	(*GetUsageResponse)(nil),    // 6: obsync.v1.GetUsageResponse
+	(*VaultUsage)(nil),          // 7: obsync.v1.VaultUsage
+	(*Argon2Params)(nil),        // 8: obsync.v1.Argon2Params
+	(*KeyBundle)(nil),           // 9: obsync.v1.KeyBundle
+	(*VaultKey)(nil),            // 10: obsync.v1.VaultKey
+	(*Vault)(nil),               // 11: obsync.v1.Vault
+	(*CreateVaultRequest)(nil),  // 12: obsync.v1.CreateVaultRequest
+	(*ListVaultsResponse)(nil),  // 13: obsync.v1.ListVaultsResponse
+	(*VaultKeysResponse)(nil),   // 14: obsync.v1.VaultKeysResponse
+	(*Commit)(nil),              // 15: obsync.v1.Commit
+	(*CommitRequest)(nil),       // 16: obsync.v1.CommitRequest
+	(*CommitResult)(nil),        // 17: obsync.v1.CommitResult
+	(*CommitResponse)(nil),      // 18: obsync.v1.CommitResponse
+	(*Version)(nil),             // 19: obsync.v1.Version
+	(*ChangesResponse)(nil),     // 20: obsync.v1.ChangesResponse
+	(*Head)(nil),                // 21: obsync.v1.Head
+	(*HeadsResponse)(nil),       // 22: obsync.v1.HeadsResponse
+	(*VersionsResponse)(nil),    // 23: obsync.v1.VersionsResponse
+	(*ChunkExistsRequest)(nil),  // 24: obsync.v1.ChunkExistsRequest
+	(*ChunkExistsResponse)(nil), // 25: obsync.v1.ChunkExistsResponse
+	(*Auth)(nil),                // 26: obsync.v1.Auth
+	(*Subscribe)(nil),           // 27: obsync.v1.Subscribe
+	(*Ping)(nil),                // 28: obsync.v1.Ping
+	(*ClientFrame)(nil),         // 29: obsync.v1.ClientFrame
+	(*AuthOk)(nil),              // 30: obsync.v1.AuthOk
+	(*Notify)(nil),              // 31: obsync.v1.Notify
+	(*Pong)(nil),                // 32: obsync.v1.Pong
+	(*ServerFrame)(nil),         // 33: obsync.v1.ServerFrame
+	(*FileMeta)(nil),            // 34: obsync.v1.FileMeta
 }
 var file_obsync_v1_obsync_proto_depIdxs = []int32{
 	0,  // 0: obsync.v1.Error.code:type_name -> obsync.v1.ErrorCode
 	4,  // 1: obsync.v1.ListDevicesResponse.devices:type_name -> obsync.v1.Device
-	6,  // 2: obsync.v1.KeyBundle.pass_params:type_name -> obsync.v1.Argon2Params
-	8,  // 3: obsync.v1.CreateVaultRequest.keys:type_name -> obsync.v1.VaultKey
-	9,  // 4: obsync.v1.ListVaultsResponse.vaults:type_name -> obsync.v1.Vault
-	8,  // 5: obsync.v1.VaultKeysResponse.keys:type_name -> obsync.v1.VaultKey
-	13, // 6: obsync.v1.CommitRequest.commits:type_name -> obsync.v1.Commit
-	1,  // 7: obsync.v1.CommitResult.error:type_name -> obsync.v1.Error
-	15, // 8: obsync.v1.CommitResponse.results:type_name -> obsync.v1.CommitResult
-	17, // 9: obsync.v1.ChangesResponse.versions:type_name -> obsync.v1.Version
-	19, // 10: obsync.v1.HeadsResponse.heads:type_name -> obsync.v1.Head
-	17, // 11: obsync.v1.VersionsResponse.versions:type_name -> obsync.v1.Version
-	24, // 12: obsync.v1.ClientFrame.auth:type_name -> obsync.v1.Auth
-	25, // 13: obsync.v1.ClientFrame.subscribe:type_name -> obsync.v1.Subscribe
-	26, // 14: obsync.v1.ClientFrame.ping:type_name -> obsync.v1.Ping
-	28, // 15: obsync.v1.ServerFrame.auth_ok:type_name -> obsync.v1.AuthOk
-	29, // 16: obsync.v1.ServerFrame.notify:type_name -> obsync.v1.Notify
-	30, // 17: obsync.v1.ServerFrame.pong:type_name -> obsync.v1.Pong
-	1,  // 18: obsync.v1.ServerFrame.error:type_name -> obsync.v1.Error
-	19, // [19:19] is the sub-list for method output_type
-	19, // [19:19] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	7,  // 2: obsync.v1.GetUsageResponse.vaults:type_name -> obsync.v1.VaultUsage
+	8,  // 3: obsync.v1.KeyBundle.pass_params:type_name -> obsync.v1.Argon2Params
+	10, // 4: obsync.v1.CreateVaultRequest.keys:type_name -> obsync.v1.VaultKey
+	11, // 5: obsync.v1.ListVaultsResponse.vaults:type_name -> obsync.v1.Vault
+	10, // 6: obsync.v1.VaultKeysResponse.keys:type_name -> obsync.v1.VaultKey
+	15, // 7: obsync.v1.CommitRequest.commits:type_name -> obsync.v1.Commit
+	1,  // 8: obsync.v1.CommitResult.error:type_name -> obsync.v1.Error
+	17, // 9: obsync.v1.CommitResponse.results:type_name -> obsync.v1.CommitResult
+	19, // 10: obsync.v1.ChangesResponse.versions:type_name -> obsync.v1.Version
+	21, // 11: obsync.v1.HeadsResponse.heads:type_name -> obsync.v1.Head
+	19, // 12: obsync.v1.VersionsResponse.versions:type_name -> obsync.v1.Version
+	26, // 13: obsync.v1.ClientFrame.auth:type_name -> obsync.v1.Auth
+	27, // 14: obsync.v1.ClientFrame.subscribe:type_name -> obsync.v1.Subscribe
+	28, // 15: obsync.v1.ClientFrame.ping:type_name -> obsync.v1.Ping
+	30, // 16: obsync.v1.ServerFrame.auth_ok:type_name -> obsync.v1.AuthOk
+	31, // 17: obsync.v1.ServerFrame.notify:type_name -> obsync.v1.Notify
+	32, // 18: obsync.v1.ServerFrame.pong:type_name -> obsync.v1.Pong
+	1,  // 19: obsync.v1.ServerFrame.error:type_name -> obsync.v1.Error
+	20, // [20:20] is the sub-list for method output_type
+	20, // [20:20] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_obsync_v1_obsync_proto_init() }
@@ -2390,12 +2521,12 @@ func file_obsync_v1_obsync_proto_init() {
 	if File_obsync_v1_obsync_proto != nil {
 		return
 	}
-	file_obsync_v1_obsync_proto_msgTypes[26].OneofWrappers = []any{
+	file_obsync_v1_obsync_proto_msgTypes[28].OneofWrappers = []any{
 		(*ClientFrame_Auth)(nil),
 		(*ClientFrame_Subscribe)(nil),
 		(*ClientFrame_Ping)(nil),
 	}
-	file_obsync_v1_obsync_proto_msgTypes[30].OneofWrappers = []any{
+	file_obsync_v1_obsync_proto_msgTypes[32].OneofWrappers = []any{
 		(*ServerFrame_AuthOk)(nil),
 		(*ServerFrame_Notify)(nil),
 		(*ServerFrame_Pong)(nil),
@@ -2407,7 +2538,7 @@ func file_obsync_v1_obsync_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_obsync_v1_obsync_proto_rawDesc), len(file_obsync_v1_obsync_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   32,
+			NumMessages:   34,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
