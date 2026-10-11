@@ -369,3 +369,41 @@ func TestRunOnceSweepsTempFilesAtMostDaily(t *testing.T) {
 		}
 	}
 }
+
+// RunPass is one pass on demand (obsync admin maintenance run): it reports
+// what it did, gives the lease back, and refuses while another process holds
+// the lease.
+func TestRunPassReportsAndReleasesTheLease(t *testing.T) {
+	ctx := context.Background()
+	st, clk := storetest.New(t)
+	blobs, _ := blob.NewFS(t.TempDir())
+	user := storetest.SeedUser(t, st, "alice")
+	vault := storetest.SeedVault(t, st, user.ID)
+	key := "test/" + hex.EncodeToString(storetest.ChunkID(1))
+	if err := blobs.Put(ctx, key, bytes.NewReader([]byte("cipher"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.InsertChunk(ctx, store.Chunk{VaultID: vault.ID, ChunkID: storetest.ChunkID(1), BlobKey: key, Size: 6}); err != nil {
+		t.Fatal(err)
+	}
+	v1 := storetest.MustCommit(t, st, storetest.NewVersion(vault.ID, storetest.FileID(1), nil))
+	storetest.MustCommit(t, st, storetest.NewVersion(vault.ID, storetest.FileID(1), v1.VersionID))
+
+	// The store's clock stays put: only the pass's "now" moves, as with --as-of.
+	asOf := clk.Now().Add(40 * 24 * time.Hour)
+	r := jobs.New(st, blobs, jobs.Config{Retention: config.Retention{HistoryDays: 30, TrashDays: 30}, GCGrace: 24 * time.Hour},
+		func() time.Time { return asOf }, discard())
+	rep, err := r.RunPass(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.VersionsPruned != 1 || rep.ChunksDeleted != 1 {
+		t.Fatalf("report = %+v, want 1 version pruned and 1 chunk deleted", rep)
+	}
+	if ok, _ := st.AcquireLease(ctx, "maintenance", "someone-else", time.Hour); !ok {
+		t.Fatal("RunPass kept the lease")
+	}
+	if _, err := r.RunPass(ctx); !errors.Is(err, jobs.ErrLeaseHeld) {
+		t.Fatalf("err = %v, want ErrLeaseHeld while another process holds the lease", err)
+	}
+}

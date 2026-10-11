@@ -123,3 +123,16 @@ func TestConfigFlagBeforeOrAfterCommand(t *testing.T) {
 		t.Fatal("missing config file not reported")
 	}
 }
+
+func TestAdminMaintenanceRun(t *testing.T) {
+	t.Setenv("OBSYNC_DATA_DIR", t.TempDir())
+	var out bytes.Buffer
+	stdout = &out
+	t.Cleanup(func() { stdout = os.Stdout })
+	if err := run(context.Background(), []string{"admin", "maintenance", "run", "--as-of", "2030-01-01T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "maintenance as of 2030-01-01T00:00:00Z") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
