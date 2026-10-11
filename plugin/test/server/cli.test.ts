@@ -34,7 +34,8 @@ interface Result {
 
 /** Starts the CLI; secret (if given) is written to its file descriptor 3. */
 function start(args: string[], secret?: string): { child: ChildProcess; done: Promise<Result> } {
-  const child = spawn(process.execPath, [bundle, ...args], { stdio: ['ignore', 'pipe', 'pipe', 'pipe'], env: { ...process.env, XDG_STATE_HOME: join(work, 'xdg') } });
+  const env = { ...process.env, XDG_STATE_HOME: join(work, 'xdg'), OBSYNC_CLI_HEARTBEAT_CHECK_MS: '200' };
+  const child = spawn(process.execPath, [bundle, ...args], { stdio: ['ignore', 'pipe', 'pipe', 'pipe'], env });
   let out = '';
   let err = '';
   child.stdout!.on('data', (d: Buffer) => (out += d.toString()));
@@ -163,6 +164,72 @@ describe('obsync-cli against the real server', () => {
     const refused = await cli(['sync', '--vault-dir', other, '--once', '--init', ...S()]);
     expect(refused.code).toBe(2);
     expect(refused.err).toMatch(/this state syncs/);
+  });
+
+  it('holds off while Obsidian\'s plugin syncs the folder (fresh heartbeat), and resumes with a full check once it stops', async () => {
+    // The plugin installed under another folder name (a dev copy): its heartbeat counts all the same.
+    const beat = join(vaultDir, '.obsidian', 'plugins', 'obsync-dev', 'active');
+    await mkdir(join(vaultDir, '.obsidian', 'plugins', 'obsync-dev'), { recursive: true });
+    await mkdir(join(vaultDir, '.obsidian', 'plugins', 'other-plugin'), { recursive: true });
+    await writeFile(join(vaultDir, '.obsidian', 'plugins', 'other-plugin', 'active'), 'not a heartbeat');
+    const fresh = () => writeFile(beat, JSON.stringify({ obsync: 1, at: Date.now(), device: 'Laptop' }));
+    await fresh();
+    await writeFile(join(vaultDir, 'while-obsidian-runs.md'), 'Obsidian would sync this one\n');
+    const once = await cli(['sync', '--vault-dir', vaultDir, '--once', ...S()]);
+    expect(once.code, once.err).toBe(0);
+    expect(once.err).toMatch(/Obsidian is syncing this folder \(device "Laptop"\): nothing to do/);
+
+    const daemon = start(['sync', '--vault-dir', vaultDir, ...S()]);
+    try {
+      await until('the daemon to start paused', async () => (await cli(['status', ...S()])).out.includes('paused since'));
+      await new Promise((r) => setTimeout(r, 1000));
+      await phone.engine.runCycle();
+      expect(files(phone.adapter)['while-obsidian-runs.md']).toBeUndefined(); // nothing was uploaded
+      await rm(beat); // Obsidian closed: the plugin removed its heartbeat
+      await until('the file to be uploaded after the resume', async () => {
+        await phone.engine.runCycle();
+        return files(phone.adapter)['while-obsidian-runs.md'] === 'Obsidian would sync this one\n';
+      });
+      // Obsidian opens again: the daemon pauses after its cycle.
+      await fresh();
+      await until('the daemon to pause again', async () => (await cli(['status', ...S()])).out.includes('paused since'));
+      await writeFile(join(vaultDir, 'second.md'), 'not now\n');
+      await new Promise((r) => setTimeout(r, 1000));
+      await phone.engine.runCycle();
+      expect(files(phone.adapter)['second.md']).toBeUndefined();
+      // A heartbeat that stopped (Obsidian killed) is stale after 90 s: one from 2 minutes ago resumes at once.
+      await writeFile(beat, JSON.stringify({ obsync: 1, at: Date.now() - 120_000, device: 'Laptop' }));
+      await until('the resume after a stale heartbeat', async () => {
+        await phone.engine.runCycle();
+        return files(phone.adapter)['second.md'] === 'not now\n';
+      });
+    } finally {
+      daemon.child.kill('SIGTERM');
+    }
+    const r = await daemon.done;
+    expect(r.code, r.err).toBe(0);
+    expect(r.err).toMatch(/pausing/);
+    expect(r.err).toMatch(/resuming with a full check/);
+  });
+
+  it('ends with an error, for the service manager to restart it, when it cannot resume (the folder is gone)', async () => {
+    const plugin = join(vaultDir, '.obsidian', 'plugins', 'obsync');
+    await mkdir(plugin, { recursive: true });
+    await writeFile(join(plugin, 'active'), JSON.stringify({ obsync: 1, at: Date.now(), device: 'Laptop' }));
+    const daemon = start(['sync', '--vault-dir', vaultDir, ...S()]);
+    const away = `${vaultDir}-gone`;
+    try {
+      await until('the daemon to start paused', async () => (await cli(['status', ...S()])).out.includes('paused since'));
+      await rename(vaultDir, away); // the heartbeat goes with it: the daemon tries to resume
+      const r = await daemon.done;
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/cannot resume/);
+    } finally {
+      daemon.child.kill('SIGTERM');
+      await daemon.done;
+      await rename(away, vaultDir).catch(() => undefined);
+      await rm(join(plugin, 'active'), { force: true });
+    }
   });
 
   it('refuses a vault folder that is empty when files were synced from it (a disk not mounted)', async () => {

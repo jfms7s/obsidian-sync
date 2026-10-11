@@ -12,13 +12,14 @@ import { heldDeletions, releaseHeldDeletions, restoreHeldDeletions } from '../sy
 import { composeIgnoreRules, type SyncEngine } from '../sync/engine';
 import type { EngineEvent, SyncStatus } from '../sync/events';
 import type { RestartBase } from '../sync/settings-files';
-import type { Clock } from '../util/clock';
+import { systemClock, type Clock } from '../util/clock';
 import type { Random } from '../util/random';
 import type { VaultAdapter } from '../vault/adapter';
 import { OBSYNC_PLUGIN_ID, type SettingsSyncPolicy } from '../vault/config-policy';
 import { approveServerRemoval, newlyIgnored, type NewlyIgnored } from '../sync/server-removal';
 import { assertValidIgnorePatterns, parseIgnoreFile, VAULT_IGNORE_FILE, type IgnoreRules, type ParsedIgnoreFile } from '../vault/ignore';
 import type { EngineLock } from './engine-lock';
+import { startHeartbeat, type HeartbeatSink } from './heartbeat';
 import { HistoryController } from './history-controller';
 
 export interface ShellOptions {
@@ -37,6 +38,8 @@ export interface ShellOptions {
   maxBytesPerRound?: number;
   /** This plugin's folder name under plugins/ (manifest.dir): its files never sync, whatever the settings sync policy says. */
   ownPluginFolders?: readonly string[];
+  /** Where to keep the heartbeat that tells obsync-cli on this folder to hold off while the engine runs (none: no heartbeat). */
+  heartbeat?: HeartbeatSink;
 }
 
 export type StartResult = { ok: true } | { ok: false; reason: Extract<SyncSessionResult, { ok: false }>['reason'] | 'stopped' };
@@ -55,6 +58,8 @@ interface Running {
   history: HistoryController;
   release: () => void;
   off: () => void;
+  /** Stops the heartbeat and removes its file. */
+  stopHeartbeat: () => Promise<void>;
 }
 
 /**
@@ -157,6 +162,8 @@ export class ShellController {
         release();
         return r;
       }
+      // Read before the engine starts: a failure after it would leave an engine no stop() reaches.
+      const device = (await o.state.getSession())?.deviceName ?? '';
       const off = r.engine.on((e) => {
         for (const l of [...this.listeners]) l(e);
       });
@@ -167,7 +174,8 @@ export class ShellController {
         await r.engine.stop().catch(() => undefined);
         throw err;
       }
-      this.running = { engine: r.engine, history: new HistoryController({ api: r.api, ring: r.ring, adapter: o.adapter, state: o.state }), release, off };
+      const stopHeartbeat = o.heartbeat ? startHeartbeat(o.heartbeat, o.clock ?? systemClock, device) : async () => undefined;
+      this.running = { engine: r.engine, history: new HistoryController({ api: r.api, ring: r.ring, adapter: o.adapter, state: o.state }), release, off, stopHeartbeat };
       this.phase = 'running';
       return { ok: true };
     } catch (err) {
@@ -227,6 +235,7 @@ export class ShellController {
         r.off();
         await r.engine.stop();
       } finally {
+        await r.stopHeartbeat();
         r.release();
         this.stopping = null;
         this.phase = 'idle';

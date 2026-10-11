@@ -434,3 +434,26 @@ describe('HistoryController', () => {
     await c.stop();
   });
 });
+
+describe('the heartbeat for obsync-cli', () => {
+  it('is kept while the engine runs and removed when it stops', async () => {
+    const user = await newUser(srv);
+    const dev = await newDevice(srv, user, { name: 'Laptop', vault: 'create' });
+    let text: string | null = null;
+    const shell = controllerFor(dev, {
+      heartbeat: {
+        write: async (t) => {
+          text = t;
+        },
+        remove: async () => {
+          text = null;
+        },
+      },
+    });
+    expect((await shell.start()).ok).toBe(true);
+    await flush();
+    expect(JSON.parse(text!)).toMatchObject({ obsync: 1, device: 'Laptop', at: dev.clock.now() });
+    await shell.stop();
+    expect(text).toBeNull();
+  });
+});
