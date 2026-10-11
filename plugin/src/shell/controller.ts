@@ -11,6 +11,7 @@ import type { LocalState } from '../state/store';
 import { heldDeletions, releaseHeldDeletions, restoreHeldDeletions } from '../sync/deletion-hold';
 import { composeIgnoreRules, type SyncEngine } from '../sync/engine';
 import type { EngineEvent, SyncStatus } from '../sync/events';
+import type { RestartBase } from '../sync/settings-files';
 import { systemClock, type Clock } from '../util/clock';
 import type { Random } from '../util/random';
 import type { VaultAdapter } from '../vault/adapter';
@@ -34,6 +35,8 @@ export interface ShellOptions {
   random?: Random;
   /** SyncEngine's maxBytesPerRound (main.ts sets less on a phone). */
   maxBytesPerRound?: number;
+  /** This plugin's folder name under plugins/ (manifest.dir): its files never sync, whatever the settings sync policy says. */
+  ownPluginFolders?: readonly string[];
   /** Where to keep the heartbeat that tells obsync-cli on this folder to hold off while the engine runs (none: no heartbeat). */
   heartbeat?: HeartbeatSink;
 }
@@ -84,6 +87,8 @@ export class ShellController {
   /** The last start that got as far as opening the session found this device not set up. */
   private lastStartNeedsSetup = false;
   private readonly listeners = new Set<(e: EngineEvent) => void>();
+  /** Settings files written from other devices since the plugin loaded (SyncContext.restartBases): kept across engine restarts. */
+  private readonly restartBases = new Map<string, RestartBase>();
 
   constructor(private readonly o: ShellOptions) {}
 
@@ -147,6 +152,8 @@ export class ShellController {
         state: o.state, adapter: o.adapter, webSocket: o.webSocket, fetch: o.fetch, configDir: o.configDir,
         ...(o.clock ? { clock: o.clock } : {}), ...(o.random ? { random: o.random } : {}), ...(o.autoRun !== undefined ? { autoRun: o.autoRun } : {}),
         ...(o.maxBytesPerRound !== undefined ? { maxBytesPerRound: o.maxBytesPerRound } : {}),
+        ...(o.ownPluginFolders ? { ownPluginFolders: o.ownPluginFolders } : {}),
+        restartBases: this.restartBases,
       });
       this.lastStartNeedsSetup = !r.ok;
       if (!r.ok) {
@@ -280,17 +287,20 @@ export class ShellController {
   async setIgnoreGlobs(globs: string[]): Promise<NewlyIgnored> {
     assertValidIgnorePatterns(globs);
     const vaultText = await this.vaultIgnoreText();
-    const before = this.rules(await this.o.state.getIgnoreGlobs(), vaultText);
+    const before = await this.rules(await this.o.state.getIgnoreGlobs(), vaultText);
     await this.o.state.setIgnoreGlobs(globs);
     if (this.wanted && (this.phase === 'starting' || this.phase === 'running')) await this.restart();
-    return newlyIgnored(this.o.state, before, this.rules(globs, vaultText));
+    return newlyIgnored(this.o.state, before, await this.rules(globs, vaultText));
   }
 
   /** This device's ignore rules with these device globs and this .obsyncignore text. */
-  private rules(deviceGlobs: readonly string[], vaultText: string): IgnoreRules {
+  private async rules(deviceGlobs: readonly string[], vaultText: string): Promise<IgnoreRules> {
     // Globs saved before validation existed could be unsupported: skip them here as the vault file does.
     const device = parseIgnoreFile(deviceGlobs.join('\n')).globs;
-    return composeIgnoreRules({ configDir: this.o.configDir, caseInsensitive: this.o.adapter.caseInsensitive, ignoreGlobs: device, vaultGlobs: parseIgnoreFile(vaultText).globs });
+    return composeIgnoreRules({
+      configDir: this.o.configDir, caseInsensitive: this.o.adapter.caseInsensitive, ignoreGlobs: device, vaultGlobs: parseIgnoreFile(vaultText).globs,
+      settingsSync: await this.o.state.getSettingsSync(), ownPluginFolders: this.o.ownPluginFolders,
+    });
   }
 
   /**
@@ -320,11 +330,11 @@ export class ShellController {
    */
   async setVaultIgnoreText(text: string): Promise<ParsedIgnoreFile & { newlyIgnored: NewlyIgnored }> {
     const deviceGlobs = await this.o.state.getIgnoreGlobs();
-    const before = this.rules(deviceGlobs, await this.vaultIgnoreText());
+    const before = await this.rules(deviceGlobs, await this.vaultIgnoreText());
     const exists = (await this.o.adapter.stat(VAULT_IGNORE_FILE)) !== null;
     if (exists || text.trim() !== '') await this.o.adapter.write(VAULT_IGNORE_FILE, new TextEncoder().encode(text));
     this.running?.engine.requestReconcile();
-    return { ...parseIgnoreFile(text), newlyIgnored: await newlyIgnored(this.o.state, before, this.rules(deviceGlobs, text)) };
+    return { ...parseIgnoreFile(text), newlyIgnored: await newlyIgnored(this.o.state, before, await this.rules(deviceGlobs, text)) };
   }
 
   /** Stops syncing for good (until the user starts again) and forgets the account, its keys and the sync state on this device. */

@@ -17,6 +17,8 @@ export type NoticeCode =
   | 'CONTENT_MISSING' // the server lost a chunk of a version; it is skipped
   | 'DELETIONS_HELD' // persistent: a large local deletion waits for the user's answer before it reaches other devices
   | 'IGNORE_LINES_SKIPPED' // some lines of the vault's .obsyncignore use unsupported syntax; the rest applies
+  | 'SETTINGS_APPLIED' // Obsidian settings files from other devices were written here; Obsidian uses them after a restart
+  | 'SETTINGS_REPLACED' // a settings file could not be merged (not a JSON object); the remote version replaced it
   | 'FILE_FAILED'; // one file failed (for example a local I/O error); retried later, the rest keeps syncing
 
 export type EngineEvent =
@@ -35,10 +37,12 @@ export type EngineEvent =
      * why the name is refused; for COMMIT_REJECTED the server's explanation; for a per-file failure the error's class.
      */
     reason?: string;
+    /** For SETTINGS_APPLIED: the devices the settings came from. */
+    devices?: string[];
     /** For TOO_LARGE: the file's size and this device's limit, in bytes. */
     size?: number;
     limit?: number;
-    /** For DELETIONS_HELD: how many deleted files are on hold; for IGNORE_LINES_SKIPPED, how many lines were skipped. */
+    /** For DELETIONS_HELD: how many deleted files are on hold; for IGNORE_LINES_SKIPPED, how many lines were skipped; for SETTINGS_APPLIED, how many files were written. */
     count?: number;
   }
   | { type: 'conflict'; path: string; conflictPath: string }
