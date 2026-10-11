@@ -200,8 +200,10 @@ describe('LocalState', () => {
     await st.putFile(rec({ fileId: 'a2', path: 'b.md', seq: 12 }));
     await st.putFile(rec({ fileId: 'a3', path: 'c.md', seq: 3 }));
     expect(await st.maxFileSeq()).toBe(12);
-    expect((await st.filesAtSeq(7)).map((r) => r.fileId)).toEqual(['a1']);
-    expect(await st.filesAtSeq(8)).toEqual([]);
+    expect((await st.filesAtSeqs([3, 12, 7, 7])).map((r) => r.fileId).sort()).toEqual(['a1', 'a2', 'a3']);
+    expect((await st.filesAtSeqs([4, 7, 11])).map((r) => r.fileId)).toEqual(['a1']);
+    expect(await st.filesAtSeqs([8, 11])).toEqual([]);
+    expect(await st.filesAtSeqs([])).toEqual([]);
     st.close();
   });
 });

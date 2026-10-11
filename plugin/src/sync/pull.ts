@@ -55,6 +55,13 @@ export async function serverLostHistory(ctx: SyncContext, heads?: RemoteHead[], 
   return false;
 }
 
+/** Whether a synced record sits at the seq of one of versions with another version id (one read for the page). */
+async function seqReused(ctx: SyncContext, versions: readonly RemoteVersion[]): Promise<boolean> {
+  if (versions.length === 0) return false;
+  const atSeq = new Map<number, string>(versions.map((v) => [v.seq, toHex(v.versionId)]));
+  return (await ctx.state.filesAtSeqs([...atSeq.keys()])).some((r) => r.versionId !== atSeq.get(r.seq));
+}
+
 /**
  * Pulls from the cursor. The version at the cursor (the "anchor") is asked
  * for again (since = cursor − 1): if the server now has a different version
@@ -91,9 +98,7 @@ export async function pull(ctx: SyncContext, pageSize = CHANGES_PAGE_SIZE): Prom
     // A seq names one version. A different synced version at the same seq
     // (this device's own commit, say, that it has not pulled yet) means the
     // server was restored from a backup and its new commits reused the seq.
-    for (const v of versions) {
-      if ((await state.filesAtSeq(v.seq)).some((r) => r.versionId !== toHex(v.versionId))) throw new ServerRollbackError(cursor, page.vaultSeq);
-    }
+    if (await seqReused(ctx, versions)) throw new ServerRollbackError(cursor, page.vaultSeq);
     for (const v of newestPerFile(versions)) {
       await applyHead(ctx, v, versions);
       applied++;
