@@ -3,6 +3,7 @@
 import { IDBFactory } from 'fake-indexeddb';
 import type { ApiClient } from '../../src/api/client';
 import { encryptChunk, encryptMeta, fileIdFor, type FileMeta } from '../../src/crypto/objects';
+import { hmacSha256 } from '../../src/crypto/primitives';
 import { epochKeys, type VaultKeyring } from '../../src/crypto/vaultkeys';
 import { apiFor, login, setupKeys, unlockWithPassphraseService } from '../../src/services/account';
 import { chooseVault, createVault, keyringFromStored } from '../../src/services/vaults';
@@ -110,14 +111,16 @@ export function trackChanges(dev: Device): () => Promise<void> {
  * Commits content (null = delete) for path straight to the server on top of
  * its current head, as some other device would. metaOverride replaces
  * FileMeta fields (to send renamed_from, or to forge an inconsistent one).
- * Returns the new version id.
+ * With o.anyPath the path is used as given, even one this client's rules
+ * refuse (a device with other rules, or a malicious one). Returns the new
+ * version id.
  */
 export async function remoteCommit(
-  dev: Device, path: string, content: Uint8Array | null, deviceName = 'Remote', metaOverride: Partial<FileMeta> = {},
+  dev: Device, path: string, content: Uint8Array | null, deviceName = 'Remote', metaOverride: Partial<FileMeta> = {}, o: { anyPath?: boolean } = {},
 ): Promise<Uint8Array> {
   const { api, ring, random } = dev;
   const keys = epochKeys(ring, ring.currentEpoch);
-  const fileId = await fileIdFor(ring.namingKey, path);
+  const fileId = o.anyPath ? await hmacSha256(ring.namingKey, new TextEncoder().encode(path)) : await fileIdFor(ring.namingKey, path);
   const heads = (await api.heads(ring.vaultId, null)).heads;
   const base = heads.find((h) => equalBytes(h.fileId, fileId))?.versionId ?? new Uint8Array(0);
   const versionId = random.bytes(16);

@@ -174,6 +174,17 @@ describe('pull', () => {
     expect(d.events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'FILE_FAILED', path: 'stuck.md' }));
   });
 
+  it('never writes a version whose path Windows could resolve to the config folder', async () => {
+    const d = await device();
+    await d.adapter.write('.obsidian/community-plugins.json', text('[]'));
+    await remoteCommit(d, 'OBSIDI~1/plugins/x/main.js', text('evil()\n'), 'Remote', {}, { anyPath: true });
+    await remoteCommit(d, 'ok.md', text('fine\n'));
+    await pull(d.ctx);
+    expect(files(d.adapter)).toEqual({ '.obsidian/community-plugins.json': '[]', 'ok.md': 'fine\n' });
+    expect(await d.state.getCursor()).toBe(2);
+    expect(await d.state.allFailures()).toHaveLength(1); // a per-file failure, not a stuck vault
+  });
+
   it('does not download versions over the device size limit', async () => {
     const d = await device({ maxFileBytes: 10 });
     await remoteCommit(d, 'big.bin', new Uint8Array(11));

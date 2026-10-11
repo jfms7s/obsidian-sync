@@ -30,6 +30,16 @@ async function serverMeta(d: Device) {
 }
 
 describe('push', () => {
+  it('refuses a local name Windows could resolve to another, with an INVALID_PATH notice', async () => {
+    const [a, , fa] = await pair();
+    await a.adapter.write('GIT~1/hooks/pre-commit', text('#!/bin/sh\n'));
+    await a.adapter.write('ok.md', text('fine\n'));
+    expect(await push(a, fa)).toMatchObject({ committed: 1 });
+    expect(a.events).toContainEqual(expect.objectContaining({ type: 'notice', code: 'INVALID_PATH', path: 'GIT~1/hooks/pre-commit' }));
+    expect((await serverMeta(a)).map((m) => m.meta.path)).toEqual(['ok.md']);
+    expect((await a.state.dirtyEntries()).map((e) => e.path)).toEqual([]);
+  });
+
   it('commits creates, edits and deletes with the right bases', async () => {
     const [a, b, fa] = await pair();
     await a.adapter.write('n.md', text('one\n'));
