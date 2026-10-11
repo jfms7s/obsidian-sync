@@ -181,6 +181,11 @@ func TestDeviceListAndRevoke(t *testing.T) {
 	svc, tokens := seedDevices(t, st)
 	u, _ := st.UserByUsername(ctx, "alice")
 	devices, _ := st.ListDevices(ctx, u.ID)
+	// Both devices were created in the same millisecond, so list order is by
+	// random id: put the laptop (tokens[0]) first.
+	if devices[0].Name != "laptop" {
+		devices[0], devices[1] = devices[1], devices[0]
+	}
 
 	d, out := deps(t, st, blobs, "")
 	if err := admin.Run(ctx, []string{"device", "list", "--username", "alice"}, d); err != nil {
