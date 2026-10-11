@@ -1,8 +1,8 @@
 name: Release
 
 # A tag X.Y.Z (no "v") that matches manifest.json publishes, all together: the
-# plugin files Obsidian installs from, the Linux server binaries, and the container
-# image. Nothing is published until every CI check (checks.yml) and the
+# plugin files Obsidian installs from, the server binaries (Linux, macOS and
+# Windows), and the container image. Nothing is published until every CI check (checks.yml) and the
 # 1,000-seed convergence suite have passed.
 on:
   push:
@@ -77,6 +77,16 @@ jobs:
           path: obsync_*.tar.gz
           if-no-files-found: error
 
+  # macOS (amd64, arm64) and Windows (amd64), each built and smoke-run on a
+  # runner of its own system.
+  binaries:
+    name: macOS and Windows binaries
+    needs: verify
+    uses: ./.github/workflows/binaries.yml
+    with:
+      version: ${{ github.ref_name }}
+      upload: true
+
   plugin:
     name: Plugin files
     needs: verify
@@ -104,7 +114,7 @@ jobs:
     name: Container image
     # Pushing the image is publishing: not before the tests, the convergence suite
     # and the other release files have all passed, so a failure leaves nothing half published.
-    needs: [verify, checks, convergence, binary-linux, plugin]
+    needs: [verify, checks, convergence, binary-linux, binaries, plugin]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -152,7 +162,7 @@ jobs:
 
   publish:
     name: Publish the release
-    needs: [checks, convergence, binary-linux, plugin, image]
+    needs: [checks, convergence, binary-linux, binaries, plugin, image]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
