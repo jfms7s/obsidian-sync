@@ -155,7 +155,7 @@ function parse(file: string, text: string): Snapshot {
 // ----- files -----
 
 /** Writes a file whole or not at all: a temporary file, fsync, rename over the target, fsync of the folder. */
-async function writeFileAtomic(path: string, data: string): Promise<void> {
+export async function writeFileAtomic(path: string, data: string): Promise<void> {
   const tmp = `${path}.tmp`;
   const fh = await open(tmp, 'w', 0o600);
   try {
@@ -186,12 +186,46 @@ async function writeFileAtomic(path: string, data: string): Promise<void> {
  */
 export class PersistentState {
   private saving: Promise<unknown> = Promise.resolve();
+  /** LocalState was changed since the last save began (see track). */
+  private changed = false;
+  /** The LocalState to use: every change through it is noticed, so saveIfChanged knows. */
+  readonly state: LocalState;
 
   private constructor(
     readonly dir: string,
-    readonly state: LocalState,
+    state: LocalState,
     private readonly factory: IDBFactory,
-  ) {}
+  ) {
+    this.state = this.track(state);
+  }
+
+  /**
+   * LocalState with every call of a method that may write marking the
+   * state changed. Only methods known to read (get…, all…, filesBy…,
+   * filesAt…, dirtyEntries, maxFileSeq) do not: a new method counts as a
+   * write until it is added here, which costs a save, never a lost change.
+   */
+  private track(state: LocalState): LocalState {
+    const reads = /^(get|all|filesBy|filesAt|dirtyEntries$|maxFileSeq$|close$)/;
+    return new Proxy(state, {
+      get: (target, prop, receiver) => {
+        const value: unknown = Reflect.get(target, prop, receiver);
+        if (typeof value !== 'function' || typeof prop !== 'string') return value;
+        const fn = value as (...args: unknown[]) => unknown;
+        if (reads.test(prop)) return fn.bind(target);
+        return (...args: unknown[]) => {
+          const mark = () => {
+            this.changed = true;
+          };
+          mark();
+          const result = fn.apply(target, args);
+          // Again once it is done: a save that began meanwhile may have read the database before the write landed.
+          if (result instanceof Promise) result.then(mark, mark);
+          return result;
+        };
+      },
+    });
+  }
 
   get file(): string {
     return join(this.dir, SNAPSHOT_FILE);
@@ -233,13 +267,22 @@ export class PersistentState {
    */
   save(): Promise<number> {
     const run = this.saving.then(async () => {
+      this.changed = false;
       const started = performance.now();
       const text = JSON.stringify(await readSnapshot(this.factory), replacer);
       await writeFileAtomic(this.file, text);
       return performance.now() - started;
     });
-    this.saving = run.catch(() => undefined);
+    this.saving = run.catch(() => {
+      this.changed = true; // not on disk: the next saveIfChanged tries again
+    });
     return run;
+  }
+
+  /** Saves if anything changed since the last save began; null if there was nothing to save. */
+  async saveIfChanged(): Promise<number | null> {
+    await this.saving;
+    return this.changed ? this.save() : null;
   }
 
   /** Waits for any save in flight, then closes the database (nothing is saved). */

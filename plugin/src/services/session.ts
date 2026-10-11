@@ -5,6 +5,7 @@ import { defaultWebSocketFactory, type WebSocketFactory } from '../api/hub';
 import type { VaultKeyring } from '../crypto/vaultkeys';
 import type { LocalState } from '../state/store';
 import { SyncEngine } from '../sync/engine';
+import type { RestartBase } from '../sync/settings-files';
 import type { Clock } from '../util/clock';
 import type { Random } from '../util/random';
 import type { VaultAdapter } from '../vault/adapter';
@@ -25,6 +26,10 @@ export interface SyncSessionOptions extends ClientDeps {
   configDir: string;
   /** SyncEngine's maxBytesPerRound (the shell sets less on a phone). */
   maxBytesPerRound?: number;
+  /** SyncEngine's ownPluginFolders: this plugin's folder name under plugins/. */
+  ownPluginFolders?: readonly string[];
+  /** SyncEngine's restartBases: one map for the plugin's lifetime. */
+  restartBases?: Map<string, RestartBase>;
 }
 
 export type SyncSessionResult =
@@ -49,7 +54,9 @@ export async function openSyncSession(o: SyncSessionOptions): Promise<SyncSessio
   const ring = await keyringFromStored(vault);
   const engine = new SyncEngine({
     api, state: o.state, adapter: o.adapter, ring, deviceName: session.deviceName,
-    configDir: o.configDir, ignoreGlobs: await o.state.getIgnoreGlobs(),
+    configDir: o.configDir, ignoreGlobs: await o.state.getIgnoreGlobs(), settingsSync: await o.state.getSettingsSync(),
+    ...(o.ownPluginFolders ? { ownPluginFolders: o.ownPluginFolders } : {}),
+    ...(o.restartBases ? { restartBases: o.restartBases } : {}),
     webSocket: o.webSocket === undefined ? defaultWebSocketFactory : o.webSocket,
     refreshKeyring: () => refreshKeyring(o.state, api, session, keys),
     ...(o.random ? { random: o.random } : {}),

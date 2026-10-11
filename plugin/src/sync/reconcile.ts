@@ -81,7 +81,7 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
   let shadowed = 0;
   const paths: string[] = [];
   // A folder the ignore rules match is skipped whole (so is everything in it).
-  for (const raw of await adapter.list((folder) => ctx.ignore.matches(`${folder}/`))) {
+  for (const raw of await adapter.list((folder) => ctx.ignore.skipsFolder(folder))) {
     let path: string;
     try {
       path = normalizePath(raw);

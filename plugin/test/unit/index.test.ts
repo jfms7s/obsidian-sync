@@ -13,6 +13,7 @@ it('exports the engine, adapter contract, services and errors', () => {
   expect(Object.keys(engine.account)).toEqual(expect.arrayContaining(['login', 'logout', 'keyStatus', 'setupKeys', 'recoveryWordsToConfirm', 'acknowledgeRecoveryWords', 'KeysAlreadySetUpError', 'SetupPassphraseMismatchError', 'unlockWithPassphraseService', 'unlockWithRecoveryService', 'changePassphrase', 'listDevices', 'revokeDevice']));
   expect(Object.keys(engine.vaults)).toEqual(expect.arrayContaining(['listRemoteVaults', 'createVault', 'chooseVault']));
   expect(Object.keys(engine.history)).toEqual(expect.arrayContaining(['fileHistory', 'listTrash', 'readVersion', 'restore', 'UnsyncedChangesError', 'PathOccupiedError']));
+  expect(Object.keys(engine.deletions)).toEqual(expect.arrayContaining(['heldDeletions', 'releaseHeldDeletions', 'restoreHeldDeletions']));
   const needsReupload: engine.account.KeyStatus = 'needs-reupload';
   expect(needsReupload).toBe('needs-reupload');
 });

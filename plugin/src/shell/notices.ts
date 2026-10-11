@@ -44,6 +44,10 @@ export function noticeFor(e: EngineEvent): NoticeView | null {
       return shown(`${e.count ?? 'some'} files deleted on this device are on hold: they stay on your other devices until you choose, in the Obsync settings, to delete them everywhere or restore them here.`);
     case 'IGNORE_LINES_SKIPPED':
       return shown(`${e.count ?? 'some'} ${e.count === 1 ? 'line' : 'lines'} of ${file(e.path)} use unsupported syntax and were skipped. See the Obsync settings.`);
+    case 'SETTINGS_APPLIED':
+      return shown(`Obsidian settings from ${e.devices && e.devices.length > 0 ? e.devices.join(', ') : 'another device'} were applied. Restart Obsidian to use them.`);
+    case 'SETTINGS_REPLACED':
+      return shown(`${file(e.path)} could not be merged with the version from another device, so that version replaced it. An earlier version is in its history.`);
     case 'FILE_FAILED':
       return shown(`${file(e.path)} could not be synced just now. It is tried again later; the rest keeps syncing.`);
     default: {
