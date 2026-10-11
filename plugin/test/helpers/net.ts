@@ -8,10 +8,15 @@ export interface RequestLog {
   path: string;
 }
 
+/** One armed lost response: fired turns true once a request's response was thrown away for it. */
+export interface LostResponse {
+  readonly fired: boolean;
+}
+
 export class Net {
   online = true;
   /** Requests whose response is thrown away after the server handled them. */
-  private loseResponses: Array<(method: string, path: string) => boolean> = [];
+  private loseResponses: Array<{ matches: (method: string, path: string) => boolean; handle: { fired: boolean } }> = [];
   /** Requests that fail before they reach the server. */
   private failRequests: Array<(method: string, path: string) => boolean> = [];
   readonly log: RequestLog[] = [];
@@ -28,9 +33,9 @@ export class Net {
     }
     this.log.push({ method, path: url.pathname });
     const resp = await fetchTransport(input, req);
-    const i = this.loseResponses.findIndex((f) => f(method, url.pathname));
+    const i = this.loseResponses.findIndex((l) => l.matches(method, url.pathname));
     if (i >= 0) {
-      this.loseResponses.splice(i, 1);
+      this.loseResponses.splice(i, 1)[0]!.handle.fired = true;
       await resp.arrayBuffer().catch(() => undefined);
       throw new TypeError('fetch failed: connection reset');
     }
@@ -53,8 +58,10 @@ export class Net {
   }
 
   /** The next request matching method and a path suffix reaches the server, but its response is lost. */
-  loseNextResponse(method: string, pathSuffix: string): void {
-    this.loseResponses.push((m, p) => m === method && p.endsWith(pathSuffix));
+  loseNextResponse(method: string, pathSuffix: string): LostResponse {
+    const handle = { fired: false };
+    this.loseResponses.push({ matches: (m, p) => m === method && p.endsWith(pathSuffix), handle });
+    return handle;
   }
 
   /** The next request matching method and a path suffix fails without reaching the server. */
