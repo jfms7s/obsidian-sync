@@ -8,7 +8,7 @@ import { Argon2TooCostlyError, createKeyBundle, generateUserKeys } from '../../s
 import { deriveEpochKeys, sealKey } from '../../src/crypto/vaultkeys';
 import {
   acknowledgeRecoveryWords, apiFor, changePassphrase, KeysAlreadySetUpError, keyStatus, listDevices, login, logout,
-  matchesPassword, PassphraseIsPasswordError, passwordFingerprint, recoveryWordsToConfirm, revokeDevice, SetupPassphraseMismatchError, setupKeys, unlockWithPassphraseService, unlockWithRecoveryService,
+  matchesPassword, PassphraseIsPasswordError, WeakPassphraseError, passwordFingerprint, recoveryWordsToConfirm, revokeDevice, SetupPassphraseMismatchError, setupKeys, unlockWithPassphraseService, unlockWithRecoveryService,
 } from '../../src/services/account';
 import { chooseVault, createVault, listRemoteVaults, openVaultKeys } from '../../src/services/vaults';
 import { LocalState } from '../../src/state/store';
@@ -210,10 +210,10 @@ describe('account and keys', () => {
     const session = await login(s, srv.url, 'carol', 'carol-password', 'Desk', 'linux');
     const api = apiFor(session);
     const keys = await unlockWithPassphraseService(s, api, session, 'my passphrase');
-    await expect(changePassphrase(api, session, keys, 'new passphrase', 'wrong-password', seededRandom(2)))
+    await expect(changePassphrase(api, session, keys, 'new long passphrase words', 'wrong-password', seededRandom(2)))
       .rejects.toMatchObject({ code: ErrorCode.WRONG_PASSWORD, status: 403 });
-    await changePassphrase(api, session, keys, 'new passphrase', 'carol-password', seededRandom(3));
-    expect((await unlockWithPassphraseService(await newState('d5'), api, session, 'new passphrase')).encPub).toEqual(keys.encPub);
+    await changePassphrase(api, session, keys, 'new long passphrase words', 'carol-password', seededRandom(3));
+    expect((await unlockWithPassphraseService(await newState('d5'), api, session, 'new long passphrase words')).encPub).toEqual(keys.encPub);
   });
 
   it('refuses a new passphrase equal to the account password before sending anything', async () => {
@@ -222,6 +222,15 @@ describe('account and keys', () => {
     const net = new Net();
     await expect(changePassphrase(apiFor(session, { fetch: net.fetch }), session, generateUserKeys(seededRandom(4)), 'carol-password', 'carol-password', seededRandom(4)))
       .rejects.toBeInstanceOf(PassphraseIsPasswordError);
+    expect(net.log).toEqual([]);
+  });
+
+  it('refuses a weak new passphrase before sending anything', async () => {
+    const s = await newState('d4c');
+    const session = await login(s, srv.url, 'carol', 'carol-password', 'Desk', 'linux');
+    const net = new Net();
+    await expect(changePassphrase(apiFor(session, { fetch: net.fetch }), session, generateUserKeys(seededRandom(4)), 'password12', 'carol-password', seededRandom(4)))
+      .rejects.toBeInstanceOf(WeakPassphraseError);
     expect(net.log).toEqual([]);
   });
 

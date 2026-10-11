@@ -101,7 +101,12 @@ describe('the settings tab', () => {
     first.type('Passphrase', 'short');
     first.type('Repeat the passphrase', 'short');
     await first.press('Create keys');
-    expect(first.text()).toMatch(/at least 10 characters/);
+    expect(Notice.shown.at(-1)?.message).toMatch(/at least 4 words or 16 characters/);
+    first.type('Passphrase', 'Tr0ub4dor&3');
+    first.type('Repeat the passphrase', 'Tr0ub4dor&3');
+    await first.press('Create keys');
+    expect(Notice.shown.at(-1)?.message).toMatch(/at least 4 words or 16 characters/);
+    expect(await first.state.getPendingKeySetup()).toBeUndefined();
     first.type('Passphrase', 'a long enough passphrase');
     first.type('Repeat the passphrase', 'another passphrase!!');
     await first.press('Create keys');
@@ -167,8 +172,8 @@ describe('the settings tab', () => {
     first.type('Username', user.username);
     first.type('Password', user.password);
     await first.press('Sign in');
-    first.type('Passphrase', 'a long enough passphrase');
-    first.type('Repeat the passphrase', 'a long enough passphrase');
+    first.type('Passphrase', 'cat dog sun pie'); // four words, under 16 characters
+    first.type('Repeat the passphrase', 'cat dog sun pie');
     await first.press('Create keys');
     await first.press('I have saved them');
     await first.press('Create vault');
@@ -180,7 +185,7 @@ describe('the settings tab', () => {
     second.type('Username', user.username);
     second.type('Password', user.password);
     await second.press('Sign in');
-    second.type('Passphrase', 'a long enough passphrase');
+    second.type('Passphrase', 'cat dog sun pie');
     await second.press('Unlock');
     await second.press('Use this vault');
     expect(second.shell.engine).not.toBeNull();
@@ -202,7 +207,7 @@ describe('the settings tab', () => {
     second.type('Password', user.password);
     await second.press('Sign in');
     expect(second.setting('Unlock this device').heading).toBe(true);
-    second.type('Passphrase', 'a long enough passphrase');
+    second.type('Passphrase', 'cat dog sun pie');
     await second.press('Unlock');
     expect(second.setting('Choose the vault to sync').heading).toBe(true);
     await second.press('Use this vault');
