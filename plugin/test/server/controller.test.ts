@@ -10,6 +10,7 @@ import type { EngineLock } from '../../src/shell/engine-lock';
 import type { LocalState } from '../../src/state/store';
 import { makeClient, settle } from '../helpers/client';
 import { files, newDevice, newUser, text, type Device } from '../helpers/fixture';
+import type { FetchLike } from '../../src/api/client';
 import { startServer, type TestServer } from '../helpers/server';
 
 let srv: TestServer;
@@ -314,6 +315,71 @@ describe('ShellController', () => {
     expect(await c.start()).toEqual({ ok: false, reason: 'stopped' }); // stopped for good: only the user starts again
     expect(await c.start({ byUser: true })).toEqual({ ok: false, reason: 'not-logged-in' });
   });
+});
+
+// The first real use (2026-10-06): ignore rules saved while the first sync of
+// a large vault was running left the ignored folders on the server. Which of
+// the two windows lets that happen?
+describe('ignore rules saved during the first sync', () => {
+  const BIG = 300;
+  async function bigVault(dev: Device): Promise<void> {
+    for (let i = 0; i < BIG; i++) await dev.adapter.write(`big/f${i}.md`, text(`file ${i}\n`));
+    await dev.adapter.write('keep.md', text('keep\n'));
+  }
+  const onServer = (adapter: Device['adapter'], prefix: string) => Object.keys(files(adapter)).filter((p) => p.startsWith(prefix)).length;
+
+  it('(a) saved while the start holds the lock: nothing under the folder is uploaded', async () => {
+    const user = await newUser(srv);
+    const dev = await newDevice(srv, user, { name: 'Laptop', vault: 'create' });
+    const other = await makeClient(srv, user, { name: 'Phone', vault: dev.vaultId });
+    await bigVault(dev);
+    const { state, open } = gatedRead(dev.state, 'ignoreGlobs');
+    const c = controllerFor(dev, { state });
+    const starting = c.start();
+    await flush();
+    const saving = c.setIgnoreGlobs(['big/']);
+    await flush();
+    open();
+    await saving;
+    await starting;
+    await c.engine!.runCycle();
+    await settle([other]);
+    expect(files(other.adapter)).toEqual({ 'keep.md': 'keep\n' });
+    await c.stop();
+  }, 60_000);
+
+  it('(b) saved while the first upload round runs: commits already under way land, nothing is uploaded after', async () => {
+    const user = await newUser(srv);
+    const dev = await newDevice(srv, user, { name: 'Laptop', vault: 'create' });
+    const other = await makeClient(srv, user, { name: 'Phone', vault: dev.vaultId });
+    await bigVault(dev);
+    let saving: Promise<void> | null = null;
+    let c!: ShellController;
+    const fetch: FetchLike = async (input, req) => {
+      const resp = await dev.net.fetch(input, req);
+      // The first commit of the first round: the user saves the rules now.
+      if (!saving && req.method === 'POST' && new URL(input).pathname.endsWith('/commit')) saving = c.setIgnoreGlobs(['big/']);
+      return resp;
+    };
+    c = controllerFor(dev, { fetch });
+    await c.start();
+    await c.engine!.runCycle();
+    expect(saving).not.toBeNull();
+    await saving;
+    await settle([other]);
+    // The round under way when the rules were saved went on uploading the folder (as far as its
+    // commits already in flight; the stop ends the round between batches): the symptom of 2026-10-06.
+    const uploaded = onServer(other.adapter, 'big/');
+    expect(uploaded).toBeGreaterThan(0);
+    // After the save returned, the restarted engine skips the folder.
+    await dev.adapter.write('big/new.md', text('new\n'));
+    await dev.adapter.write('big/f0.md', text('changed\n'));
+    await c.engine!.runCycle();
+    await settle([other]);
+    expect(onServer(other.adapter, 'big/')).toBe(uploaded);
+    expect(files(other.adapter)['big/f0.md']).toBe('file 0\n');
+    await c.stop();
+  }, 60_000);
 });
 
 describe('HistoryController', () => {

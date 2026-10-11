@@ -120,13 +120,14 @@ Or install beta releases with the [BRAT](https://obsidian.md/plugins?id=obsidian
 Open **Settings → Obsync** and follow the steps:
 
 1. **Sign in** with the server address, the account name and the password the administrator gave you.
-2. **Choose an encryption passphrase** (at least 10 characters). Creating the keys takes a few seconds, longer on a phone.
+2. **Choose an encryption passphrase**: at least 4 words or 16 characters, and not your account password. Four or more random words (diceware) work well. Creating the keys takes a few seconds, longer on a phone.
 3. **Write down the 24 recovery words.** They are shown only now.
-4. **Create the vault** on the server, or choose one that already exists. Files that are in this vault and not on the server are uploaded.
+4. **Create the vault** on the server, or choose one that already exists.
+5. **Choose what not to sync** (for example `.venv/` or `node_modules/`), then **Start syncing**. Nothing is uploaded or downloaded before this step. Files that are in this vault and not on the server are then uploaded.
 
 ### Add another device
 
-Sign in with the same account, **unlock** with the passphrase (or the recovery words), and choose the vault. An existing local copy of the vault on the new device is merged with the server's: files with the same name and different content are merged or kept side by side. For a clean start, begin with an empty vault folder.
+Sign in with the same account, **unlock** with the passphrase (or the recovery words), choose the vault and what not to sync on this device. An existing local copy of the vault on the new device is merged with the server's: files with the same name and different content are merged or kept side by side. For a clean start, begin with an empty vault folder.
 
 ### Using it
 

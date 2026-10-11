@@ -13,6 +13,8 @@ export type SetupStep =
   | { kind: 'setup-keys'; reupload: boolean }
   | { kind: 'unlock' }
   | { kind: 'choose-vault' }
+  /** The vault is chosen: say which files not to sync, then start (SetupController.confirmIgnores). */
+  | { kind: 'confirm-ignores' }
   | { kind: 'ready' };
 
 export async function nextStep(state: LocalState, deps: ClientDeps = {}): Promise<SetupStep> {
@@ -26,7 +28,7 @@ export async function nextStep(state: LocalState, deps: ClientDeps = {}): Promis
   } catch (err) {
     // Offline: a device that was set up keeps syncing (and reports being offline itself).
     const keys = await state.getUserKeys();
-    if (err instanceof NetworkError && keys?.userId === session.userId && vaultReady) return { kind: 'ready' };
+    if (err instanceof NetworkError && keys?.userId === session.userId && vaultReady) return vault.ignoresUnconfirmed ? { kind: 'confirm-ignores' } : { kind: 'ready' };
     throw err;
   }
   const words = await recoveryWordsToConfirm(state, session);
@@ -34,5 +36,6 @@ export async function nextStep(state: LocalState, deps: ClientDeps = {}): Promis
   if (status === 'needs-setup') return { kind: 'setup-keys', reupload: false };
   if (status === 'needs-reupload') return { kind: 'setup-keys', reupload: true };
   if (status === 'needs-unlock') return { kind: 'unlock' };
-  return vaultReady ? { kind: 'ready' } : { kind: 'choose-vault' };
+  if (!vaultReady) return { kind: 'choose-vault' };
+  return vault.ignoresUnconfirmed ? { kind: 'confirm-ignores' } : { kind: 'ready' };
 }

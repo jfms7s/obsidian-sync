@@ -136,6 +136,12 @@ export interface StoredVault {
   namingKey: Uint8Array;
   epochKeys: Array<[number, Uint8Array]>;
   currentEpoch: number;
+  /**
+   * Chosen in the setup, and the user has not yet confirmed which files not
+   * to sync: nothing syncs until they do (vaults.confirmIgnores). Absent on
+   * vaults chosen before this step existed, which keep syncing.
+   */
+  ignoresUnconfirmed?: boolean;
 }
 
 /** Creates or migrates the stores; each step runs only for databases older than it. */

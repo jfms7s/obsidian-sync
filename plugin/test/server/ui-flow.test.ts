@@ -130,10 +130,19 @@ describe('the settings tab', () => {
     expect(words.children[0]!.text).toMatch(/^1\. \w+/);
     await first.press('I have saved them');
 
-    // 4. Create the vault; sync starts.
+    // 4. Create the vault, then choose what not to sync before anything is uploaded; sync starts.
     expect(first.setting('Choose the vault to sync').heading).toBe(true);
     expect(first.field('New vault name').value).toBe('FakeVault');
     await first.press('Create vault');
+    expect(first.setting('Choose what not to sync').heading).toBe(true);
+    expect(first.shell.engine).toBeNull();
+    first.field('Ignored files').type('.venv/\n!keep.md');
+    await first.press('Start syncing');
+    expect(first.el().allText()).toMatch(/Line 2: !keep\.md/);
+    expect(first.shell.engine).toBeNull();
+    first.field('Ignored files').type('.venv/\n');
+    await first.press('Start syncing');
+    expect(await first.shell.ignoreGlobs()).toEqual(['.venv/']);
     expect(first.setting('Sync').heading).toBe(true);
     expect(first.text()).toMatch(/Syncing FakeVault/);
     expect(first.shell.engine).not.toBeNull();
@@ -155,6 +164,7 @@ describe('the settings tab', () => {
     expect(second.setting('Choose the vault to sync').heading).toBe(true);
     expect(second.text()).toContain('FakeVault');
     await second.press('Use this vault');
+    await second.press('Start syncing');
     expect(second.text()).toMatch(/Syncing FakeVault/);
 
     // The first device sees the second one and can remove it.
@@ -177,6 +187,7 @@ describe('the settings tab', () => {
     await first.press('Create keys');
     await first.press('I have saved them');
     await first.press('Create vault');
+    await first.press('Start syncing');
     expect(first.shell.engine).not.toBeNull();
 
     const second = await screen('phone');
@@ -188,6 +199,7 @@ describe('the settings tab', () => {
     second.type('Passphrase', 'cat dog sun pie');
     await second.press('Unlock');
     await second.press('Use this vault');
+    await second.press('Start syncing');
     expect(second.shell.engine).not.toBeNull();
 
     // The first device removes the second one.
@@ -211,6 +223,7 @@ describe('the settings tab', () => {
     await second.press('Unlock');
     expect(second.setting('Choose the vault to sync').heading).toBe(true);
     await second.press('Use this vault');
+    await second.press('Start syncing');
     expect(second.shell.engine).not.toBeNull();
     expect(second.text()).toMatch(/Syncing FakeVault/);
 
@@ -231,8 +244,9 @@ describe('the settings tab', () => {
     await s.press('Create keys');
     await s.press('I have saved them');
 
-    const start = vi.spyOn(s.shell, 'start').mockResolvedValueOnce({ ok: false, reason: 'locked' });
     await s.press('Create vault');
+    const start = vi.spyOn(s.shell, 'start').mockResolvedValueOnce({ ok: false, reason: 'locked' });
+    await s.press('Start syncing');
     expect(Notice.shown.some((n) => n.message.includes('sync has started'))).toBe(false);
     expect(Notice.shown.some((n) => n.message.includes('could not start'))).toBe(true);
     expect(s.text()).toMatch(/could not start/);
@@ -253,6 +267,7 @@ describe('the settings tab', () => {
     await s.press('Create keys');
     await s.press('I have saved them');
     await s.press('Create vault');
+    await s.press('Start syncing');
 
     const area = s.field('Ignored files');
     area.type('# my rules\nScratch/\n\n!keep.md');
