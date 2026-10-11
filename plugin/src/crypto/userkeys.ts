@@ -39,6 +39,22 @@ export class Argon2TooCostlyError extends CryptoError {
   }
 }
 
+/** The passphrase does not open the key bundle's passphrase wrapping. */
+export class WrongPassphraseError extends CryptoError {
+  constructor() {
+    super('the passphrase does not unlock the account keys');
+    this.name = 'WrongPassphraseError';
+  }
+}
+
+/** Well-formed recovery words that do not open the key bundle's recovery wrapping (another account's, or a typo that is still a valid phrase). */
+export class WrongRecoveryWordsError extends CryptoError {
+  constructor() {
+    super('the recovery words do not unlock the account keys');
+    this.name = 'WrongRecoveryWordsError';
+  }
+}
+
 export const PASS_SALT_LEN = 16;
 export const RECOVERY_KEY_LEN = 32;
 
@@ -183,14 +199,36 @@ async function wrapBundle(userId: string, keys: UserKeys, passphrase: string, re
   return { publicEncKey: keys.encPub, publicSignKey: keys.signPub, passSalt, passParams: params, passWrapped, recoveryWrapped };
 }
 
-export async function unlockWithPassphrase(bundle: KeyBundleFields, userId: string, passphrase: string): Promise<UserKeys> {
-  const kek = await derivePassKek(passphrase, bundle.passSalt, bundle.passParams);
-  return unwrapPrivateKeys(kek, bundle.passWrapped, { kind: 'pass', salt: bundle.passSalt, params: bundle.passParams }, userId, bundle.publicEncKey, bundle.publicSignKey);
+/** Runs unwrap, turning a plain CryptoError (the wrapping does not open) into the error that names the secret the user typed. */
+async function unwrapAs(unwrap: () => Promise<UserKeys>, wrongSecret: () => CryptoError): Promise<UserKeys> {
+  try {
+    return await unwrap();
+  } catch (err) {
+    if (err instanceof CryptoError && Object.getPrototypeOf(err) === CryptoError.prototype) throw wrongSecret();
+    throw err;
+  }
 }
 
+/**
+ * Throws WrongPassphraseError when the passphrase does not open the bundle,
+ * and Argon2TooCostlyError (checked before any work) when the bundle's
+ * parameters are above this device's ceiling.
+ */
+export async function unlockWithPassphrase(bundle: KeyBundleFields, userId: string, passphrase: string): Promise<UserKeys> {
+  const kek = await derivePassKek(passphrase, bundle.passSalt, bundle.passParams);
+  return unwrapAs(
+    () => unwrapPrivateKeys(kek, bundle.passWrapped, { kind: 'pass', salt: bundle.passSalt, params: bundle.passParams }, userId, bundle.publicEncKey, bundle.publicSignKey),
+    () => new WrongPassphraseError(),
+  );
+}
+
+/** Throws InvalidRecoveryWordsError for malformed words, WrongRecoveryWordsError for valid words that do not open the bundle. */
 export async function unlockWithRecoveryWords(bundle: KeyBundleFields, userId: string, words: string): Promise<UserKeys> {
   const kek = await deriveRecoveryKek(wordsToRecoveryKey(words), userId);
-  return unwrapPrivateKeys(kek, bundle.recoveryWrapped, { kind: 'recovery' }, userId, bundle.publicEncKey, bundle.publicSignKey);
+  return unwrapAs(
+    () => unwrapPrivateKeys(kek, bundle.recoveryWrapped, { kind: 'recovery' }, userId, bundle.publicEncKey, bundle.publicSignKey),
+    () => new WrongRecoveryWordsError(),
+  );
 }
 
 /** Each parameter at least DEFAULT_ARGON2's, so a rewrap never weakens the KDF below today's default. */
