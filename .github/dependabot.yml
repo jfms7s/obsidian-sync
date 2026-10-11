@@ -68,6 +68,10 @@ updates:
       # Node's types follow the Node the plugin is developed and tested on (.nvmrc).
       - dependency-name: "@types/node"
         update-types: [version-update:semver-major]
+      # The Obsidian API types follow manifest.json's minAppVersion, so the
+      # compiler and lint refuse APIs older Obsidian lacks. Raise both together
+      # by hand.
+      - dependency-name: obsidian
     groups:
       plugin-minor-and-patch:
         update-types: [minor, patch]
@@ -88,6 +92,8 @@ updates:
         update-types: [version-update:semver-major]
       - dependency-name: "@types/node"
         update-types: [version-update:semver-major]
+      # Same Obsidian API version as plugin/ (manifest.json's minAppVersion).
+      - dependency-name: obsidian
     groups:
       lint-minor-and-patch:
         update-types: [minor, patch]
