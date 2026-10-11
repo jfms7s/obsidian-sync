@@ -3,7 +3,9 @@ BIN := $(CURDIR)/bin
 export PATH := $(BIN):$(PATH)
 # go.mod pins the toolchain; an older local Go downloads it once.
 export GOTOOLCHAIN := auto
-export CGO_ENABLED := 1
+# The server is pure Go: builds are static and need no C compiler. Only the
+# race detector needs cgo (and so a C compiler), for make test.
+export CGO_ENABLED := 0
 
 .PHONY: tools proto proto-lint test vet lint-go lint check ci-local docker-build plugin-test plugin-build plugin-lint plugin-install vectors convergence
 
@@ -24,7 +26,7 @@ proto: proto-lint plugin/node_modules
 	buf generate
 
 test:
-	cd server && go test -race ./...
+	cd server && CGO_ENABLED=1 go test -race ./...
 
 vet:
 	cd server && go vet ./...
@@ -70,7 +72,6 @@ ci-local: check
 		git status --porcelain >&2; exit 1; \
 	fi
 	buf breaking --against ".git#ref=$$(git merge-base origin/main HEAD)"
-	scripts/check-glibc_test.sh
 	scripts/check-release-version_test.sh
 	! grep -oE 'require\("[^"]+"\)' plugin/dist/main.js | grep -v 'require("obsidian")'
 
