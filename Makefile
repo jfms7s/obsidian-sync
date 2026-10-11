@@ -7,7 +7,7 @@ export GOTOOLCHAIN := auto
 # race detector needs cgo (and so a C compiler), for make test.
 export CGO_ENABLED := 0
 
-.PHONY: tools proto proto-lint test vet lint-go lint check ci-local docker-build plugin-test plugin-build plugin-lint plugin-install vectors convergence
+.PHONY: tools proto proto-lint test vet lint-go lint check ci-local docker-build plugin-test plugin-build plugin-lint plugin-install vectors convergence cli-build
 
 # go install picks a toolchain from each tool's own go.mod; build them with the
 # server's instead, since golangci-lint refuses code newer than the Go it was
@@ -45,6 +45,10 @@ plugin-test: plugin/node_modules
 # plugin/dist/ is the folder to install: main.js, manifest.json, styles.css.
 plugin-build: plugin/node_modules
 	cd plugin && npm run build
+
+# The headless client: plugin/dist/obsync-cli.mjs, run with `node obsync-cli.mjs` (Node 22.12+).
+cli-build: plugin/node_modules
+	cd plugin && npm run build:cli
 
 # Obsidian's plugin rules need TypeScript 5.9; the plugin itself builds with 7.
 plugin/lint/node_modules: plugin/lint/package.json plugin/lint/package-lock.json

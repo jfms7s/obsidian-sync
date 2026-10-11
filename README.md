@@ -169,17 +169,77 @@ Sign in with the same account, **unlock** with the passphrase (or the recovery w
 - The status bar shows *synced*, *syncing*, *offline*, *sync error*, *sync stopped* or, before the setup is finished, *not set up*. On a phone there is no status bar: the settings tab and the notices show the state. The ribbon button only starts a sync (**Sync now**).
 - **Show history of the current file** (command palette, or the file's menu) lists the versions, compares one with the file as it is now, and restores it. **Restore a deleted file** lists what was deleted, grouped by the device that deleted it and when; **Restore all** brings back a whole group with one confirmation (the undo for a large deletion that reached every device), skipping and listing any file that exists again or whose name is taken.
 - The settings tab shows the account's **storage** against its quota ("Storage: 512 MB of 10 GB used": encrypted chunks of every vault the account owns, history and deleted files included) and, when the account owns more than one vault, this vault's share. It refreshes after a sync, at most once a minute while the tab is open.
-- **Ignored files** in the settings are patterns of files and folders this device does not sync, one per line (`Private/`, `*.pdf`, `drafts/**/*.md`). `.trash/`, `.git/`, the vault's configuration folder and operating-system junk files are never synced. A new rule stops syncing the files it matches but leaves the copies already on the server and on other devices; when you save rules (either list) that match files this device already synced, the settings tab names them with their size and offers **Remove from server**. Confirmed, it deletes them on the server as if they were deleted here: this device keeps its copies, other devices move theirs to the trash unless they ignore the files too, and the server keeps them in its deleted files for the trash period. Removing the rule later uploads this device's copies again.
+- **Ignored files** in the settings are patterns of files and folders this device does not sync, one per line (`Private/`, `*.pdf`, `drafts/**/*.md`). `.trash/`, `.git/`, the vault's configuration folder (except the settings files below) and operating-system junk files are never synced. A new rule stops syncing the files it matches but leaves the copies already on the server and on other devices; when you save rules (either list) that match files this device already synced, the settings tab names them with their size and offers **Remove from server**. Confirmed, it deletes them on the server as if they were deleted here: this device keeps its copies, other devices move theirs to the trash unless they ignore the files too, and the server keeps them in its deleted files for the trash period. Removing the rule later uploads this device's copies again.
 - **Ignored on every device** keeps rules for all devices in `.obsyncignore` at the vault root. It is an ordinary file that syncs like a note, so a rule written once applies everywhere; Obsidian hides dot-files, so the settings tab edits it (any text editor works on a desktop). A device ignores the union of the built-in list, the configuration folder, `.obsyncignore` and its own list: it can add rules, never un-ignore one from the file. A new device applies the vault's `.obsyncignore` before anything else arrives; a changed file applies at the next sync, and removing a rule brings the matching files back. The syntax is the same as the device list: one pattern per line, `#` comments, a trailing `/` for folders, `*`, `?` and `**`; negation (`!`) and character classes (`[...]`) are not supported, and lines that use them are skipped (the settings tab lists them) while the rest applies. No rule ever matches `.obsyncignore` itself. `.gitignore` files are not read.
 - Files deleted by another device are moved the way Obsidian's **Files and links → Deleted files** setting says (system trash by default). The server keeps the content for the history view either way.
 
 ### Good to know
 
 - **Mobile apps sync only while Obsidian is open.** iOS and Android suspend apps in the background. When you come back, the plugin compares everything with the server.
-- **Edits made while Obsidian was closed** (with another editor, or by `git`) are picked up when it starts.
-- **Obsidian's own settings and community plugins are not synced** in this release. They are planned as a separate, per-account layer.
+- **Edits made while Obsidian was closed** (with another editor, or by `git`) are picked up when it starts, or within seconds by [obsync-cli](#sync-without-obsidian-obsync-cli) running on that machine.
+- **Obsidian settings** (settings tab, off until you turn it on on each device) syncs Obsidian's own settings files between the devices that turn it on: by default every core file (`app.json`, `appearance.json`, `hotkeys.json`, `core-plugins.json`, `community-plugins.json`), except that a phone or tablet keeps its own appearance; each can be turned off per device, and a file a device does not sync keeps that device's own copy. A community plugin's settings (`plugins/<id>/data.json`) sync only for the plugins you tick: some plugins keep API keys or paths that only fit one device there. Plugin code, themes, CSS snippets, the workspace layout and Obsync's own folder are never synced, so a plugin listed in `community-plugins.json` only loads on a device where it is installed. Settings files arrive on disk and Obsidian uses them after a restart (a notice says so). Changes are found within 30 seconds; two devices changing the same setting at once keep the one that reached the server first, and changes to different settings are merged (no conflict copies in the config folder). Devices only exchange settings when their config folder has the same name (Obsidian's "Override config folder" setting gives it another one).
 - A file larger than 256 MiB is skipped, with a notice.
 - If the server is restored from an older backup, devices notice it, keep their newer edits, and upload them again. A copy of the older text is saved next to a file that now differs.
+
+## Sync without Obsidian (obsync-cli)
+
+`obsync-cli` is the plugin's sync engine without Obsidian: one more device on your account that syncs a vault folder on a desktop or server. Run it as a service and files that other programs write into the folder (an editor, a script, an AI agent in a terminal) reach your other devices within seconds, even while Obsidian is closed. Edits from your other devices land in the folder the same way.
+
+It needs Node 22.12 or newer. The account's encryption keys must already be set up in Obsidian (the CLI unlocks them; it does not create them).
+
+### Install it
+
+Download `obsync-cli.mjs` from the [latest release](https://github.com/jfms7s/obsidian-sync/releases/latest) (it is one file, with everything it needs inside), check it, and put it somewhere stable:
+
+```bash
+gh attestation verify obsync-cli.mjs --repo jfms7s/obsidian-sync
+install -D -m 0755 obsync-cli.mjs ~/.local/lib/obsync/obsync-cli.mjs
+```
+
+Or build it from a checkout with `make cli-build` (it lands in `plugin/dist/obsync-cli.mjs`). Below, `obsync-cli` stands for `node ~/.local/lib/obsync/obsync-cli.mjs`.
+
+### Set it up
+
+```bash
+obsync-cli login --server https://sync.example.com --username alice --device-name "desktop (cli)"
+obsync-cli unlock                      # the encryption passphrase; --recovery for the 24 words
+obsync-cli vaults                      # lists the vaults with their ids
+obsync-cli vaults --choose 3f2a…       # the one this folder is a copy of
+obsync-cli sync --vault-dir ~/Documents/Vault --init --once
+```
+
+The password and the passphrase are typed with echo off. A script can pass them on a file descriptor instead (`--password-fd 3 3<password-file`, `--passphrase-fd`); they are never accepted as arguments.
+
+The first `sync` of a folder needs `--init`. It ties this login to that folder, and every later run refuses any other folder, so a typo cannot upload the wrong one. As when you add a device in Obsidian, a folder that already holds the vault is merged with the server's copy; for a clean start, use an empty folder.
+
+### Run it as a service
+
+`sync` without `--once` keeps running: it watches the folder and listens to the server, like the plugin. `deploy/systemd/obsync-cli.service` is a systemd user unit for it:
+
+```bash
+install -D -m 0644 deploy/systemd/obsync-cli.service ~/.config/systemd/user/obsync-cli.service
+# edit ExecStart: the path of node, and --vault-dir
+systemctl --user daemon-reload
+systemctl --user enable --now obsync-cli
+journalctl --user -u obsync-cli -f
+loginctl enable-linger "$USER"         # optional: keep it running while you are logged out
+```
+
+`obsync-cli status` shows the account, the vault, the folder, whether the daemon runs and what it is doing, and recent warnings. Exit codes: 0 ok, 1 error, 2 when a person must act: log in, unlock, choose a vault, or check the folder (the first sync needs `--init`; the folder is missing, empty although files were synced from it, or not the one this login syncs). The unit does not restart on 2. For a timer or cron job instead of a service, use `sync --once`.
+
+### With Obsidian on the same folder
+
+Obsidian's plugin and the CLI on one folder would each take the other's writes for new edits. So they take turns: while Obsidian syncs the folder, its plugin keeps a heartbeat file in its own folder (`.obsidian/plugins/obsync/active`, rewritten every 30 seconds), and the daemon pauses within 10 seconds, after the sync round it is in. It resumes within about 10 seconds after Obsidian closes, or about 100 seconds if Obsidian was killed (the heartbeat then has to go stale), with a full comparison of the folder and the server. If your vault's configuration folder is not `.obsidian`, pass `--config-dir`.
+
+### Good to know
+
+- **The state directory holds this device's keys.** It is `~/.local/state/obsync-cli/default/` (mode 0700; `$XDG_STATE_HOME` moves it, `--name` keeps several apart, `--state-dir` sets it), with the session token and the unlocked keys: the same secrets the plugin keeps in Obsidian's database on that machine. Keep it out of backups you do not trust. `obsync-cli logout` revokes the device on the server and deletes the state (if the server cannot be reached, it says so and deletes the state anyway: then remove the device from another one).
+- **Deleted files go to the folder's `.trash/`** (never synced), like Obsidian's "Move to Obsidian trash" setting; `--no-trash` deletes them for good. The server keeps the content for the history view either way.
+- **A large deletion waits for you.** If more than 50 files and a fifth of the vault disappear from the folder at once (an unmounted disk, a wrong `git checkout`), the deletion is held instead of reaching your other devices. `obsync-cli deletions` lists it; `--release` deletes the files everywhere, `--restore` brings them back here.
+- **Symbolic links are not synced** (a link to a file is reported as a failed file, never as a deletion), and nothing is read or written through a linked folder.
+- The same files are skipped as in Obsidian: `.trash/`, `.git/`, operating-system junk files, and whatever the vault's `.obsyncignore` lists. The configuration folder is left alone entirely: **Obsidian settings** sync only between Obsidian devices that turn it on, never through obsync-cli.
+- One process at a time per state: `login`, `unlock`, `vaults --choose`, `deletions --release`/`--restore` and `logout` are refused while the daemon runs; stop it first (`systemctl --user stop obsync-cli`).
+- **A folder that is gone or empty is not taken for deleted files.** If the folder's disk is unmounted while the daemon runs, it retries until the folder is back; at start, a missing folder, or an empty one from which files were synced, stops it with exit code 2.
 
 ## Troubleshooting
 
@@ -197,8 +257,8 @@ Sign in with the same account, **unlock** with the passphrase (or the recovery w
 ```
 proto/     Protobuf schema; Go and TypeScript code are generated from it (buf)
 server/    The Go server (module github.com/jfms7s/obsidian-sync/server)
-plugin/    The TypeScript plugin: src/ (engine and shell), test/, lint/ (Obsidian's lint rules)
-deploy/    Compose stack with Caddy, systemd unit
+plugin/    The TypeScript plugin: src/ (engine and shell), cli/ (obsync-cli, Node only), test/, lint/ (Obsidian's lint rules)
+deploy/    Compose stack with Caddy, systemd units (the server, and obsync-cli as a user unit)
 scripts/   Release checks
 ```
 
@@ -210,14 +270,15 @@ make check            # Go tests (-race) and vet, all linters, plugin typecheck,
 make ci-local         # make check plus the rest of CI's checks: generated code and vectors up to date, buf breaking, script tests, bundle check
 make convergence      # the random multi-device suite (not part of make check): CONVERGENCE_SEEDS=1000 for the full run
 make plugin-install VAULT=~/vaults/test    # build and copy the plugin into a vault
+make cli-build        # plugin/dist/obsync-cli.mjs, the headless client
 make docker-build     # image for this machine
 ```
 
 Dependabot proposes grouped updates every week for the workflows' actions, the images, the Go modules and both npm packages, and CI runs `govulncheck` on the server.
 
-The plugin tests start the real `obsync` server; the convergence suite runs three simulated devices through 60 random operations per seed (edits, edits made while a sync cycle is running, renames, deletes, going offline, crashes, server backups and restores, case-only renames, folder and file clashes, one device with whole-second mtimes in a third of the seeds) and checks that every device ends with the same vault and that no edit is lost. CI runs 100 seeds on every push, 1,000 before every release, and 1,000 new seeds every night. A failing seed prints its whole history and can be replayed with `CONVERGENCE_SEED=<n> make convergence`.
+The plugin tests start the real `obsync` server; the convergence suite runs three simulated devices through 60 random operations per seed (edits, edits made while a sync cycle is running, renames, deletes, going offline, crashes, server backups and restores, server maintenance passes (history pruning, trash purge, chunk collection) on a server with very short retention, case-only renames, folder and file clashes, one device with whole-second mtimes in a third of the seeds) and checks that every device ends with the same vault and that no edit is lost. CI runs 100 seeds on every push, 1,000 before every release, and 1,000 new seeds every night. A failing seed prints its whole history and can be replayed with `CONVERGENCE_SEED=<n> make convergence`.
 
-Releases are made by pushing a tag `X.Y.Z` that matches `manifest.json` (no `v`): the release workflow runs 1,000 convergence seeds, builds the binaries, the plugin files and the multi-arch image, and publishes them together.
+Releases are made by pushing a tag `X.Y.Z` that matches `manifest.json` (no `v`): the release workflow runs 1,000 convergence seeds, builds the binaries, the plugin files, `obsync-cli.mjs` and the multi-arch image, and publishes them together.
 
 ## License
 
