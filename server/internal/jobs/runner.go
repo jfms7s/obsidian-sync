@@ -1,5 +1,5 @@
 // Package jobs runs periodic maintenance: retention pruning, chunk garbage
-// collection, then removal of stale blob temp files. A database lease makes
+// collection, then (daily) removal of stale blob temp files. A database lease makes
 // one replica run it at a time.
 package jobs
 
@@ -24,6 +24,9 @@ const (
 	// staleTempAge is how old a blob temp file must be before it is swept;
 	// younger ones may belong to a Put still running in some process.
 	staleTempAge = time.Hour
+	// sweepInterval is the least time between two temp sweeps. A sweep walks
+	// the whole blob tree, and temp files only appear after a crash.
+	sweepInterval = 24 * time.Hour
 )
 
 // TempSweeper is implemented by blob stores that can leave temp files behind
@@ -39,7 +42,7 @@ type Store interface {
 	ReleaseLease(ctx context.Context, name, holder string) error
 	Prune(ctx context.Context, p store.PrunePolicy) (store.PruneStats, error)
 	DeadChunks(ctx context.Context, touchedBeforeMs int64, limit int) ([]store.DeadChunk, error)
-	DeleteDeadChunk(ctx context.Context, c store.DeadChunk, touchedBeforeMs int64) (bool, error)
+	DeleteDeadChunks(ctx context.Context, cs []store.DeadChunk, touchedBeforeMs int64) ([]store.DeadChunk, error)
 }
 
 type Config struct {
@@ -55,6 +58,8 @@ type Runner struct {
 	holder string
 	now    func() time.Time
 	log    *slog.Logger
+
+	lastSweep time.Time // zero until the first sweep
 }
 
 func New(st Store, blobs blob.Store, cfg Config, now func() time.Time, log *slog.Logger) *Runner {
@@ -119,12 +124,16 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	}
 	r.log.Info("maintenance done",
 		"versions_pruned", stats.VersionsDeleted, "files_purged", stats.FilesPurged, "chunks_deleted", collected)
-	r.sweepTemp(ctx)
+	if r.lastSweep.IsZero() || now.Sub(r.lastSweep) >= sweepInterval {
+		r.sweepTemp(ctx)
+		r.lastSweep = now
+	}
 	return nil
 }
 
-// sweepTemp removes stale blob temp files if the blob store supports it. It
-// runs under the lease, whose TTL (two intervals) leaves ample room for one
+// sweepTemp removes stale blob temp files if the blob store supports it.
+// RunOnce calls it on the first pass and then at most once per
+// sweepInterval. It runs under the lease, whose TTL (two intervals) leaves ample room for one
 // walk of the blob tree. Failures are only wasted space, so they are logged
 // rather than failing the pass.
 func (r *Runner) sweepTemp(ctx context.Context) {
@@ -148,14 +157,11 @@ func (r *Runner) collectChunks(ctx context.Context, cutoffMs int64) (int, error)
 		if err != nil {
 			return deleted, err
 		}
-		for _, c := range dead {
-			ok, err := r.st.DeleteDeadChunk(ctx, c, cutoffMs)
-			if err != nil {
-				return deleted, err
-			}
-			if !ok {
-				continue
-			}
+		gone, err := r.st.DeleteDeadChunks(ctx, dead, cutoffMs)
+		if err != nil {
+			return deleted, err
+		}
+		for _, c := range gone {
 			deleted++
 			if err := r.blobs.Delete(ctx, c.BlobKey); err != nil {
 				// The row is gone, so nothing can reach this blob; it is only wasted space.
