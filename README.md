@@ -175,6 +175,8 @@ make plugin-install VAULT=~/vaults/test    # build and copy the plugin into a va
 make docker-build     # image for this machine
 ```
 
+Dependabot proposes grouped updates every week for the workflows' actions, the images, the Go modules and both npm packages, and CI runs `govulncheck` on the server.
+
 The plugin tests start the real `obsync` server; the convergence suite runs three simulated devices through hundreds of random operations (edits, renames, deletes, going offline, crashes, server restores, case-only renames, folder and file clashes) and checks that every device ends with the same vault and that no edit is lost. A failing seed prints its whole history and can be replayed with `CONVERGENCE_SEED=<n> make convergence`.
 
 Releases are made by pushing a tag `X.Y.Z` that matches `manifest.json` (no `v`): the release workflow runs 1,000 convergence seeds, builds the binaries, the plugin files and the multi-arch image, and publishes them together.
