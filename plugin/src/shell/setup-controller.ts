@@ -1,12 +1,13 @@
 // The setup steps and the account actions behind the settings tab, with no
 // Obsidian UI classes in it: sign in, set up or unlock the keys, choose or
-// create the vault (which also starts syncing), and the device list. The tab
-// only calls this and renders what it returns.
+// create the vault, confirm which files not to sync (which starts syncing),
+// and the device list. The tab only calls this and renders what it returns.
 import type { ApiClient, FetchLike } from '../api/client';
 import type { DeviceInfo } from '../api/types';
 import * as account from '../services/account';
 import { KeysAlreadySetUpError, PassphraseIsPasswordError, WeakPassphraseError, type PasswordFingerprint } from '../services/account';
 import * as vaults from '../services/vaults';
+import { cryptoRandom } from '../util/random';
 import type { UserKeys } from '../crypto/userkeys';
 import type { LocalState, Session } from '../state/store';
 import type { ShellController, StartResult } from './controller';
@@ -100,15 +101,26 @@ export class SetupController {
     return { locked: false, vaults: await vaults.listRemoteVaults(this.api(session), session, keys) };
   }
 
-  /** Switches this device to the server's vault vaultId: stops syncing, chooses it, starts again. */
-  useVault(vaultId: string): Promise<StartResult> {
-    return this.switchVault((api, session, keys) => vaults.chooseVault(this.o.state, api, session, keys, vaultId));
+  /** Switches this device to the server's vault vaultId; it syncs once confirmIgnores is called. */
+  useVault(vaultId: string): Promise<void> {
+    return this.switchVault((api, session, keys) => vaults.chooseVault(this.o.state, api, session, keys, vaultId, { ignoresUnconfirmed: true }));
   }
 
-  /** Creates a new, empty vault on the server and switches this device to it. */
-  createVault(name: string): Promise<StartResult> {
+  /** Creates a new, empty vault on the server and switches this device to it; it syncs once confirmIgnores is called. */
+  createVault(name: string): Promise<void> {
     if (name.trim() === '') return Promise.reject(new Error('Give the vault a name.'));
-    return this.switchVault((api, session, keys) => vaults.createVault(this.o.state, api, session, keys, name.trim()));
+    return this.switchVault((api, session, keys) => vaults.createVault(this.o.state, api, session, keys, name.trim(), cryptoRandom, { ignoresUnconfirmed: true }));
+  }
+
+  /**
+   * The ignore step of the setup: saves the rules (InvalidIgnorePatternError
+   * for unsupported syntax, and then nothing changes), lets the chosen vault
+   * sync and starts syncing with them. Nothing was uploaded before.
+   */
+  async confirmIgnores(globs: string[]): Promise<StartResult> {
+    await this.o.shell.setIgnoreGlobs(globs);
+    await vaults.confirmIgnores(this.o.state);
+    return this.o.shell.start({ byUser: true });
   }
 
   async devices(): Promise<DeviceInfo[]> {
@@ -121,15 +133,14 @@ export class SetupController {
 
   /**
    * The vault switch: no engine may run while the vault state is replaced,
-   * so syncing stops for good first; the user's choice then starts it.
+   * so syncing stops for good first; confirmIgnores then starts it.
    */
-  private async switchVault(choose: (api: ApiClient, session: Session, keys: UserKeys) => Promise<unknown>): Promise<StartResult> {
+  private async switchVault(choose: (api: ApiClient, session: Session, keys: UserKeys) => Promise<unknown>): Promise<void> {
     const session = await this.session();
     const keys = await account.loadUserKeys(this.o.state, session.userId);
     if (!keys) throw new Error('This device is locked. Open the settings again to unlock it.');
     await this.o.shell.stopForGood();
     await choose(this.api(session), session, keys);
-    return this.o.shell.start({ byUser: true });
   }
 
   private api(session: Session): ApiClient {

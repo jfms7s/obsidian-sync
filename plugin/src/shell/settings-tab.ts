@@ -6,7 +6,7 @@ import { Notice, PluginSettingTab, Setting, type App, type ButtonComponent, type
 import type { FetchLike } from '../api/client';
 import { PASSPHRASE_MIN_CHARS, PASSPHRASE_MIN_WORDS } from '../services/account';
 import type { LocalState } from '../state/store';
-import type { ShellController, StartResult } from './controller';
+import type { ShellController } from './controller';
 import { describeError } from './errors';
 import { ConfirmModal, TrashModal } from './history-modal';
 import { formatIgnoreText, parseIgnoreText } from './ignore-text';
@@ -19,6 +19,7 @@ const START_FAILURES: Record<Extract<Awaited<ReturnType<ShellController['start']
   'not-logged-in': 'this device is not signed in.',
   locked: 'this device is locked. Open the settings again to unlock it.',
   'no-vault': 'no vault is chosen for this device.',
+  'ignores-unconfirmed': 'the files not to sync are not confirmed yet.',
   stopped: 'sync was stopped.',
 };
 
@@ -93,6 +94,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
         case 'confirm-recovery': this.renderRecovery(step.words); break;
         case 'unlock': this.renderUnlock(); break;
         case 'choose-vault': await this.renderChooseVault(); break;
+        case 'confirm-ignores': this.renderConfirmIgnores(); break;
         case 'ready': await this.renderReady(); break;
       }
     } catch (err) {
@@ -233,8 +235,33 @@ export class ObsyncSettingTab extends PluginSettingTab {
     }
     this.heading('Choose the vault to sync');
     this.containerEl.createEl('p', { text: 'Files in this vault that are not on the server yet are uploaded. A file that exists on both sides is merged, or both versions are kept.' });
-    /** After the vault switch, which also starts syncing: say why it did not start, or move on. */
-    const begin = async (button: ButtonComponent, started: StartResult): Promise<void> => {
+    for (const v of remote.vaults) {
+      new Setting(this.containerEl)
+        .setName(v.name ?? 'A vault this account cannot read')
+        .setDesc(`Created ${new Date(v.createdAtMs).toLocaleDateString()}`)
+        .addButton((b) => {
+          b.setButtonText('Use this vault').onClick(this.action(b, async () => {
+            await this.setup.useVault(v.vaultId);
+            await this.render();
+          }));
+          if (v.name === null) b.setDisabled(true);
+        });
+    }
+    this.text('New vault name', 'Create a new, empty vault on the server for this one.', () => f.vaultName, (v) => (f.vaultName = v));
+    new Setting(this.containerEl).addButton((b) => b.setButtonText('Create vault').setCta().onClick(this.action(b, async () => {
+      await this.setup.createVault(f.vaultName);
+      await this.render();
+    })));
+  }
+
+  private renderConfirmIgnores(): void {
+    this.heading('Choose what not to sync');
+    this.containerEl.createEl('p', {
+      text: 'Before the first sync, list the files and folders this device should not sync, for example .venv/ or node_modules/. Nothing is uploaded or downloaded until you start.',
+    });
+    this.ignoreEditor('Start syncing', async (globs, button) => {
+      const started = await this.setup.confirmIgnores(globs);
+      this.form.ignoreText = null;
       if (!started.ok) {
         const message = `Sync could not start: ${START_FAILURES[started.reason]}`;
         this.errorEl?.setText(message);
@@ -244,22 +271,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
       }
       new Notice('Obsync: sync has started.');
       await this.render();
-    };
-    for (const v of remote.vaults) {
-      new Setting(this.containerEl)
-        .setName(v.name ?? 'A vault this account cannot read')
-        .setDesc(`Created ${new Date(v.createdAtMs).toLocaleDateString()}`)
-        .addButton((b) => {
-          b.setButtonText('Use this vault').onClick(this.action(b, async () => {
-            await begin(b, await this.setup.useVault(v.vaultId));
-          }));
-          if (v.name === null) b.setDisabled(true);
-        });
-    }
-    this.text('New vault name', 'Create a new, empty vault on the server for this one.', () => f.vaultName, (v) => (f.vaultName = v));
-    new Setting(this.containerEl).addButton((b) => b.setButtonText('Create vault').setCta().onClick(this.action(b, async () => {
-      await begin(b, await this.setup.createVault(f.vaultName));
-    })));
+    }, true);
   }
 
   private async renderReady(): Promise<void> {
@@ -292,6 +304,20 @@ export class ObsyncSettingTab extends PluginSettingTab {
   }
 
   private renderIgnore(): void {
+    this.ignoreEditor('Save', async (globs, button) => {
+      await this.shell.setIgnoreGlobs(globs);
+      this.form.ignoreText = null;
+      new Notice('Obsync: ignore rules saved.');
+      button.setDisabled(false);
+    });
+  }
+
+  /**
+   * The ignore rules as text, and a button that hands valid rules to save;
+   * bad lines are listed by their line number instead. cta: the button is
+   * the screen's main action.
+   */
+  private ignoreEditor(buttonText: string, save: (globs: string[], button: ButtonComponent) => Promise<void>, cta = false): void {
     const f = this.form;
     const errors = this.containerEl.createDiv({ cls: 'obsync-error' });
     new Setting(this.containerEl).setName('Ignored files').setDesc('Patterns of files and folders this device does not sync, one per line. A folder ends with a slash. Lines starting with # are comments.')
@@ -303,19 +329,19 @@ export class ObsyncSettingTab extends PluginSettingTab {
         a.inputEl.setAttr('autocomplete', 'off');
         a.setValue(f.ignoreText ?? formatIgnoreText(await this.shell.ignoreGlobs())).onChange((v) => (f.ignoreText = v));
       })
-      .addButton((b) => b.setButtonText('Save').onClick(this.action(b, async () => {
-        const parsed = parseIgnoreText(f.ignoreText ?? formatIgnoreText(await this.shell.ignoreGlobs()));
-        errors.empty();
-        if (parsed.errors.length > 0) {
-          for (const e of parsed.errors) errors.createDiv({ text: `Line ${e.line}: ${e.text} — ${e.message}` });
-          b.setDisabled(false);
-          return;
-        }
-        await this.shell.setIgnoreGlobs(parsed.globs);
-        f.ignoreText = null;
-        new Notice('Obsync: ignore rules saved.');
-        b.setDisabled(false);
-      })));
+      .addButton((b) => {
+        b.setButtonText(buttonText).onClick(this.action(b, async () => {
+          const parsed = parseIgnoreText(f.ignoreText ?? formatIgnoreText(await this.shell.ignoreGlobs()));
+          errors.empty();
+          if (parsed.errors.length > 0) {
+            for (const e of parsed.errors) errors.createDiv({ text: `Line ${e.line}: ${e.text} — ${e.message}` });
+            b.setDisabled(false);
+            return;
+          }
+          await save(parsed.globs, b);
+        }));
+        if (cta) b.setCta();
+      });
   }
 
   private async renderDevices(): Promise<void> {

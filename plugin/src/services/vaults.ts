@@ -58,7 +58,15 @@ export async function listRemoteVaults(api: ApiClient, session: Session, keys: U
  * refuses the id as taken and the vault it holds is adopted (after checking
  * its keys), so no second vault appears.
  */
-export async function createVault(state: LocalState, api: ApiClient, session: Session, keys: UserKeys, name: string, random: Random = cryptoRandom): Promise<StoredVault> {
+/** How the setup chooses a vault. */
+export interface ChooseOptions {
+  /** Store the vault with ignoresUnconfirmed, so it syncs only after confirmIgnores (the setup's ignore step). */
+  ignoresUnconfirmed?: boolean;
+}
+
+export async function createVault(
+  state: LocalState, api: ApiClient, session: Session, keys: UserKeys, name: string, random: Random = cryptoRandom, opts: ChooseOptions = {},
+): Promise<StoredVault> {
   const nfc = name.normalize('NFC');
   let pending = await state.getPendingVault();
   if (!pending || pending.userId !== session.userId || pending.name !== nfc) {
@@ -76,7 +84,9 @@ export async function createVault(state: LocalState, api: ApiClient, session: Se
   } catch (err) {
     if (!(err instanceof ApiError && err.code === ErrorCode.INVALID) || !(await landed(api, session, keys, pending))) throw err;
   }
-  const stored: StoredVault = { userId: session.userId, vaultId, name: nfc, namingKey, epochKeys: [[1, epochKey]], currentEpoch: 1 };
+  const stored: StoredVault = {
+    userId: session.userId, vaultId, name: nfc, namingKey, epochKeys: [[1, epochKey]], currentEpoch: 1, ...(opts.ignoresUnconfirmed ? { ignoresUnconfirmed: true } : {}),
+  };
   await state.resetVaultState();
   await state.setVault(stored);
   await state.clearPendingVault();
@@ -92,19 +102,27 @@ async function landed(api: ApiClient, session: Session, keys: UserKeys, pending:
 }
 
 /** Makes an existing remote vault this device's vault. Switching vaults drops the old vault's sync state. */
-export async function chooseVault(state: LocalState, api: ApiClient, session: Session, keys: UserKeys, vaultId: string): Promise<StoredVault> {
+export async function chooseVault(state: LocalState, api: ApiClient, session: Session, keys: UserKeys, vaultId: string, opts: ChooseOptions = {}): Promise<StoredVault> {
   const v = (await api.listVaults()).find((x) => x.vaultId === vaultId);
   if (!v) throw new Error(`vault ${vaultId} not found`);
   const opened = await openVaultKeys(await api.vaultKeys(vaultId), vaultId, session, keys);
   const ring = await buildKeyring(vaultId, opened.namingKey, opened.epochKeys, v.currentEpoch);
   const stored: StoredVault = {
     userId: session.userId, vaultId, name: await decryptVaultName(ring, v.encName, keys.signPub), namingKey: opened.namingKey,
-    epochKeys: [...opened.epochKeys.entries()], currentEpoch: v.currentEpoch,
+    epochKeys: [...opened.epochKeys.entries()], currentEpoch: v.currentEpoch, ...(opts.ignoresUnconfirmed ? { ignoresUnconfirmed: true } : {}),
   };
   const previous = await state.getVault();
   if (previous?.vaultId !== vaultId || previous.userId !== session.userId) await state.resetVaultState();
   await state.setVault(stored);
   return stored;
+}
+
+/** The user confirmed which files not to sync: the stored vault may sync now. */
+export async function confirmIgnores(state: LocalState): Promise<void> {
+  const v = await state.getVault();
+  if (!v?.ignoresUnconfirmed) return;
+  const { ignoresUnconfirmed: _, ...confirmed } = v;
+  await state.setVault(confirmed);
 }
 
 export function keyringFromStored(v: StoredVault): Promise<VaultKeyring> {

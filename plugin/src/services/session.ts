@@ -28,7 +28,7 @@ export interface SyncSessionOptions extends ClientDeps {
 
 export type SyncSessionResult =
   | { ok: true; engine: SyncEngine; api: ApiClient; ring: VaultKeyring }
-  | { ok: false; reason: 'not-logged-in' | 'locked' | 'no-vault' };
+  | { ok: false; reason: 'not-logged-in' | 'locked' | 'no-vault' | 'ignores-unconfirmed' };
 
 /** Builds a SyncEngine from what LocalState holds, or says which setup step is missing. */
 export async function openSyncSession(o: SyncSessionOptions): Promise<SyncSessionResult> {
@@ -39,6 +39,8 @@ export async function openSyncSession(o: SyncSessionOptions): Promise<SyncSessio
   const vault = await o.state.getVault();
   // A vault chosen by another account that logged in here earlier is not this account's to sync.
   if (!vault || vault.userId !== session.userId) return { ok: false, reason: 'no-vault' };
+  // Chosen in the setup and the ignore step not confirmed yet: nothing may be uploaded before it is.
+  if (vault.ignoresUnconfirmed) return { ok: false, reason: 'ignores-unconfirmed' };
   const deps: ClientDeps = {};
   if (o.fetch) deps.fetch = o.fetch;
   if (o.clock) deps.clock = o.clock;
