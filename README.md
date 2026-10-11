@@ -151,6 +151,7 @@ Sign in with the same account, **unlock** with the passphrase (or the recovery w
 
 - The status bar shows *synced*, *syncing*, *offline*, *sync error*, *sync stopped* or, before the setup is finished, *not set up*. On a phone there is no status bar: the settings tab and the notices show the state. The ribbon button only starts a sync (**Sync now**).
 - **Show history of the current file** (command palette, or the file's menu) lists the versions, compares one with the file as it is now, and restores it. **Restore a deleted file** lists what was deleted.
+- The settings tab shows the account's **storage** against its quota ("Storage: 512 MB of 10 GB used": encrypted chunks of every vault the account owns, history and deleted files included) and, when the account owns more than one vault, this vault's share. It refreshes after a sync, at most once a minute while the tab is open.
 - **Ignored files** in the settings are patterns of files and folders this device does not sync, one per line (`Private/`, `*.pdf`, `drafts/**/*.md`). `.trash/`, `.git/`, the vault's configuration folder and operating-system junk files are never synced.
 - Files deleted by another device are moved the way Obsidian's **Files and links → Deleted files** setting says (system trash by default). The server keeps the content for the history view either way.
 

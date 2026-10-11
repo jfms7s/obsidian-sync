@@ -20,6 +20,15 @@ export interface DeviceInfo {
   revoked: boolean;
 }
 
+/** GET /v1/account/usage: stored (encrypted) bytes, the unit the quota counts. */
+export interface AccountUsage {
+  /** Every vault the account owns, history and trash included. */
+  usedBytes: number;
+  quotaBytes: number;
+  /** Bytes per owned vault id; vaults shared with the account are not listed. */
+  vaults: Map<string, number>;
+}
+
 export interface SealedVaultKey {
   epoch: number;
   sealedKey: Uint8Array;
