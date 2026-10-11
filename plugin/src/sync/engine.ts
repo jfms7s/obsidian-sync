@@ -78,6 +78,16 @@ export interface EngineOptions {
   refreshKeyring?: () => Promise<VaultKeyring>;
 }
 
+/**
+ * The ignore rules an engine with these options applies: the defaults, the
+ * config folder, the vault's .obsyncignore globs and the device's own. The
+ * one place they are composed; the settings use it to tell what a change
+ * of either list newly ignores.
+ */
+export function composeIgnoreRules(o: { configDir: string; caseInsensitive: boolean; ignoreGlobs: readonly string[]; vaultGlobs: readonly string[] }): IgnoreRules {
+  return new IgnoreRules(o.ignoreGlobs, { caseInsensitive: o.caseInsensitive, configDir: o.configDir, vaultGlobs: o.vaultGlobs });
+}
+
 export class SyncEngine {
   private readonly ctx: SyncContext;
   private readonly clock: Clock;
@@ -155,7 +165,7 @@ export class SyncEngine {
 
   private buildRules(): IgnoreRules {
     const o = this.opts;
-    return new IgnoreRules(o.ignoreGlobs ?? [], { caseInsensitive: o.adapter.caseInsensitive, configDir: o.configDir, vaultGlobs: this.vaultIgnore.globs });
+    return composeIgnoreRules({ configDir: o.configDir, caseInsensitive: o.adapter.caseInsensitive, ignoreGlobs: o.ignoreGlobs ?? [], vaultGlobs: this.vaultIgnore.globs });
   }
 
   /**
@@ -239,9 +249,10 @@ export class SyncEngine {
   /** Starts watching the vault and, with autoRun, syncing. */
   async start(): Promise<void> {
     if (!this.stopped || this.halted) return;
+    // Watching first: if it throws, the engine is still stopped and a later start() tries again.
+    this.unwatch = this.opts.adapter.watch((ev) => this.onAdapterEvent(ev));
     this.stopped = false;
     this.reconcileDue = true;
-    this.unwatch = this.opts.adapter.watch((ev) => this.onAdapterEvent(ev));
     this.setStatus('syncing');
     this.hubDownAt = this.reconcilesStarted;
     if (this.opts.webSocket && this.opts.api.token) {

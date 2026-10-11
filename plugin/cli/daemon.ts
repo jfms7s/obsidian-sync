@@ -20,9 +20,7 @@ const SAVE_DEBOUNCE_MS = 2000;
 /** How often the daemon looks at Obsidian's heartbeat. */
 export const HEARTBEAT_CHECK_MS = 10_000;
 
-declare const __OBSYNC_PLUGIN_ID__: string | undefined;
-/** The plugin's id: its folder under <configDir>/plugins/, where it keeps the heartbeat. */
-const PLUGIN_ID = typeof __OBSYNC_PLUGIN_ID__ === 'string' ? __OBSYNC_PLUGIN_ID__ : 'obsync';
+
 const SAVE_INTERVAL_MS = 60_000;
 
 /** Notices after which the engine has stopped for good and a person must act. */
@@ -111,14 +109,26 @@ async function checkSetup(ps: PersistentState): Promise<void> {
  * counts as none: the CLI must not stay paused for good over it.
  */
 export async function obsidianHeartbeat(vaultDir: string, configDir: string, now = Date.now()): Promise<Heartbeat | null> {
-  let text: string;
+  // The plugin keeps it in its own folder, which is usually plugins/obsync but is whatever the
+  // plugin was installed as: every plugin folder is looked at, and only a heartbeat counts.
+  const plugins = join(vaultDir, configDir, 'plugins');
+  let folders: string[];
   try {
-    text = await readFile(join(vaultDir, configDir, 'plugins', PLUGIN_ID, HEARTBEAT_FILE), 'utf8');
+    folders = await readdir(plugins);
   } catch {
     return null;
   }
-  const hb = parseHeartbeat(text);
-  return hb && isHeartbeatFresh(hb, now) ? hb : null;
+  for (const f of folders) {
+    let text: string;
+    try {
+      text = await readFile(join(plugins, f, HEARTBEAT_FILE), 'utf8');
+    } catch {
+      continue;
+    }
+    const hb = parseHeartbeat(text);
+    if (hb && isHeartbeatFresh(hb, now)) return hb;
+  }
+  return null;
 }
 
 const pausedReason = (hb: Heartbeat) => `Obsidian is syncing this folder${hb.device ? ` (device "${hb.device}")` : ''}`;
@@ -154,6 +164,8 @@ export async function runSync(o: SyncOptions): Promise<number> {
 class Daemon {
   private readonly status: DaemonStatus;
   private halted: string | null = null;
+  /** Could not go on (a resume failed): the daemon ends with EXIT_ERROR. */
+  private failed = false;
   private onHalt: () => void = () => undefined;
   private saveTimer: NodeJS.Timeout | null = null;
   private stopping = false;
@@ -207,6 +219,7 @@ class Daemon {
     log.debug(`state saved in ${ms.toFixed(0)} ms`);
     await this.writeStatus();
     if (this.halted !== null) return EXIT_NEEDS_SETUP;
+    if (this.failed) return EXIT_ERROR;
     if (this.o.once) {
       log.info(`sync ${final === 'synced' ? 'done' : `ended ${final}`}`);
       return final === 'synced' ? EXIT_OK : EXIT_ERROR;
@@ -228,9 +241,18 @@ class Daemon {
         await this.writeStatus();
         await this.save();
       } else if (!hb && this.status.paused) {
-        this.status.paused = null;
         this.o.log.info('Obsidian stopped syncing this folder: resuming with a full check');
-        await this.engine.start(); // every start begins with a reconcile
+        try {
+          await this.engine.start(); // every start begins with a reconcile
+        } catch (err) {
+          // The folder may be gone meanwhile (a disk unmounted): end with an error, so the
+          // service manager starts the CLI again and its checks of the folder run first.
+          this.o.log.error(`cannot resume: ${(err as Error).message}`);
+          this.failed = true;
+          this.onHalt();
+          return;
+        }
+        this.status.paused = null;
         await this.writeStatus();
       }
     })().catch((err: unknown) => {

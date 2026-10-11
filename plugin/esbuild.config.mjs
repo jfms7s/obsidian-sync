@@ -52,7 +52,7 @@ export function cliOptions() {
     outfile: here('./dist/obsync-cli.mjs'),
     // Some dependencies are CommonJS and require() Node built-ins.
     banner: { js: "#!/usr/bin/env node\nimport { createRequire as __obsyncCreateRequire } from 'node:module';\nconst require = __obsyncCreateRequire(import.meta.url);" },
-    define: { __OBSYNC_VERSION__: JSON.stringify(manifest.version), __OBSYNC_PLUGIN_ID__: JSON.stringify(manifest.id) },
+    define: { __OBSYNC_VERSION__: JSON.stringify(manifest.version) },
     sourcemap: false,
     minify: false,
     legalComments: 'none',

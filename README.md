@@ -59,7 +59,7 @@ The image is published as `ghcr.io/jfms7s/obsync` with a tag for every release. 
 
 ### Without Docker
 
-Release archives contain the `obsync` binary for Linux (amd64 and arm64) and the example systemd unit. Run the steps below from inside the extracted archive:
+Each release has a static `obsync` binary for Linux (amd64, arm64), macOS (amd64, arm64) and Windows (amd64): `obsync_X.Y.Z_<os>_<arch>.tar.gz`, or `.zip` for Windows. The Linux archives also contain the example systemd unit. On Linux, run the steps below from inside the extracted archive:
 
 ```bash
 tar -xzf obsync_X.Y.Z_linux_amd64.tar.gz      # or _arm64
@@ -78,7 +78,7 @@ sudo sh -c 'set -a; OBSYNC_DATA_DIR=/var/lib/obsync; . /etc/obsync/obsync.env; e
 
 Put a reverse proxy with TLS in front of it (the compose example's `Caddyfile` is a few lines). The server itself speaks plain HTTP on `OBSYNC_LISTEN` (default `:8080`; the systemd unit binds `127.0.0.1:8080`). With the proxy on the same machine, set `OBSYNC_TRUSTED_PROXIES=127.0.0.1,::1` in `/etc/obsync/obsync.env`, so that rate limits see each client's own address instead of the proxy's.
 
-- The server is built for Linux. On any other system (macOS, Windows) run the Docker image.
+- On macOS and Windows, run `obsync serve` under the service manager you use (launchd, a Windows service wrapper); only the systemd unit ships. Set `OBSYNC_DATA_DIR` (or `data_dir`) and `OBSYNC_LISTEN` as on Linux. obsync makes its data folder private on Unix systems (macOS included). On Windows, new files inherit the folder's ACL, so give the data folder an ACL that only the service's account can read.
 
 ### Managing accounts and devices
 
@@ -151,7 +151,8 @@ Sign in with the same account, **unlock** with the passphrase (or the recovery w
 
 - The status bar shows *synced*, *syncing*, *offline*, *sync error*, *sync stopped* or, before the setup is finished, *not set up*. On a phone there is no status bar: the settings tab and the notices show the state. The ribbon button only starts a sync (**Sync now**).
 - **Show history of the current file** (command palette, or the file's menu) lists the versions, compares one with the file as it is now, and restores it. **Restore a deleted file** lists what was deleted.
-- **Ignored files** in the settings are patterns of files and folders this device does not sync, one per line (`Private/`, `*.pdf`, `drafts/**/*.md`). `.trash/`, `.git/`, the vault's configuration folder and operating-system junk files are never synced.
+- **Ignored files** in the settings are patterns of files and folders this device does not sync, one per line (`Private/`, `*.pdf`, `drafts/**/*.md`). `.trash/`, `.git/`, the vault's configuration folder and operating-system junk files are never synced. A new rule stops syncing the files it matches but leaves the copies already on the server and on other devices; when you save rules (either list) that match files this device already synced, the settings tab names them with their size and offers **Remove from server**. Confirmed, it deletes them on the server as if they were deleted here: this device keeps its copies, other devices move theirs to the trash unless they ignore the files too, and the server keeps them in its deleted files for the trash period. Removing the rule later uploads this device's copies again.
+- **Ignored on every device** keeps rules for all devices in `.obsyncignore` at the vault root. It is an ordinary file that syncs like a note, so a rule written once applies everywhere; Obsidian hides dot-files, so the settings tab edits it (any text editor works on a desktop). A device ignores the union of the built-in list, the configuration folder, `.obsyncignore` and its own list: it can add rules, never un-ignore one from the file. A new device applies the vault's `.obsyncignore` before anything else arrives; a changed file applies at the next sync, and removing a rule brings the matching files back. The syntax is the same as the device list: one pattern per line, `#` comments, a trailing `/` for folders, `*`, `?` and `**`; negation (`!`) and character classes (`[...]`) are not supported, and lines that use them are skipped (the settings tab lists them) while the rest applies. No rule ever matches `.obsyncignore` itself. `.gitignore` files are not read.
 - Files deleted by another device are moved the way Obsidian's **Files and links → Deleted files** setting says (system trash by default). The server keeps the content for the history view either way.
 
 ### Good to know
