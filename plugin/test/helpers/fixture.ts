@@ -55,6 +55,8 @@ export interface DeviceOptions {
   coarseMtime?: boolean;
   ignoreGlobs?: string[];
   maxFileBytes?: number;
+  /** The device's LocalState (default: a fresh one over fake-indexeddb). */
+  state?: LocalState;
 }
 
 let counter = 0;
@@ -69,7 +71,7 @@ export async function newDevice(srv: TestServer, user: User, o: DeviceOptions): 
   const random = o.random ?? seededRandom(++counter * 7919);
   const clock = o.clock ?? new ManualClock();
   const net = new Net();
-  const state = await LocalState.open(new IDBFactory(), `obsync-${o.name}`);
+  const state = o.state ?? (await LocalState.open(new IDBFactory(), `obsync-${o.name}`));
   const deps = { fetch: net.fetch, clock };
   const session = await login(state, srv.url, user.username, user.password, o.name, 'node-test', deps);
   const api = apiFor(session, deps);
