@@ -13,6 +13,7 @@ import { InvalidPathError, normalizePath } from '../util/path';
 import { isSyncedHere, readLocal } from './apply';
 import { decodeText, hashHex, prepareContent, splitChunks } from './content';
 import type { SyncContext } from './context';
+import { holdLargeDeletions, type HoldMemory } from './deletion-hold';
 import { applyKey, clearFailure, isCycleError, isDeferred, pushKey, recordFailure } from './failures';
 import { pull, resolveConflict } from './pull';
 
@@ -21,9 +22,10 @@ export const MAX_FILES_PER_ROUND = 200;
 export const MAX_BYTES_PER_ROUND = 64 << 20;
 
 /** Push bookkeeping that lives as long as the engine. */
-export class PushMemory {
+export class PushMemory implements HoldMemory {
   /** fileId → MISSING_CHUNK results seen for its pending commit. */
   readonly missingChunk = new Map<string, number>();
+  heldNotified = 0;
 }
 
 export interface PushResult {
@@ -273,7 +275,9 @@ function renamesTogether(sorted: DirtyEntry[]): DirtyEntry[] {
 /** One push round over up to MAX_FILES_PER_ROUND dirty paths. */
 export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<PushResult> {
   const result: PushResult = { worked: false, attempted: 0, committed: 0, conflicts: 0, staleEpoch: false };
-  const entries = renamesTogether((await ctx.state.dirtyEntries()).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)));
+  // Over the whole dirty set, not one round: a large deletion is held before any of it is pushed.
+  const toPush = await holdLargeDeletions(ctx, mem, await ctx.state.dirtyEntries());
+  const entries = renamesTogether(toPush.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)));
   if (entries.length === 0) return result;
   result.worked = true;
 

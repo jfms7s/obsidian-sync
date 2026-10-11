@@ -15,6 +15,7 @@ export type NoticeCode =
   | 'COMMIT_REJECTED' // the server refused a commit as invalid
   | 'INVALID_PATH' // a local path cannot be synced
   | 'CONTENT_MISSING' // the server lost a chunk of a version; it is skipped
+  | 'DELETIONS_HELD' // persistent: a large local deletion waits for the user's answer before it reaches other devices
   | 'FILE_FAILED'; // one file failed (for example a local I/O error); retried later, the rest keeps syncing
 
 export type EngineEvent =

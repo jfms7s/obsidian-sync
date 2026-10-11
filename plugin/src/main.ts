@@ -9,7 +9,7 @@ import { cryptoRandom } from './util/random';
 import { ShellController } from './shell/controller';
 import { createEngineLock } from './shell/engine-lock';
 import { describeError } from './shell/errors';
-import { HistoryModal, TrashModal } from './shell/history-modal';
+import { DeletionHoldModal, HistoryModal, TrashModal } from './shell/history-modal';
 import { noticeFor } from './shell/notices';
 import { ObsidianAdapter } from './shell/obsidian-adapter';
 import { ObsyncSettingTab } from './shell/settings-tab';
@@ -52,6 +52,13 @@ export default class ObsyncPlugin extends Plugin {
       if (e.type === 'status') {
         statusEl.setAttr('aria-label', e.detail ?? '');
         showStatus();
+      }
+      if (e.type === 'notice' && e.code === 'DELETIONS_HELD') {
+        // The answer is needed before the deletion reaches other devices: ask in a dialog rather than a notice.
+        void shell.heldDeletions().then((held) => {
+          if (held.length > 0) new DeletionHoldModal(this.app, shell, held.length).open();
+        });
+        return;
       }
       const n = noticeFor(e);
       if (n) new Notice(n.message, n.timeoutMs);

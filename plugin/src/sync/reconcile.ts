@@ -8,6 +8,7 @@ import { alreadyApplied, applyHead, isSyncedHere } from './apply';
 import { hashHex } from './content';
 import type { FileRecord } from '../state/store';
 import { ServerRollbackError, type SyncContext } from './context';
+import { forgetHeldPresent, heldDeletions } from './deletion-hold';
 import { applyKey, isCycleError, isDeferred } from './failures';
 import { pull, remoteHeads, serverLostHistory } from './pull';
 
@@ -160,9 +161,16 @@ export async function reconcile(ctx: SyncContext): Promise<ReconcileResult> {
     }
   }
 
-  // 3. Synced files that disappeared without an event.
+  // 3. Synced files that disappeared without an event; not those on hold
+  // (deletion-hold.ts): they wait for the user, and the ones that are back
+  // here leave the hold.
+  const held = new Set(await heldDeletions(state));
+  if (held.size > 0) {
+    const presentPaths = new Set([...records.values()].filter((r) => present.has(r.fileId)).map((r) => r.path));
+    await forgetHeldPresent(state, (p) => presentPaths.has(p));
+  }
   for (const rec of records.values()) {
-    if (isSyncedHere(rec) && !rec.deleted && !present.has(rec.fileId)) {
+    if (isSyncedHere(rec) && !rec.deleted && !present.has(rec.fileId) && !held.has(rec.path)) {
       await state.markDirty(rec.path);
       markedDirty++;
     }
