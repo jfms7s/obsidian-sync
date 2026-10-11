@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,7 +20,13 @@ const tempPrefix = ".tmp-"
 // FS stores blobs as files under a root directory. It is single-node only:
 // it and SweepTemp assume one server owns root, so clustered deployments use
 // object storage (blob_backend "s3") instead; config.Validate enforces this.
-type FS struct{ root string }
+type FS struct {
+	root string
+	// durable holds the directories whose entries, up to root, are known to
+	// be on disk: a Put into one fsyncs only that directory.
+	durable sync.Map               // string → struct{}
+	syncDir func(dir string) error // fsyncs dir; tests replace it
+}
 
 // NewFS creates root if needed. It does not scan the tree; stale temp files
 // are removed by SweepTemp, which the maintenance runner calls.
@@ -27,7 +34,7 @@ func NewFS(root string) (*FS, error) {
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return nil, fmt.Errorf("create blob dir: %w", err)
 	}
-	return &FS{root: root}, nil
+	return &FS{root: root, syncDir: syncDir}, nil
 }
 
 // SweepTemp removes temp files last modified more than olderThan ago. They
@@ -119,17 +126,29 @@ func (f *FS) Put(ctx context.Context, key string, r io.Reader) error {
 	return nil
 }
 
-// syncDirs fsyncs dir and each parent up to and including the root.
+// syncDirs fsyncs dir, which makes the blob's new entry durable. The first
+// time this FS writes into dir it also fsyncs each parent up to and
+// including the root, since MkdirAll may have just created dir or its
+// parents (here or in a concurrent Put); after that dir's own entry is known
+// to be durable and only dir needs a sync. This relies on obsync never
+// removing a blob directory (Delete removes files only).
 func (f *FS) syncDirs(dir string) error {
+	dir = filepath.Clean(dir)
+	if err := f.syncDir(dir); err != nil {
+		return err
+	}
+	if _, ok := f.durable.Load(dir); ok {
+		return nil
+	}
 	root := filepath.Clean(f.root)
-	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
-		if err := syncDir(d); err != nil {
+	for d := dir; d != root && d != filepath.Dir(d); {
+		d = filepath.Dir(d)
+		if err := f.syncDir(d); err != nil {
 			return err
 		}
-		if d == root || d == filepath.Dir(d) {
-			return nil
-		}
 	}
+	f.durable.Store(dir, struct{}{})
+	return nil
 }
 
 func syncDir(dir string) error {
