@@ -24,6 +24,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/app"
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
 	"github.com/jfms7s/obsidian-sync/server/internal/config"
+	"github.com/jfms7s/obsidian-sync/server/internal/jobs"
 )
 
 const usage = `usage: obsync [--config PATH] <command> [args]
@@ -32,7 +33,7 @@ commands:
   serve     run the sync server
   migrate   apply database migrations and exit
   admin     manage users and devices: obsync admin user create|list|delete|set-password,
-            obsync admin device list|revoke
+            obsync admin device list|revoke, obsync admin maintenance run
   version   print the build version
   health    probe GET /readyz on the server's own listen address; exit 0 only on 200
 
@@ -102,7 +103,7 @@ func run(ctx context.Context, args []string) error {
 	case "health":
 		return health(ctx, cfg)
 	default:
-		return adminCmd(ctx, cfg, rest)
+		return adminCmd(ctx, cfg, rest, log)
 	}
 }
 
@@ -212,7 +213,7 @@ func healthTarget(listen string) (string, error) {
 	return net.JoinHostPort(host, port), nil
 }
 
-func adminCmd(ctx context.Context, cfg config.Config, args []string) error {
+func adminCmd(ctx context.Context, cfg config.Config, args []string, log *slog.Logger) error {
 	st, err := app.OpenStore(ctx, cfg)
 	if err != nil {
 		return err
@@ -229,6 +230,10 @@ func adminCmd(ctx context.Context, cfg config.Config, args []string) error {
 	return admin.Run(ctx, args, admin.Deps{
 		Store: st, Blobs: blobs, DefaultQuotaBytes: cfg.DefaultQuotaBytes, Params: auth.DefaultParams,
 		Stdin: stdin, Stdout: stdout,
+		Maintenance: func(ctx context.Context, now time.Time) (jobs.Report, error) {
+			r := jobs.New(st, blobs, app.JobsConfig(cfg), func() time.Time { return now }, log)
+			return r.RunPass(ctx)
+		},
 	})
 }
 

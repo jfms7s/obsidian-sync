@@ -5,6 +5,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -97,13 +98,47 @@ func (r *Runner) releaseLease(ctx context.Context) {
 	}
 }
 
+// Report is what one maintenance pass did.
+type Report struct {
+	VersionsPruned int // by history retention or trash purge
+	FilesPurged    int // deleted files whose trash time ran out
+	ChunksDeleted  int
+}
+
+// ErrLeaseHeld means another process holds the maintenance lease: on a
+// single node, the running server, which keeps it while it runs.
+var ErrLeaseHeld = errors.New("another process holds the maintenance lease")
+
+// RunOnce runs one pass if this runner can take the lease, and keeps the
+// lease for the next pass. Without the lease it does nothing.
 func (r *Runner) RunOnce(ctx context.Context) error {
+	_, _, err := r.pass(ctx)
+	return err
+}
+
+// RunPass runs one pass on demand (obsync admin maintenance run) and gives
+// the lease back afterwards. It returns ErrLeaseHeld, doing nothing, while
+// another process holds the lease.
+func (r *Runner) RunPass(ctx context.Context) (Report, error) {
+	rep, ran, err := r.pass(ctx)
+	if !ran {
+		if err == nil {
+			err = ErrLeaseHeld
+		}
+		return Report{}, err
+	}
+	r.releaseLease(ctx)
+	return rep, err
+}
+
+// pass takes the lease and runs one pass; ran reports whether it got the lease.
+func (r *Runner) pass(ctx context.Context) (rep Report, ran bool, err error) {
 	ok, err := r.st.AcquireLease(ctx, leaseName, r.holder, 2*r.cfg.Interval)
 	if err != nil {
-		return fmt.Errorf("acquire lease: %w", err)
+		return Report{}, false, fmt.Errorf("acquire lease: %w", err)
 	}
 	if !ok {
-		return nil
+		return Report{}, false, nil
 	}
 	now := r.now()
 	day := 24 * time.Hour
@@ -116,26 +151,27 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	}
 	stats, err := r.st.Prune(ctx, policy)
 	if err != nil {
-		return fmt.Errorf("prune: %w", err)
+		return Report{}, true, fmt.Errorf("prune: %w", err)
 	}
-	collected, err := r.collectChunks(ctx, now.Add(-r.cfg.GCGrace).UnixMilli())
+	rep = Report{VersionsPruned: stats.VersionsDeleted, FilesPurged: stats.FilesPurged}
+	rep.ChunksDeleted, err = r.collectChunks(ctx, now.Add(-r.cfg.GCGrace).UnixMilli())
 	if err != nil {
-		return fmt.Errorf("collect chunks: %w", err)
+		return rep, true, fmt.Errorf("collect chunks: %w", err)
 	}
 	r.log.Info("maintenance done",
-		"versions_pruned", stats.VersionsDeleted, "files_purged", stats.FilesPurged, "chunks_deleted", collected)
+		"versions_pruned", rep.VersionsPruned, "files_purged", rep.FilesPurged, "chunks_deleted", rep.ChunksDeleted)
 	if r.lastSweep.IsZero() || now.Sub(r.lastSweep) >= sweepInterval {
 		r.sweepTemp(ctx)
 		r.lastSweep = now
 	}
-	return nil
+	return rep, true, nil
 }
 
-// sweepTemp removes stale blob temp files if the blob store supports it.
-// RunOnce calls it on the first pass and then at most once per
-// sweepInterval. It runs under the lease, whose TTL (two intervals) leaves ample room for one
-// walk of the blob tree. Failures are only wasted space, so they are logged
-// rather than failing the pass.
+// sweepTemp removes stale blob temp files if the blob store supports it. A
+// runner calls it on its first pass and then at most once per sweepInterval.
+// It runs under the lease, whose TTL (two intervals) leaves ample room for
+// one walk of the blob tree. Failures are only wasted space, so they are
+// logged rather than failing the pass.
 func (r *Runner) sweepTemp(ctx context.Context) {
 	sw, ok := r.blobs.(TempSweeper)
 	if !ok {
