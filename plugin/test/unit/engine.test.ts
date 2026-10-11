@@ -33,6 +33,7 @@ async function setup(script: Step[], opts: { autoRun?: boolean; webSocket?: WebS
       if (next instanceof Error) throw next;
       return next;
     },
+    history: async () => [], // the engine looks up the vault's .obsyncignore before a first pull
     heads: async (): Promise<HeadsPage> => ({ heads: [], more: false }),
   } as unknown as ApiClient;
   const r = seededRandom(1);
@@ -234,6 +235,7 @@ describe('engine errors outside the plan table', () => {
         changesCalls++;
         return since === 0 ? { versions: [version], vaultSeq: 1, more: false } : { versions: [], vaultSeq: 1, more: false };
       },
+      history: async () => [], // the engine looks up the vault's .obsyncignore before a first pull
       heads: async (): Promise<HeadsPage> => ({ heads: [{ fileId, versionId, seq: 1, deleted: true }], more: false }),
     } as unknown as ApiClient;
     const state = await LocalState.open(new IDBFactory(), 'engine-epoch');
@@ -336,6 +338,7 @@ describe('engine errors outside the plan table', () => {
         calls++;
         throw new MissingEpochKeyError(2);
       },
+      history: async () => [], // the engine looks up the vault's .obsyncignore before a first pull
       heads: async (): Promise<HeadsPage> => ({ heads: [], more: false }),
     } as unknown as ApiClient;
     const engine = new SyncEngine({
@@ -366,6 +369,7 @@ async function scripted(o: { api?: Record<string, unknown>; engine?: Partial<Con
       server.changes++;
       return { versions: [], vaultSeq: server.vaultSeq, more: false };
     },
+    history: async () => [], // the engine looks up the vault's .obsyncignore before a first pull
     heads: async (): Promise<HeadsPage> => {
       server.heads++;
       if (server.headsError) throw server.headsError;

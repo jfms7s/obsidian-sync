@@ -83,6 +83,7 @@ describe('the engine', () => {
       baseUrl: 'http://localhost',
       vaultKeys: async () => [],
       changes: async (_v: string, since: number): Promise<ChangesPage> => ({ versions: [], vaultSeq: since, more: false }),
+      history: async () => [], // the engine looks up the vault's .obsyncignore before a first pull
       heads: async (): Promise<HeadsPage> => {
         heads++;
         return { heads: [], more: false };
