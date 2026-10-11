@@ -162,3 +162,27 @@ func TestTOTPGuessesAreRateLimited(t *testing.T) {
 		t.Fatal("TOTP went off")
 	}
 }
+
+// A second begin replaces the first secret: codes from the first no longer
+// confirm.
+func TestTOTPBeginAgainReplacesThePendingSecret(t *testing.T) {
+	e := newTestEnv(t)
+	e.createUser("alice", "correct horse")
+	token, _ := e.login("alice", "correct horse")
+	var first, second obsyncv1.TotpBeginResponse
+	e.do("POST", "/v1/account/totp/begin", token, &obsyncv1.TotpBeginRequest{CurrentPassword: "correct horse"}, &first)
+	e.do("POST", "/v1/account/totp/begin", token, &obsyncv1.TotpBeginRequest{CurrentPassword: "correct horse"}, &second)
+	if first.Secret == second.Secret {
+		t.Fatal("begin returned the same secret twice")
+	}
+	status, apiErr := e.do("POST", "/v1/account/totp/confirm", token, &obsyncv1.TotpConfirmRequest{Code: codeFor(t, first.Secret, e.clk.Now())}, nil)
+	wantErr(t, status, apiErr, http.StatusForbidden, apperr.WrongPassword)
+	if status, apiErr := e.do("POST", "/v1/account/totp/confirm", token, &obsyncv1.TotpConfirmRequest{Code: codeFor(t, second.Secret, e.clk.Now())}, nil); status != http.StatusOK {
+		t.Fatalf("confirm with the second secret = %d %v", status, apiErr)
+	}
+	// Confirm without a begin.
+	e.createUser("bob", "battery staple")
+	bobTok, _ := e.login("bob", "battery staple")
+	status, apiErr = e.do("POST", "/v1/account/totp/confirm", bobTok, &obsyncv1.TotpConfirmRequest{Code: "123456"}, nil)
+	wantErr(t, status, apiErr, http.StatusBadRequest, apperr.Invalid)
+}

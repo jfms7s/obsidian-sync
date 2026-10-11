@@ -78,6 +78,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("GET /v1/keys", h.authed(h.getKeys))
 	mux.HandleFunc("PUT /v1/keys", h.authed(h.putKeys))
 	h.registerVaultRoutes(mux)
+	h.registerTOTPRoutes(mux)
 	if d.Hub != nil {
 		// The socket authenticates in its first frame, so the upgrade is
 		// limited per address. Frames after that are not rate limited; the

@@ -43,6 +43,10 @@ type Store interface {
 	TOTP(ctx context.Context, userID string) (store.TOTPState, error)
 	UseTOTPStep(ctx context.Context, userID string, step int64) (bool, error)
 	UseRecoveryCode(ctx context.Context, userID string, hash []byte) (bool, error)
+	SetPendingTOTP(ctx context.Context, userID string, secret []byte) (bool, error)
+	ConfirmTOTP(ctx context.Context, userID string, pending []byte, step int64, recoveryHashes [][]byte) (bool, error)
+	ReplaceRecoveryCodes(ctx context.Context, userID string, hashes [][]byte) (bool, error)
+	DisableTOTP(ctx context.Context, userID string) error
 }
 
 type Session struct {
