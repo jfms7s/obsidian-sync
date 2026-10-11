@@ -1,3 +1,5 @@
+//go:build libsql
+
 package store
 
 import (

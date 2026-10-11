@@ -285,7 +285,7 @@ func TestCommitTouchesReferencedChunks(t *testing.T) {
 	clk.Advance(time.Hour)
 	storetest.MustCommit(t, st, storetest.NewVersion(vault.ID, storetest.FileID(1), nil, storetest.ChunkID(1)))
 
-	raw, err := sql.Open("libsql", "file:"+path)
+	raw, err := sql.Open(store.DriverName, "file:"+path)
 	if err != nil {
 		t.Fatalf("open raw: %v", err)
 	}

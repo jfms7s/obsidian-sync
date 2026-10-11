@@ -8,9 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	// Registers the "libsql" database/sql driver.
-	_ "github.com/tursodatabase/go-libsql"
 )
 
 type Store struct {
@@ -60,7 +57,7 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 	var db *sql.DB
 	if local {
 		var err error
-		if db, err = sql.Open("libsql", opts.URL); err != nil {
+		if db, err = sql.Open(driverName, localDSN(opts.URL)); err != nil {
 			return nil, fmt.Errorf("open database: %w", err)
 		}
 		// A local libSQL file has a single writer. One pooled connection
