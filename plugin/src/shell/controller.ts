@@ -13,7 +13,7 @@ import type { EngineEvent, SyncStatus } from '../sync/events';
 import type { Clock } from '../util/clock';
 import type { Random } from '../util/random';
 import type { VaultAdapter } from '../vault/adapter';
-import { IgnoreRules } from '../vault/ignore';
+import { assertValidIgnorePatterns } from '../vault/ignore';
 import type { EngineLock } from './engine-lock';
 import { HistoryController } from './history-controller';
 
@@ -244,7 +244,7 @@ export class ShellController {
    * restarted.
    */
   async setIgnoreGlobs(globs: string[]): Promise<void> {
-    new IgnoreRules(globs); // validates
+    assertValidIgnorePatterns(globs);
     await this.o.state.setSetting('ignoreGlobs', globs);
     if (this.wanted && (this.phase === 'starting' || this.phase === 'running')) await this.restart();
   }

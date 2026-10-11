@@ -1,7 +1,6 @@
 // Simulated devices running the real engine (no UI): a fixture Device plus
 // a SyncEngine over the same state, adapter and network.
 import { SyncEngine } from '../../src/sync/engine';
-import { IgnoreRules } from '../../src/vault/ignore';
 import { newDevice, type Device, type DeviceOptions, type User } from './fixture';
 import type { TestServer } from './server';
 
@@ -28,7 +27,7 @@ export async function makeClient(srv: TestServer, user: User, o: ClientOptions):
   const build = () => {
     const engine = new SyncEngine({
       api: dev.api, state: dev.state, adapter: dev.adapter, ring: dev.ring, deviceName: dev.name, clock: dev.clock,
-      random: dev.random, ignore: new IgnoreRules(ignoreGlobs, { caseInsensitive: dev.adapter.caseInsensitive, configDir: '.obsidian' }), webSocket: o.webSocket ? dev.net.webSocket : null,
+      random: dev.random, configDir: '.obsidian', ignoreGlobs, webSocket: o.webSocket ? dev.net.webSocket : null,
       autoRun: o.autoRun ?? false, backoff: { baseMs: 20, maxMs: 200 }, maxFileBytes: dev.ctx.maxFileBytes,
     });
     engine.on((e) => dev.events.push(e));

@@ -36,7 +36,14 @@ export interface EngineOptions {
   deviceName: string;
   clock?: Clock;
   random?: Random;
-  ignore?: IgnoreRules;
+  /**
+   * The vault's configuration folder (Vault.configDir, usually .obsidian).
+   * The engine never syncs it, whatever ignoreGlobs say: it holds this
+   * device's own settings and plugins, this one's code among them.
+   */
+  configDir: string;
+  /** The user's ignore patterns (gitignore-like globs), on top of the defaults and the config folder. Throws InvalidIgnorePatternError for unsupported syntax. */
+  ignoreGlobs?: readonly string[];
   /** Opens hub WebSockets; null runs without one (tests, or a manual "sync now" mode). */
   webSocket?: WebSocketFactory | null;
   /**
@@ -100,6 +107,7 @@ export class SyncEngine {
   private readonly unavailableEpochs = new Set<number>();
 
   constructor(private readonly opts: EngineOptions) {
+    if (opts.configDir.replace(/\//g, '') === '') throw new RangeError('the vault\'s config folder must be named');
     this.clock = opts.clock ?? systemClock;
     this.random = opts.random ?? cryptoRandom;
     this.autoRun = opts.autoRun ?? true;
@@ -111,7 +119,7 @@ export class SyncEngine {
       deviceName: opts.deviceName,
       clock: this.clock,
       random: this.random,
-      ignore: opts.ignore ?? new IgnoreRules([], { caseInsensitive: opts.adapter.caseInsensitive }),
+      ignore: new IgnoreRules(opts.ignoreGlobs ?? [], { caseInsensitive: opts.adapter.caseInsensitive, configDir: opts.configDir }),
       maxFileBytes: opts.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES,
       unavailableEpochs: this.unavailableEpochs,
       emit: (e) => this.emit(e),

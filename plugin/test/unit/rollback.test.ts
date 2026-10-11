@@ -30,7 +30,7 @@ it('detects a server rollback and forgets synced versions', async () => {
   const r = seededRandom(1);
   const ring = await buildKeyring('0123456789abcdef0123456789abcdef', r.bytes(32), new Map([[1, r.bytes(32)]]), 1);
   const events: EngineEvent[] = [];
-  const engine = new SyncEngine({ api, state, adapter: new MemoryAdapter(), ring, deviceName: 'd', clock: new ManualClock(), random: r, autoRun: false, webSocket: null });
+  const engine = new SyncEngine({ configDir: '.obsidian', api, state, adapter: new MemoryAdapter(), ring, deviceName: 'd', clock: new ManualClock(), random: r, autoRun: false, webSocket: null });
   engine.on((e) => events.push(e));
   await engine.start();
   await engine.runCycle();
