@@ -391,6 +391,42 @@ describe('the settings tab', () => {
     await s.shell.stop();
   }, 120_000);
 
+  it('restores a group of deleted files from the trash view with one confirmation', async () => {
+    const user = await newUser(srv);
+    const s = await screen('laptop');
+    await s.render();
+    s.type('Server address', srv.url);
+    s.type('Username', user.username);
+    s.type('Password', user.password);
+    await s.press('Sign in');
+    s.type('Passphrase', 'a long enough passphrase');
+    s.type('Repeat the passphrase', 'a long enough passphrase');
+    await s.press('Create keys');
+    await s.press('I have saved them');
+    await s.press('Create vault');
+    await s.press('Start syncing');
+    for (const p of ['a.md', 'b.md', 'c.md']) await s.adapter.write(p, new TextEncoder().encode(`${p}\n`));
+    await s.shell.engine!.runCycle();
+    for (const p of ['a.md', 'b.md', 'c.md']) await s.adapter.remove(p);
+    await s.shell.engine!.runCycle();
+
+    await s.press('Show deleted files');
+    const trash = Modal.opened.at(-1)!;
+    await new Promise((r) => setTimeout(r, 100));
+    const buttons = () => trash.contentEl.settings.flatMap((x) => x.buttons);
+    expect(trash.contentEl.allText()).toMatch(/3 files deleted on \S/);
+    await buttons().find((b) => b.text === 'Restore all 3')!.click();
+    const confirm = Modal.opened.at(-1)!;
+    expect(confirm.contentEl.allText()).toMatch(/Restore the 3 files deleted on \S/);
+    await confirm.contentEl.settings.flatMap((x) => x.buttons).find((b) => b.text === 'Restore 3 files')!.click();
+    await new Promise((r) => setTimeout(r, 200));
+    expect([...s.adapter.snapshot().keys()].sort()).toEqual(['a.md', 'b.md', 'c.md']);
+    expect(Notice.shown.some((n) => n.message.includes('restored 3 of 3 files.'))).toBe(true);
+    expect(trash.contentEl.allText()).toMatch(/No deleted files can be restored/);
+    await s.shell.engine!.runCycle();
+    await s.shell.stop();
+  }, 120_000);
+
   it('saves ignore rules, reports bad lines by their line number, and signs out after a confirmation', async () => {
     const user = await newUser(srv);
     const s = await screen('laptop');
