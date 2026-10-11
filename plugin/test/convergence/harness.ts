@@ -50,6 +50,16 @@
 // carries on with what it read while the file has already changed under it.
 // Tokens all have the same width within a seed, so replacing one keeps the
 // file's length.
+//
+// Server maintenance. The 'maintenance' operation stops the server, runs
+// one maintenance pass (`obsync admin maintenance run --as-of`) as if the
+// server were older by a per-seed "server age" that each pass advances by
+// half a day to two days, and starts it again. The seed's server keeps
+// little (SERVER_RETENTION: two versions per file, a day of history and
+// trash, an hour of grace for unreferenced chunks), so a pass prunes
+// history, purges the trash and collects chunks while devices are
+// mid-history: a stale cursor over pruned versions, a chunk collected under
+// a pending commit, a trash entry purged while a device is offline.
 import type { ApiClient } from '../../src/api/client';
 import { NetworkError } from '../../src/api/errors';
 import { CHUNK_SIZE } from '../../src/api/limits';
@@ -150,6 +160,7 @@ export const MIN_EFFECTS_PER_100_SEEDS: Readonly<Record<string, number>> = {
   'hot-backup': 12.5,
   'ignore': 23.0,
   'lose-commit': 26.6,
+  'maintenance': 0.0,
   'network': 85.3,
   'rename': 59.8,
   'restart': 35.4,
@@ -196,8 +207,27 @@ const OPS: ReadonlyArray<readonly [string, number]> = [
   ['create', 0.2], ['edit', 0.22], ['edit-mid-cycle', 0.04], ['rename', 0.07], ['case-rename', 0.04], ['delete', 0.07],
   ['network', 0.07], ['lose-commit', 0.03], ['crash-after-commit', 0.02], ['restart', 0.03],
   ['history-restore', 0.02], ['trash-restore', 0.02], ['ignore', 0.02], ['backup', 0.01], ['hot-backup', 0.01], ['restore-backup', 0.01],
-  ['sync', 0.12],
+  ['maintenance', 0.01], ['sync', 0.11],
 ];
+
+/**
+ * The retention a seed's server runs with (see the header): short, so that
+ * a maintenance pass has something to prune, purge and collect. The
+ * smallest values the server's config accepts for the day and hour counts.
+ */
+export const SERVER_RETENTION: Readonly<Record<string, string>> = {
+  OBSYNC_HISTORY_MAX_VERSIONS: '2',
+  OBSYNC_HISTORY_DAYS: '1',
+  OBSYNC_TRASH_DAYS: '1',
+  OBSYNC_GC_GRACE_HOURS: '1',
+};
+
+const HOUR = 60 * 60_000;
+
+/** Whether a maintenance pass's output reports anything pruned, purged or deleted. */
+export function maintenanceChanged(output: string): boolean {
+  return /\b[1-9]\d* (?:versions? pruned|files? purged|chunks? deleted)/.test(output);
+}
 
 export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedReport> {
   const rnd = seededRandom(o.seed);
@@ -237,6 +267,8 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
     const written = new Set<string>();
     const removed = new Set<string>();
     let backup: string | null = null;
+    /** How much older than now the server's data is taken to be at the next maintenance pass. */
+    let serverAgeMs = 0;
     let tokenN = 0;
     const token = (c: number) => {
       // Fixed width, so replacing one token with another keeps a file's length.
@@ -522,6 +554,12 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
           await srv.restore(backup);
           did('restore of the server from its backup');
           break;
+        case 'maintenance': {
+          serverAgeMs += (12 + rnd.int(37)) * HOUR;
+          const out = await srv.maintenance(new Date(Date.now() + serverAgeMs));
+          did(`maintenance ${Math.round(serverAgeMs / HOUR)} h on: ${out.trim().replace(/^maintenance as of \S+: /, '')}`, maintenanceChanged(out));
+          break;
+        }
         default: {
           const commitsBefore = c.net.count('POST', '/commit');
           const eventsBefore = c.events.length;
