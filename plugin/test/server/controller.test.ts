@@ -311,7 +311,8 @@ describe('ShellController', () => {
     await c.logout();
     expect(c.engine).toBeNull();
     expect(await dev.state.getSession()).toBeUndefined();
-    expect(await c.start()).toEqual({ ok: false, reason: 'not-logged-in' });
+    expect(await c.start()).toEqual({ ok: false, reason: 'stopped' }); // stopped for good: only the user starts again
+    expect(await c.start({ byUser: true })).toEqual({ ok: false, reason: 'not-logged-in' });
   });
 });
 

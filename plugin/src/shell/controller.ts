@@ -33,6 +33,15 @@ export interface ShellOptions {
 
 export type StartResult = { ok: true } | { ok: false; reason: Extract<SyncSessionResult, { ok: false }>['reason'] | 'stopped' };
 
+export interface StartOptions {
+  /**
+   * The user asked to start (the settings tab's buttons): this also lifts
+   * a stopForGood. Other starts (the plugin's start at load, a restart for
+   * new settings) are refused while it holds.
+   */
+  byUser?: boolean;
+}
+
 interface Running {
   engine: SyncEngine;
   history: HistoryController;
@@ -40,12 +49,29 @@ interface Running {
   off: () => void;
 }
 
+/**
+ * Where the engine's life is:
+ * - idle: no engine, no lock.
+ * - queued: a start waits in line for the lock (another plugin instance, or
+ *   this one's engine still stopping, holds it). It gives the lock straight
+ *   back when its turn comes and nobody wants the engine any more.
+ * - starting: a start holds the lock and is opening the session and the engine.
+ * - running: an engine runs and holds the lock.
+ * - stopping: the engine is finishing its cycle; the lock is given back after.
+ */
+type Phase = 'idle' | 'queued' | 'starting' | 'running' | 'stopping';
+
 export class ShellController {
+  private phase: Phase = 'idle';
   private running: Running | null = null;
+  /** The start in progress (queued or starting), shared by every start() call meanwhile. */
   private starting: Promise<StartResult> | null = null;
+  /** The stop in progress (phase stopping). */
+  private stopping: Promise<void> | null = null;
+  /** The intent of the last start() or stop() call: last call wins. */
   private wanted = false;
-  /** doStart holds the engine lock (it is starting an engine), as opposed to waiting in line for it. */
-  private holdsLock = false;
+  /** stopForGood was called and no start({ byUser: true }) since. */
+  private held = false;
   private readonly listeners = new Set<(e: EngineEvent) => void>();
 
   constructor(private readonly o: ShellOptions) {}
@@ -72,11 +98,15 @@ export class ShellController {
 
   /**
    * Starts syncing the chosen vault once this device is set up (else says
-   * what is missing). Waits for a previous plugin instance to stop first.
+   * what is missing). Waits for a previous plugin instance, or this one's
+   * engine, to stop first. After stopForGood only a start({ byUser: true })
+   * starts; others resolve { ok: false, reason: 'stopped' }.
    */
-  start(): Promise<StartResult> {
+  start(opts: StartOptions = {}): Promise<StartResult> {
+    if (opts.byUser) this.held = false;
+    if (this.held) return Promise.resolve({ ok: false, reason: 'stopped' });
     this.wanted = true;
-    if (this.running) return Promise.resolve({ ok: true });
+    if (this.phase === 'running') return Promise.resolve({ ok: true });
     this.starting ??= this.doStart().finally(() => {
       this.starting = null;
     });
@@ -84,13 +114,17 @@ export class ShellController {
   }
 
   private async doStart(): Promise<StartResult> {
+    // This instance's previous engine first: it holds the lock until it has stopped.
+    while (this.stopping) await this.stopping.catch(() => undefined);
+    if (!this.wanted) return { ok: false, reason: 'stopped' };
+    this.phase = 'queued';
     const release = await this.o.lock.acquire();
-    this.holdsLock = true;
     if (!this.wanted) {
-      this.holdsLock = false;
+      this.phase = 'idle';
       release();
       return { ok: false, reason: 'stopped' };
     }
+    this.phase = 'starting';
     try {
       const o = this.o;
       const r = await openSyncSession({
@@ -98,38 +132,85 @@ export class ShellController {
         ...(o.clock ? { clock: o.clock } : {}), ...(o.random ? { random: o.random } : {}), ...(o.autoRun !== undefined ? { autoRun: o.autoRun } : {}),
       });
       if (!r.ok) {
-        this.holdsLock = false;
+        this.phase = 'idle';
         release();
         return r;
       }
       const off = r.engine.on((e) => {
         for (const l of [...this.listeners]) l(e);
       });
-      await r.engine.start();
+      try {
+        await r.engine.start();
+      } catch (err) {
+        off();
+        await r.engine.stop().catch(() => undefined);
+        throw err;
+      }
       this.running = { engine: r.engine, history: new HistoryController({ api: r.api, ring: r.ring, adapter: o.adapter, state: o.state }), release, off };
-      this.holdsLock = false;
+      this.phase = 'running';
       return { ok: true };
     } catch (err) {
-      this.holdsLock = false;
+      this.phase = 'idle';
       release();
       throw err;
     }
   }
 
-  /** Stops syncing (after a running cycle) and gives the lock back. Safe to call at any time, also twice. */
+  /**
+   * Stops syncing (after a running cycle) and gives the lock back. Safe to
+   * call at any time, also several times at once.
+   *
+   * When it resolves, no engine of this controller runs and it holds no
+   * lock; a start still in line for the lock (another instance holds it)
+   * gives the lock straight back when its turn comes. Unless start() was
+   * called after this stop(): the later call wins, and the engine may run.
+   * Use stopForGood when that must not happen.
+   */
   async stop(): Promise<void> {
     this.wanted = false;
-    // Still in line for the lock (a previous instance holds it): do not wait for it. The start
-    // gives the lock straight back when it is its turn and sees nobody wants the engine.
-    if (this.starting && !this.holdsLock) return;
-    await this.starting?.catch(() => undefined);
-    if (this.wanted) return; // started again while the start in progress finished: keep the engine
-    const r = this.running;
+    for (;;) {
+      if (this.wanted) return; // started again since: the later call wins
+      switch (this.phase) {
+        case 'idle':
+        case 'queued':
+          return;
+        case 'starting':
+          await this.starting?.catch(() => undefined);
+          break;
+        case 'stopping':
+          await this.stopping;
+          break;
+        case 'running':
+          this.beginStop();
+          break;
+      }
+    }
+  }
+
+  /**
+   * stop(), and no engine starts again until start({ byUser: true }): for
+   * logging out and switching vaults, which change the local state and
+   * need no engine to run meanwhile, whatever else asks to start.
+   */
+  stopForGood(): Promise<void> {
+    this.held = true;
+    return this.stop();
+  }
+
+  private beginStop(): void {
+    const r = this.running!;
     this.running = null;
-    if (!r) return;
-    r.off();
-    await r.engine.stop();
-    r.release();
+    this.phase = 'stopping';
+    this.stopping = (async () => {
+      try {
+        r.off();
+        await r.engine.stop();
+      } finally {
+        r.release();
+        this.stopping = null;
+        this.phase = 'idle';
+      }
+    })();
   }
 
   async restart(): Promise<StartResult> {
@@ -148,16 +229,21 @@ export class ShellController {
     return this.o.state.getSetting<string[]>('ignoreGlobs', []);
   }
 
-  /** Throws InvalidIgnorePatternError for unsupported syntax; otherwise saves the rules and restarts the engine with them. */
+  /**
+   * Throws InvalidIgnorePatternError for unsupported syntax; otherwise saves
+   * the rules and restarts the engine with them. A start still in line for
+   * the lock reads them when its turn comes; one already past that is
+   * restarted.
+   */
   async setIgnoreGlobs(globs: string[]): Promise<void> {
     new IgnoreRules(globs); // validates
     await this.o.state.setSetting('ignoreGlobs', globs);
-    if (this.running) await this.restart();
+    if (this.wanted && (this.phase === 'starting' || this.phase === 'running')) await this.restart();
   }
 
-  /** Stops syncing and forgets the account, its keys and the sync state on this device. */
+  /** Stops syncing for good (until the user starts again) and forgets the account, its keys and the sync state on this device. */
   async logout(): Promise<void> {
-    await this.stop();
+    await this.stopForGood();
     await account.logout(this.o.state, { fetch: this.o.fetch, ...(this.o.clock ? { clock: this.o.clock } : {}) });
   }
 }
