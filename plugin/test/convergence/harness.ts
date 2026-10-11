@@ -62,8 +62,9 @@
 // a pending commit, a trash entry purged while a device is offline. A hot
 // backup taken while the server's own pass ran (it runs one at every start)
 // holds that pass's lease; a server restored from it cannot run maintenance
-// until the lease expires (two jobs intervals), and the admin command is
-// refused meanwhile. Only then is a refusal accepted (and logged).
+// until the lease expires (ten minutes after the pass last renewed it, far
+// longer than a seed runs), and the admin command is refused meanwhile. Only
+// then is a refusal accepted (and logged).
 import type { ApiClient } from '../../src/api/client';
 import { NetworkError } from '../../src/api/errors';
 import { CHUNK_SIZE } from '../../src/api/limits';

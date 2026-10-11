@@ -391,4 +391,15 @@ func TestMaintenanceRun(t *testing.T) {
 	if err := admin.Run(ctx, []string{"maintenance", "run"}, d); err == nil || !strings.Contains(err.Error(), "try again") {
 		t.Fatalf("err = %v, want advice to try again", err)
 	}
+
+	// When the runner knows how long the lease holds, the refusal says so.
+	until := time.Now().Add(7 * time.Minute).UTC().Truncate(time.Second)
+	d, _ = deps(t, st, blobs, "")
+	d.Maintenance = func(context.Context, time.Time) (jobs.Report, error) {
+		return jobs.Report{}, &jobs.LeaseHeldError{Until: until}
+	}
+	err := admin.Run(ctx, []string{"maintenance", "run"}, d)
+	if err == nil || !strings.Contains(err.Error(), "until "+until.Format(time.RFC3339)) || !strings.Contains(err.Error(), "try again") {
+		t.Fatalf("err = %v, want the lease's expiry %s and advice to try again", err, until.Format(time.RFC3339))
+	}
 }

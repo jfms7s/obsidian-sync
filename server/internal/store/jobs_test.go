@@ -260,6 +260,24 @@ func TestReleaseLease(t *testing.T) {
 	}
 }
 
+func TestLeaseExpiry(t *testing.T) {
+	st, clk := storetest.New(t)
+	if _, held, err := st.LeaseExpiry(ctx, "maintenance"); err != nil || held {
+		t.Fatalf("free lease: held=%v err=%v", held, err)
+	}
+	if ok, _ := st.AcquireLease(ctx, "maintenance", "a", 10*time.Minute); !ok {
+		t.Fatal("a could not take the lease")
+	}
+	until, held, err := st.LeaseExpiry(ctx, "maintenance")
+	if err != nil || !held || !until.Equal(clk.Now().Add(10*time.Minute)) {
+		t.Fatalf("held lease: until=%v held=%v err=%v, want held until %v", until, held, err, clk.Now().Add(10*time.Minute))
+	}
+	clk.Advance(11 * time.Minute)
+	if _, held, err := st.LeaseExpiry(ctx, "maintenance"); err != nil || held {
+		t.Fatalf("expired lease: held=%v err=%v", held, err)
+	}
+}
+
 // DeleteDeadChunks removes a whole batch in one transaction with the same
 // per-row liveness check as DeleteDeadChunk, and reduces each vault's usage
 // by what was actually deleted there.
