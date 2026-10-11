@@ -61,6 +61,7 @@ import { ManualClock } from '../../src/util/clock';
 import { caseFold, CONFLICT_COPY_PATTERN } from '../../src/util/path';
 import { seededRandom } from '../../src/util/random';
 import { makeClient, settle, type SimClient } from '../helpers/client';
+import { CopyTracker } from './copies';
 import type { LostResponse } from '../helpers/net';
 import type { User } from '../helpers/fixture';
 import type { TestServer } from '../helpers/server';
@@ -242,40 +243,28 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
     };
     // Copies the harness itself renamed (a case-only rename of a copy): the copy keeps its name pattern but has no event under the new name.
     const renamedCopies = new Set<string>();
-    // Every copy an event reported (conflict, or a collision notice naming it), with the step it was seen at.
-    const copiesSeen: Array<{ path: string; device: string; step: number; kind: 'conflict' | 'collision' }> = [];
+    // Every copy an event reported (conflict, or a collision notice naming it), the copies on the
+    // devices after every step, and the copy names the harness deleted or renamed away.
+    const foldName = (p: string) => (fleet === 'sensitive' ? p : caseFold(p));
+    const copies = new CopyTracker(foldName);
     const eventsRead = clients.map(() => 0);
     const collectCopies = (step: number) => {
       clients.forEach((c, i) => {
         for (const e of c.events.slice(eventsRead[i])) {
-          if (e.type === 'conflict') copiesSeen.push({ path: e.conflictPath, device: c.name, step, kind: 'conflict' });
-          else if (e.type === 'notice' && e.conflictPath !== undefined) copiesSeen.push({ path: e.conflictPath, device: c.name, step, kind: 'collision' });
+          if (e.type === 'conflict') copies.report({ path: e.conflictPath, device: c.name, step, kind: 'conflict' });
+          else if (e.type === 'notice' && e.conflictPath !== undefined) copies.report({ path: e.conflictPath, device: c.name, step, kind: 'collision' });
         }
         eventsRead[i] = c.events.length;
       });
     };
-    const foldName = (p: string) => (fleet === 'sensitive' ? p : caseFold(p));
-    // The steps at which each copy name (folded) appeared on some device, having been on none: an
-    // event can name a copy later than it appeared (a device that was offline reports it when it
-    // meets it), so a removal counts from when the copy was there, not from when it was reported.
-    const copyAppearances = new Map<string, number[]>();
-    let copiesPresent = new Set<string>();
     const scanCopies = async (step: number) => {
-      const now = new Set<string>();
-      for (const c of clients) for (const p of await c.adapter.list()) if (CONFLICT_COPY_PATTERN.test(p)) now.add(foldName(p));
-      for (const n of now) if (!copiesPresent.has(n)) copyAppearances.set(n, [...(copyAppearances.get(n) ?? []), step]);
-      copiesPresent = now;
+      const onDevices: string[] = [];
+      for (const c of clients) for (const p of await c.adapter.list()) if (CONFLICT_COPY_PATTERN.test(p)) onDevices.push(p);
+      copies.scan(step, onDevices);
     };
-    /** The step the copy reported at step `seen` appeared at: its last appearance up to then (or its first after, for an event ahead of the scan). */
-    const appearedAt = (path: string, seen: number) => {
-      const steps = copyAppearances.get(foldName(path)) ?? [seen];
-      return steps.filter((x) => x <= seen).pop() ?? steps[0]!;
-    };
-    // Copy names the harness deleted or renamed away, with the step.
-    const copyRemovals: Array<{ path: string; step: number }> = [];
     let currentStep = 0;
     const noteRemoval = (p: string) => {
-      if (CONFLICT_COPY_PATTERN.test(p)) copyRemovals.push({ path: p, step: currentStep });
+      if (CONFLICT_COPY_PATTERN.test(p)) copies.removed(p, currentStep);
     };
 
     /** A new file can be created at p here: nothing there, no folder with files at p, no file where a folder must be. */
@@ -586,17 +575,16 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
     if (lost.length > 0) throw new Error(`seed ${o.seed} (${label}): lost edits ${lost.join(', ')}\n--- final\n${show(first)}\n--- log\n${log.join('\n')}`);
 
     // Copies come from merge conflicts (conflict events) and from collisions (notices that name the copy).
-    const copies = [...first.keys()].filter((p) => CONFLICT_COPY_PATTERN.test(p));
+    const finalCopies = [...first.keys()].filter((p) => CONFLICT_COPY_PATTERN.test(p));
     const reported = new Set(clients.flatMap((c) => c.events.flatMap((e) => {
       if (e.type === 'conflict') return [e.conflictPath];
       if (e.type === 'notice' && e.conflictPath !== undefined) return [e.conflictPath];
       return [];
     })));
-    const unexplained = copies.filter((p) => !reported.has(p) && !renamedCopies.has(p));
+    const unexplained = finalCopies.filter((p) => !reported.has(p) && !renamedCopies.has(p));
     if (unexplained.length > 0) throw new Error(`seed ${o.seed} (${label}): conflict copies without an event: ${unexplained.join(', ')}\n--- final\n${show(first)}\n--- log\n${log.join('\n')}`);
 
-    const finalNames = new Set([...first.keys()].map(foldName));
-    const missingCopies = copiesSeen.filter((cp) => !finalNames.has(foldName(cp.path)) && !copyRemovals.some((r) => foldName(r.path) === foldName(cp.path) && r.step > appearedAt(cp.path, cp.step)));
+    const missingCopies = copies.missing(first.keys());
     if (missingCopies.length > 0) {
       const what = missingCopies.map((cp) => `${cp.path} (${cp.kind} copy seen on ${cp.device} at step ${cp.step})`).join(', ');
       throw new Error(`seed ${o.seed} (${label}): copies reported by an event are gone: ${what}\n--- final\n${show(first)}\n--- log\n${log.join('\n')}`);
@@ -613,7 +601,7 @@ export async function runSeed(srv: TestServer, o: SeedOptions): Promise<SeedRepo
     }
 
     ok = true;
-    return { seed: o.seed, fleet, coarseMtime: coarse, files: first.size, conflictCopies: copies.length, tokens: written.size, ops, effects, log };
+    return { seed: o.seed, fleet, coarseMtime: coarse, files: first.size, conflictCopies: finalCopies.length, tokens: written.size, ops, effects, log };
   } finally {
     let stopError: unknown = null;
     for (const c of clients) {
