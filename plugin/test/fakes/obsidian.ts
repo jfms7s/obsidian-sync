@@ -668,6 +668,33 @@ export class TextComponent {
   }
 }
 
+export class ToggleComponent {
+  value = false;
+  disabled = false;
+  private handler: ((v: boolean) => unknown) | null = null;
+  setValue(v: boolean): this {
+    this.value = v;
+    return this;
+  }
+  getValue(): boolean {
+    return this.value;
+  }
+  setDisabled(d: boolean): this {
+    this.disabled = d;
+    return this;
+  }
+  onChange(cb: (v: boolean) => unknown): this {
+    this.handler = cb;
+    return this;
+  }
+  /** What the user flipping the toggle does; resolves when its work is done. */
+  async flip(): Promise<void> {
+    if (this.disabled) return;
+    this.value = !this.value;
+    await this.handler?.(this.value);
+  }
+}
+
 export class ButtonComponent {
   text = '';
   cta = false;
@@ -707,6 +734,7 @@ export class Setting {
   heading = false;
   texts: TextComponent[] = [];
   buttons: ButtonComponent[] = [];
+  toggles: ToggleComponent[] = [];
   constructor(containerEl: FakeEl) {
     containerEl.settings.push(this);
   }
@@ -730,6 +758,12 @@ export class Setting {
   }
   addTextArea(cb: (t: TextComponent) => unknown): this {
     return this.addText(cb);
+  }
+  addToggle(cb: (t: ToggleComponent) => unknown): this {
+    const t = new ToggleComponent();
+    this.toggles.push(t);
+    void cb(t);
+    return this;
   }
   addButton(cb: (b: ButtonComponent) => unknown): this {
     const b = new ButtonComponent();
