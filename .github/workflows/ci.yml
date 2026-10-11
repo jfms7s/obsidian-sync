@@ -24,6 +24,12 @@ jobs:
     with:
       seeds: "100"
 
+  binaries:
+    name: macOS and Windows binaries
+    uses: ./.github/workflows/binaries.yml
+    with:
+      version: ci-${{ github.sha }}
+
   image:
     name: Image for both platforms, and the binaries inside
     runs-on: ubuntu-24.04

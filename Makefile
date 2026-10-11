@@ -9,9 +9,13 @@ export CGO_ENABLED := 0
 
 .PHONY: tools proto proto-lint test vet lint-go lint check ci-local docker-build plugin-test plugin-build plugin-lint plugin-install vectors convergence
 
+# go install picks a toolchain from each tool's own go.mod; build them with the
+# server's instead, since golangci-lint refuses code newer than the Go it was
+# built with.
 tools: plugin/node_modules
-	GOBIN=$(BIN) go install github.com/bufbuild/buf/cmd/buf@v1.47.2
-	GOBIN=$(BIN) go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+	@set -e; export GOTOOLCHAIN="$$(cd server && go env GOVERSION)"; \
+	GOBIN=$(BIN) go install github.com/bufbuild/buf/cmd/buf@v1.47.2; \
+	GOBIN=$(BIN) go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12; \
 	GOBIN=$(BIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 
 # protoc-gen-es comes from the plugin's pinned devDependencies.

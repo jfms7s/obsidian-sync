@@ -3,7 +3,7 @@ import { Modal, Notice, Setting, type App } from 'obsidian';
 import type { HistoryEntry } from '../services/history';
 import type { ShellController } from './controller';
 import { describeError } from './errors';
-import type { HistoryController } from './history-controller';
+import { groupTrash, type HistoryController, type RestoreManyResult, type TrashGroup } from './history-controller';
 
 const when = (ms: number): string => new Date(ms).toLocaleString();
 
@@ -132,8 +132,25 @@ export class HistoryModal extends Modal {
   }
 }
 
-/** Deleted files that can still be restored. */
+/** "on Laptop" for a known device, '' for a version that does not say. */
+const onDevice = (device: string): string => (device ? ` on ${device}` : '');
+
+/** When a group's deletions happened: one time, or the range. */
+function span(g: TrashGroup): string {
+  return g.newestMs - g.oldestMs < 60_000 ? when(g.newestMs) : `${when(g.oldestMs)} to ${when(g.newestMs)}`;
+}
+
+/**
+ * Deleted files that can still be restored, grouped by the device that
+ * deleted them and when (history-controller.ts groupTrash). A group of
+ * several files can be restored with one confirmation: the undo for a
+ * large deletion that reached every device. (One made on this device is
+ * held before it spreads: deletion-hold.ts.)
+ */
 export class TrashModal extends Modal {
+  /** The last bulk restore's outcome, shown above the list until the view closes. */
+  private result: RestoreManyResult | null = null;
+
   constructor(app: App, private readonly shell: ShellController) {
     super(app);
   }
@@ -152,14 +169,29 @@ export class TrashModal extends Modal {
     }
     contentEl.createEl('p', { text: 'Loading…' });
     try {
-      const items = await history.trash();
+      // Restored files stay in the server's trash until the engine has pushed them.
+      const restored = new Set(this.result?.restored ?? []);
+      const items = (await history.trash()).filter((i) => !restored.has(i.path));
       contentEl.empty();
-      if (items.length === 0) contentEl.createEl('p', { text: 'No deleted files can be restored.' });
-      for (const item of items) {
-        new Setting(contentEl)
-          .setName(item.path)
-          .setDesc(`Deleted ${when(item.deletedAtMs)}`)
-          .addButton((b) => b.setButtonText('Restore').onClick(() => askRestore(this.app, this.shell, history, item.entry, item.path)));
+      if (this.result) this.showResult(this.result);
+      if (items.length === 0) {
+        contentEl.createEl('p', { text: 'No deleted files can be restored.' });
+        return;
+      }
+      contentEl.createEl('p', { text: 'Grouped by the device that deleted them and when. A group can be restored at once.' });
+      for (const g of groupTrash(items)) {
+        if (g.items.length > 1) {
+          new Setting(contentEl).setHeading()
+            .setName(`${g.items.length} files deleted${onDevice(g.device)}`)
+            .setDesc(span(g))
+            .addButton((b) => b.setButtonText(`Restore all ${g.items.length}`).onClick(() => this.askRestoreGroup(history, g)));
+        }
+        for (const item of g.items) {
+          new Setting(contentEl)
+            .setName(item.path)
+            .setDesc(`Deleted ${when(item.deletedAtMs)}${onDevice(item.device)}`)
+            .addButton((b) => b.setButtonText('Restore').onClick(() => askRestore(this.app, this.shell, history, item.entry, item.path)));
+        }
       }
     } catch (err) {
       contentEl.empty();
@@ -167,7 +199,31 @@ export class TrashModal extends Modal {
     }
   }
 
+  private askRestoreGroup(history: HistoryController, g: TrashGroup): void {
+    const n = g.items.length;
+    new ConfirmModal(this.app,
+      `Restore the ${n} files deleted${onDevice(g.device)} (${span(g)})? They are written to your vault and synced to your other devices as new versions. ` +
+      'A file that exists again, or whose name is taken here, is skipped and listed.',
+      `Restore ${n} files`, async () => {
+        const r = await history.restoreMany(g.items);
+        if (r.restored.length > 0) this.shell.syncNow();
+        const skipped = r.skipped.length > 0 ? `, ${r.skipped.length} skipped` : '';
+        new Notice(`Obsync: restored ${r.restored.length} of ${n} files${skipped}${r.stopped ? `. Stopped: ${r.stopped}` : '.'}`, r.skipped.length > 0 || r.stopped ? 10000 : undefined);
+        this.result = r;
+        this.contentEl.empty();
+        await this.render();
+      }).open();
+  }
+
+  private showResult(r: RestoreManyResult): void {
+    const el = this.contentEl.createDiv({ cls: 'obsync-error' });
+    if (r.skipped.length > 0) el.createDiv({ text: `Not restored (${r.skipped.length}):` });
+    for (const s of r.skipped) el.createDiv({ text: `${s.path}: ${s.reason}` });
+    if (r.stopped) el.createDiv({ text: `Stopped after ${r.restored.length + r.skipped.length} files: ${r.stopped} The rest are still listed below.` });
+  }
+
   override onClose(): void {
+    this.result = null;
     this.contentEl.empty();
   }
 }
