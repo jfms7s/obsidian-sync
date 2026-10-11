@@ -105,6 +105,12 @@ The plugin needs Obsidian 1.8.7 or newer. It is not in Obsidian's community list
 2. Put them in `<your vault>/.obsidian/plugins/obsync/` (the folder is hidden; create it if needed). On a phone, use your file manager or a sync tool to put the folder in the vault's `.obsidian/plugins/`.
 3. In Obsidian, open **Settings → Community plugins**, turn on community plugins, and enable **Obsync**.
 
+Releases after 0.1.0 carry signed build provenance for every file and for the image, so you can check that a file was built by this repository's release workflow from the tagged commit (needs the [GitHub CLI](https://cli.github.com)):
+
+```bash
+gh attestation verify main.js --repo jfms7s/obsidian-sync
+```
+
 Or install beta releases with the [BRAT](https://obsidian.md/plugins?id=obsidian42-brat) plugin, pointing it at `jfms7s/obsidian-sync`.
 
 ### Set up the first device
@@ -156,11 +162,12 @@ deploy/    Compose stack with Caddy, systemd unit
 scripts/   Release checks
 ```
 
-You need Go (the `go.mod` pins the toolchain), Node 22.12 or newer, and a C compiler (the libSQL driver needs CGO).
+You need Go (the `go.mod` pins the toolchain), Node 22.12 or newer (`.nvmrc`; on an older Node the plugin tests fail with "Cannot find native binding"), and a C compiler (the libSQL driver needs CGO).
 
 ```bash
 make tools            # buf, protoc-gen-go, golangci-lint into ./bin, and npm ci
 make check            # Go tests (-race) and vet, all linters, plugin typecheck, unit and server tests, plugin build
+make ci-local         # make check plus the rest of CI's checks: generated code and vectors up to date, buf breaking, script tests, bundle check
 make convergence      # the random multi-device suite (not part of make check): CONVERGENCE_SEEDS=1000 for the full run
 make plugin-install VAULT=~/vaults/test    # build and copy the plugin into a vault
 make docker-build     # image for this machine

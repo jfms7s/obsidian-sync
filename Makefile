@@ -5,7 +5,7 @@ export PATH := $(BIN):$(PATH)
 export GOTOOLCHAIN := auto
 export CGO_ENABLED := 1
 
-.PHONY: tools proto proto-lint test vet lint-go lint check docker-build plugin-test plugin-build plugin-lint plugin-install vectors convergence
+.PHONY: tools proto proto-lint test vet lint-go lint check ci-local docker-build plugin-test plugin-build plugin-lint plugin-install vectors convergence
 
 tools: plugin/node_modules
 	GOBIN=$(BIN) go install github.com/bufbuild/buf/cmd/buf@v1.47.2
@@ -52,8 +52,27 @@ lint: lint-go plugin-lint proto-lint
 
 # The Go and plugin tests, vet, all linters and the plugin build. CI also runs the
 # convergence suite (make convergence), the image build, and the generated-code,
-# protocol and release-script checks.
+# protocol and release-script checks; make ci-local adds those last three.
 check: test vet lint plugin-test plugin-build
+
+# What CI's checks run (.github/workflows/checks.yml), without the convergence
+# suite and the image build: make check, generated code and vectors up to date,
+# buf breaking against where this branch left origin/main, the release script
+# tests, and a bundle that needs nothing but obsidian. Regenerating must not
+# change the tree, so a hand-edited vector or a stale generated file fails it.
+ci-local: check
+	@set -e; \
+	before="$$( { git status --porcelain; git diff; } | sha256sum)"; \
+	$(MAKE) --no-print-directory proto vectors; \
+	after="$$( { git status --porcelain; git diff; } | sha256sum)"; \
+	if [ "$$before" != "$$after" ]; then \
+		echo "ci-local: make proto vectors changed the tree: generated code or vectors are out of date" >&2; \
+		git status --porcelain >&2; exit 1; \
+	fi
+	buf breaking --against ".git#ref=$$(git merge-base origin/main HEAD)"
+	scripts/check-glibc_test.sh
+	scripts/check-release-version_test.sh
+	! grep -oE 'require\("[^"]+"\)' plugin/dist/main.js | grep -v 'require("obsidian")'
 
 # make plugin-install VAULT=~/vaults/test
 plugin-install: plugin-build

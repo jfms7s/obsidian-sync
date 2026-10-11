@@ -55,7 +55,7 @@ jobs:
           cache-dependency-path: server/go.sum
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: plugin/package-lock.json
       - name: Run this shard's seeds
