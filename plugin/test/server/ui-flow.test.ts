@@ -251,6 +251,18 @@ describe('the settings tab', () => {
     expect(Notice.shown.some((n) => n.message.includes('could not start'))).toBe(true);
     expect(s.text()).toMatch(/could not start/);
     start.mockRestore();
+
+    // The ready screen's Start says why, too.
+    await s.press('Start syncing');
+    expect(s.setting('Sync').heading).toBe(true);
+    await s.shell.stop();
+    await s.render();
+    Notice.shown = [];
+    const again = vi.spyOn(s.shell, 'start').mockResolvedValueOnce({ ok: false, reason: 'locked' });
+    await s.press('Start');
+    expect(Notice.shown.map((n) => n.message)).toEqual(['Obsync: Sync could not start: this device is locked. Open the settings again to unlock it.']);
+    expect(s.text()).toMatch(/could not start/);
+    again.mockRestore();
     await s.shell.stop();
   }, 120_000);
 

@@ -3,6 +3,7 @@ import type { ApiClient } from '../api/client';
 import { ApiError, ErrorCode } from '../api/errors';
 import type { SealedVaultKey } from '../api/types';
 import { decryptVaultName, encryptVaultName } from '../crypto/objects';
+import { CryptoError } from '../crypto/primitives';
 import type { UserKeys } from '../crypto/userkeys';
 import { buildKeyring, deriveEpochKeys, openSealedKey, sealKey, type VaultKeyring } from '../crypto/vaultkeys';
 import type { LocalState, PendingVault, Session, StoredVault } from '../state/store';
@@ -31,10 +32,23 @@ export async function openVaultKeys(sealed: SealedVaultKey[], vaultId: string, s
     if (k.epoch === 0) namingKey = raw;
     else epochKeys.set(k.epoch, raw);
   }
-  if (!namingKey) throw new Error(`vault ${vaultId} has no naming key for this account`);
+  if (!namingKey) throw new NoNamingKeyError(vaultId);
   return { namingKey, epochKeys };
 }
 
+/** The vault's keys hold no naming key sealed to this account. */
+export class NoNamingKeyError extends Error {
+  constructor(vaultId: string) {
+    super(`vault ${vaultId} has no naming key for this account`);
+    this.name = 'NoNamingKeyError';
+  }
+}
+
+/**
+ * The account's vaults. A vault whose keys do not open or whose name does
+ * not verify gets name null; a network or server failure rejects, so it is
+ * not mistaken for an unreadable vault.
+ */
 export async function listRemoteVaults(api: ApiClient, session: Session, keys: UserKeys): Promise<RemoteVaultSummary[]> {
   const out: RemoteVaultSummary[] = [];
   for (const v of await api.listVaults()) {
@@ -42,7 +56,8 @@ export async function listRemoteVaults(api: ApiClient, session: Session, keys: U
     try {
       const opened = await openVaultKeys(await api.vaultKeys(v.vaultId), v.vaultId, session, keys);
       name = await decryptVaultName(await buildKeyring(v.vaultId, opened.namingKey, opened.epochKeys, v.currentEpoch), v.encName, keys.signPub);
-    } catch {
+    } catch (err) {
+      if (!(err instanceof CryptoError || err instanceof NoNamingKeyError)) throw err;
       name = null;
     }
     out.push({ vaultId: v.vaultId, name, seq: v.seq, createdAtMs: v.createdAtMs, owned: v.ownerId === session.userId });

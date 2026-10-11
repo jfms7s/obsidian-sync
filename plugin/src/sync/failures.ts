@@ -16,6 +16,7 @@ import { ApiError, NetworkError } from '../api/errors';
 import { CryptoError } from '../crypto/primitives';
 import { MissingEpochKeyError } from '../crypto/vaultkeys';
 import { backoffDelay, type BackoffPolicy } from '../util/backoff';
+import { errorMessage } from '../util/errors';
 import { ServerRollbackError, type SyncContext } from './context';
 import type { NoticeCode } from './events';
 
@@ -61,7 +62,7 @@ export async function clearFailure(ctx: SyncContext, key: string): Promise<void>
 export async function recordFailure(ctx: SyncContext, key: string, path: string, err: unknown): Promise<void> {
   const prev = await ctx.state.getFailure(key);
   const attempts = (prev?.attempts ?? 0) + 1;
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errorMessage(err);
   await ctx.state.putFailure({ key, attempts, nextAt: ctx.clock.now() + backoffDelay(attempts - 1, ctx.random, FAILURE_BACKOFF), message });
   if (attempts === 1) {
     const code: NoticeCode = err instanceof FileSyncError ? err.code : err instanceof CryptoError ? 'DECRYPT_FAILED' : 'FILE_FAILED';

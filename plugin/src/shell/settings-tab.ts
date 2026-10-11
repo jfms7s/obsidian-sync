@@ -6,7 +6,7 @@ import { Notice, PluginSettingTab, Setting, type App, type ButtonComponent, type
 import type { FetchLike } from '../api/client';
 import { PASSPHRASE_MIN_CHARS, PASSPHRASE_MIN_WORDS } from '../services/account';
 import type { LocalState } from '../state/store';
-import type { ShellController } from './controller';
+import type { ShellController, StartResult } from './controller';
 import { describeError } from './errors';
 import { ConfirmModal, TrashModal } from './history-modal';
 import { formatIgnoreText, parseIgnoreText } from './ignore-text';
@@ -262,16 +262,21 @@ export class ObsyncSettingTab extends PluginSettingTab {
     this.ignoreEditor('Start syncing', async (globs, button) => {
       const started = await this.setup.confirmIgnores(globs);
       this.form.ignoreText = null;
-      if (!started.ok) {
-        const message = `Sync could not start: ${START_FAILURES[started.reason]}`;
-        this.errorEl?.setText(message);
-        new Notice(`Obsync: ${message}`, 10000);
-        button.setDisabled(false);
-        return;
-      }
-      new Notice('Obsync: sync has started.');
-      await this.render();
+      await this.reportStart(started, button);
     }, true);
+  }
+
+  /** After a start the user asked for: say why sync did not start (the button works again), or that it did. */
+  private async reportStart(started: StartResult, button: ButtonComponent): Promise<void> {
+    if (!started.ok) {
+      const message = `Sync could not start: ${START_FAILURES[started.reason]}`;
+      this.errorEl?.setText(message);
+      new Notice(`Obsync: ${message}`, 10000);
+      button.setDisabled(false);
+      return;
+    }
+    new Notice('Obsync: sync has started.');
+    await this.render();
   }
 
   private async renderReady(): Promise<void> {
@@ -286,8 +291,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
       }));
     if (this.shell.status === 'stopped') {
       new Setting(this.containerEl).setName('Sync is not running').addButton((b) => b.setButtonText('Start').setCta().onClick(this.action(b, async () => {
-        await this.shell.start({ byUser: true });
-        await this.render();
+        await this.reportStart(await this.shell.start({ byUser: true }), b);
       })));
     }
     await this.renderHeldDeletions();
@@ -341,13 +345,16 @@ export class ObsyncSettingTab extends PluginSettingTab {
     const f = this.form;
     const errors = this.containerEl.createDiv({ cls: 'obsync-error' });
     new Setting(this.containerEl).setName('Ignored files').setDesc('Patterns of files and folders this device does not sync, one per line. A folder ends with a slash. Lines starting with # are comments.')
-      .addTextArea(async (a) => {
+      .addTextArea((a) => {
         a.inputEl.rows = 6;
         a.inputEl.spellcheck = false;
         a.inputEl.setAttr('autocapitalize', 'off');
         a.inputEl.setAttr('autocorrect', 'off');
         a.inputEl.setAttr('autocomplete', 'off');
-        a.setValue(f.ignoreText ?? formatIgnoreText(await this.shell.ignoreGlobs())).onChange((v) => (f.ignoreText = v));
+        a.onChange((v) => (f.ignoreText = v));
+        void (async () => {
+          a.setValue(f.ignoreText ?? formatIgnoreText(await this.shell.ignoreGlobs()));
+        })().catch((err: unknown) => errors.setText(describeError(err).message));
       })
       .addButton((b) => {
         b.setButtonText(buttonText).onClick(this.action(b, async () => {

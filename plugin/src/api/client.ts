@@ -13,6 +13,7 @@ import { bs, toHex, utf8 } from '../util/bytes';
 import { systemClock, type Clock } from '../util/clock';
 import { ApiError, NetworkError, TruncatedBodyError } from './errors';
 import { RateGate } from './gate';
+import { errorMessage } from '../util/errors';
 import { toSafeNumber } from '../util/int';
 import {
   CHANGES_PAGE_SIZE, COMMIT_BODY_LIMIT, HEADS_PAGE_SIZE, LOGIN_BODY_LIMIT, MAX_CHUNK_EXISTS_BATCH, MAX_COMMITS_PER_REQUEST, MAX_PASSWORD_BYTES,
@@ -106,7 +107,7 @@ function num(v: bigint, what: string): number {
   try {
     return toSafeNumber(v, what);
   } catch (err) {
-    throw new NetworkError(`malformed response: ${(err as Error).message}`, err);
+    throw new NetworkError(`malformed response: ${errorMessage(err)}`, err);
   }
 }
 
@@ -159,7 +160,7 @@ export class ApiClient {
       if (opts.body) req.body = bs(opts.body);
       resp = await this.fetchFn(this.baseUrl + path, req);
     } catch (err) {
-      throw new NetworkError(`${method} ${path}: ${(err as Error)?.message ?? String(err)}`, err);
+      throw new NetworkError(`${method} ${path}: ${errorMessage(err)}`, err);
     }
     if (resp.status >= 200 && resp.status < 300) return resp;
     throw await this.toError(resp);

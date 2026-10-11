@@ -2,7 +2,8 @@
 import type { ApiClient } from '../api/client';
 import type { RemoteVersion } from '../api/types';
 import { decryptMeta, fileIdFor, type FileMeta } from '../crypto/objects';
-import type { VaultKeyring } from '../crypto/vaultkeys';
+import { CryptoError } from '../crypto/primitives';
+import { MissingEpochKeyError, type VaultKeyring } from '../crypto/vaultkeys';
 import type { LocalState } from '../state/store';
 import { toHex } from '../util/bytes';
 import { normalizePath } from '../util/path';
@@ -52,7 +53,9 @@ async function describe(ring: VaultKeyring, versions: RemoteVersion[]): Promise<
     let meta: FileMeta | null = null;
     try {
       meta = await decryptMeta(ring, v.epoch, v.fileId, v.versionId, v.encMeta);
-    } catch {
+    } catch (err) {
+      // Damaged metadata: shown as unreadable. A key this device does not have yet is said so instead.
+      if (!(err instanceof CryptoError) || err instanceof MissingEpochKeyError) throw err;
       meta = null;
     }
     out.push({ version: v, versionId: toHex(v.versionId), meta });

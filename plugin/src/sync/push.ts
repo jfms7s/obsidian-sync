@@ -21,6 +21,9 @@ import { pull, resolveConflict } from './pull';
 export const MAX_FILES_PER_ROUND = 200;
 export const MAX_BYTES_PER_ROUND = 64 << 20;
 
+/** The refusal fingerprint of a refused deletion (a content refusal holds the content hash). */
+const DELETION_REFUSED = 'deleted';
+
 /** Push bookkeeping that lives as long as the engine. */
 export class PushMemory implements HoldMemory {
   /** fileId → MISSING_CHUNK results seen for its pending commit. */
@@ -154,6 +157,11 @@ async function buildOp(ctx: SyncContext, entry: DirtyEntry, taken: ReadonlySet<s
 
   if (!local) {
     if (!synced || rec.deleted) {
+      await state.clearDirty(entry.path, entry.gen);
+      return null;
+    }
+    // The server refused this deletion: not sent again until the file comes back (the refusal is dropped on the next commit of the path).
+    if (refusal?.fingerprint === DELETION_REFUSED) {
       await state.clearDirty(entry.path, entry.gen);
       return null;
     }
@@ -357,7 +365,7 @@ export async function pushRound(ctx: SyncContext, mem: PushMemory): Promise<Push
         case ErrorCode.INVALID: {
           // Not retried until the file changes.
           await ctx.state.deletePending(p.fileId);
-          await ctx.state.putRefusal({ path: p.path, fingerprint: p.contentHash ?? 'deleted', message: r.error?.message ?? 'rejected' });
+          await ctx.state.putRefusal({ path: p.path, fingerprint: p.contentHash ?? DELETION_REFUSED, message: r.error?.message ?? 'rejected' });
           // A resent pending commit may describe an older state of the
           // file: then the entry stays and the next round looks at the file
           // as it is now (the refusal only covers the refused content).
