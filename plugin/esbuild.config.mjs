@@ -5,7 +5,8 @@
 //   node esbuild.config.mjs            one development build (inline source map)
 //   node esbuild.config.mjs production a release build (no source map)
 //   node esbuild.config.mjs watch      rebuild on every change
-import { copyFileSync, mkdirSync } from 'node:fs';
+//   node esbuild.config.mjs cli        dist/obsync-cli.mjs, the headless client
+import { chmodSync, copyFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import esbuild from 'esbuild';
 
@@ -35,6 +36,30 @@ export function optionsFor(mode) {
 
 export const options = optionsFor(mode);
 
+const manifest = JSON.parse(readFileSync(here('../manifest.json'), 'utf8'));
+
+/**
+ * obsync-cli (plugin/cli/, spec 2026-10-11): one ES module for Node with
+ * every dependency inlined, so `node obsync-cli.mjs` is all it takes.
+ */
+export function cliOptions() {
+  return {
+    entryPoints: [here('./cli/bin.ts')],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    target: 'node22',
+    outfile: here('./dist/obsync-cli.mjs'),
+    // Some dependencies are CommonJS and require() Node built-ins.
+    banner: { js: "#!/usr/bin/env node\nimport { createRequire as __obsyncCreateRequire } from 'node:module';\nconst require = __obsyncCreateRequire(import.meta.url);" },
+    define: { __OBSYNC_VERSION__: JSON.stringify(manifest.version) },
+    sourcemap: false,
+    minify: false,
+    legalComments: 'none',
+    logLevel: 'info',
+  };
+}
+
 export function copyStatic() {
   mkdirSync(here('./dist'), { recursive: true });
   copyFileSync(here('../manifest.json'), here('./dist/manifest.json'));
@@ -42,7 +67,10 @@ export function copyStatic() {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (mode === 'watch') {
+  if (mode === 'cli') {
+    await esbuild.build(cliOptions());
+    chmodSync(here('./dist/obsync-cli.mjs'), 0o755);
+  } else if (mode === 'watch') {
     const ctx = await esbuild.context(options);
     copyStatic();
     await ctx.watch();

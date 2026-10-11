@@ -278,6 +278,28 @@ describe('FsAdapter on a real disk', () => {
     off();
   });
 
+  it('takes nothing for deleted once the vault folder is another one (a disk unmounted under it)', async () => {
+    const parent = await tempDir();
+    const root = join(parent, 'vault');
+    await put(root, 'a.md', 'a');
+    await put(root, 'dir/b.md', 'b');
+    const errors: Error[] = [];
+    const adapter = await FsAdapter.create(root, { onWatchError: (e) => errors.push(e) });
+    const events: AdapterEvent[] = [];
+    const off = adapter.watch((e) => events.push(e));
+    await settle(adapter);
+    // Unmounted: an empty folder of the same name is left where the vault was.
+    await rename(root, join(parent, 'mounted-elsewhere'));
+    await mkdir(root);
+    await settle(adapter);
+    expect(events.filter((e) => e.type === 'delete')).toEqual([]);
+    expect(errors.some((e) => /another folder now/.test(e.message))).toBe(true);
+    await expect(adapter.list()).rejects.toThrow(/another folder now/);
+    await expect(adapter.stat('a.md')).rejects.toThrow(/another folder now/);
+    await expect(adapter.read('a.md')).rejects.toThrow(/another folder now/);
+    off();
+  });
+
   it('opens a vault through a link to it', async () => {
     const real = await tempDir();
     const parent = await tempDir();

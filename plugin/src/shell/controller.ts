@@ -11,12 +11,15 @@ import type { LocalState } from '../state/store';
 import { heldDeletions, releaseHeldDeletions, restoreHeldDeletions } from '../sync/deletion-hold';
 import { composeIgnoreRules, type SyncEngine } from '../sync/engine';
 import type { EngineEvent, SyncStatus } from '../sync/events';
-import type { Clock } from '../util/clock';
+import type { RestartBase } from '../sync/settings-files';
+import { systemClock, type Clock } from '../util/clock';
 import type { Random } from '../util/random';
 import type { VaultAdapter } from '../vault/adapter';
+import { OBSYNC_PLUGIN_ID, type SettingsSyncPolicy } from '../vault/config-policy';
 import { approveServerRemoval, newlyIgnored, type NewlyIgnored } from '../sync/server-removal';
 import { assertValidIgnorePatterns, parseIgnoreFile, VAULT_IGNORE_FILE, type IgnoreRules, type ParsedIgnoreFile } from '../vault/ignore';
 import type { EngineLock } from './engine-lock';
+import { startHeartbeat, type HeartbeatSink } from './heartbeat';
 import { HistoryController } from './history-controller';
 
 export interface ShellOptions {
@@ -33,6 +36,10 @@ export interface ShellOptions {
   random?: Random;
   /** SyncEngine's maxBytesPerRound (main.ts sets less on a phone). */
   maxBytesPerRound?: number;
+  /** This plugin's folder name under plugins/ (manifest.dir): its files never sync, whatever the settings sync policy says. */
+  ownPluginFolders?: readonly string[];
+  /** Where to keep the heartbeat that tells obsync-cli on this folder to hold off while the engine runs (none: no heartbeat). */
+  heartbeat?: HeartbeatSink;
 }
 
 export type StartResult = { ok: true } | { ok: false; reason: Extract<SyncSessionResult, { ok: false }>['reason'] | 'stopped' };
@@ -51,6 +58,8 @@ interface Running {
   history: HistoryController;
   release: () => void;
   off: () => void;
+  /** Stops the heartbeat and removes its file. */
+  stopHeartbeat: () => Promise<void>;
 }
 
 /**
@@ -79,6 +88,8 @@ export class ShellController {
   /** The last start that got as far as opening the session found this device not set up. */
   private lastStartNeedsSetup = false;
   private readonly listeners = new Set<(e: EngineEvent) => void>();
+  /** Settings files written from other devices since the plugin loaded (SyncContext.restartBases): kept across engine restarts. */
+  private readonly restartBases = new Map<string, RestartBase>();
 
   constructor(private readonly o: ShellOptions) {}
 
@@ -142,6 +153,8 @@ export class ShellController {
         state: o.state, adapter: o.adapter, webSocket: o.webSocket, fetch: o.fetch, configDir: o.configDir,
         ...(o.clock ? { clock: o.clock } : {}), ...(o.random ? { random: o.random } : {}), ...(o.autoRun !== undefined ? { autoRun: o.autoRun } : {}),
         ...(o.maxBytesPerRound !== undefined ? { maxBytesPerRound: o.maxBytesPerRound } : {}),
+        ...(o.ownPluginFolders ? { ownPluginFolders: o.ownPluginFolders } : {}),
+        restartBases: this.restartBases,
       });
       this.lastStartNeedsSetup = !r.ok;
       if (!r.ok) {
@@ -149,6 +162,8 @@ export class ShellController {
         release();
         return r;
       }
+      // Read before the engine starts: a failure after it would leave an engine no stop() reaches.
+      const device = (await o.state.getSession())?.deviceName ?? '';
       const off = r.engine.on((e) => {
         for (const l of [...this.listeners]) l(e);
       });
@@ -159,7 +174,8 @@ export class ShellController {
         await r.engine.stop().catch(() => undefined);
         throw err;
       }
-      this.running = { engine: r.engine, history: new HistoryController({ api: r.api, ring: r.ring, adapter: o.adapter, state: o.state }), release, off };
+      const stopHeartbeat = o.heartbeat ? startHeartbeat(o.heartbeat, o.clock ?? systemClock, device) : async () => undefined;
+      this.running = { engine: r.engine, history: new HistoryController({ api: r.api, ring: r.ring, adapter: o.adapter, state: o.state }), release, off, stopHeartbeat };
       this.phase = 'running';
       return { ok: true };
     } catch (err) {
@@ -219,6 +235,7 @@ export class ShellController {
         r.off();
         await r.engine.stop();
       } finally {
+        await r.stopHeartbeat();
         r.release();
         this.stopping = null;
         this.phase = 'idle';
@@ -271,17 +288,20 @@ export class ShellController {
   async setIgnoreGlobs(globs: string[]): Promise<NewlyIgnored> {
     assertValidIgnorePatterns(globs);
     const vaultText = await this.vaultIgnoreText();
-    const before = this.rules(await this.o.state.getIgnoreGlobs(), vaultText);
+    const before = await this.rules(await this.o.state.getIgnoreGlobs(), vaultText);
     await this.o.state.setIgnoreGlobs(globs);
     if (this.wanted && (this.phase === 'starting' || this.phase === 'running')) await this.restart();
-    return newlyIgnored(this.o.state, before, this.rules(globs, vaultText));
+    return newlyIgnored(this.o.state, before, await this.rules(globs, vaultText));
   }
 
   /** This device's ignore rules with these device globs and this .obsyncignore text. */
-  private rules(deviceGlobs: readonly string[], vaultText: string): IgnoreRules {
+  private async rules(deviceGlobs: readonly string[], vaultText: string): Promise<IgnoreRules> {
     // Globs saved before validation existed could be unsupported: skip them here as the vault file does.
     const device = parseIgnoreFile(deviceGlobs.join('\n')).globs;
-    return composeIgnoreRules({ configDir: this.o.configDir, caseInsensitive: this.o.adapter.caseInsensitive, ignoreGlobs: device, vaultGlobs: parseIgnoreFile(vaultText).globs });
+    return composeIgnoreRules({
+      configDir: this.o.configDir, caseInsensitive: this.o.adapter.caseInsensitive, ignoreGlobs: device, vaultGlobs: parseIgnoreFile(vaultText).globs,
+      settingsSync: await this.o.state.getSettingsSync(), ownPluginFolders: this.o.ownPluginFolders,
+    });
   }
 
   /**
@@ -311,11 +331,52 @@ export class ShellController {
    */
   async setVaultIgnoreText(text: string): Promise<ParsedIgnoreFile & { newlyIgnored: NewlyIgnored }> {
     const deviceGlobs = await this.o.state.getIgnoreGlobs();
-    const before = this.rules(deviceGlobs, await this.vaultIgnoreText());
+    const before = await this.rules(deviceGlobs, await this.vaultIgnoreText());
     const exists = (await this.o.adapter.stat(VAULT_IGNORE_FILE)) !== null;
     if (exists || text.trim() !== '') await this.o.adapter.write(VAULT_IGNORE_FILE, new TextEncoder().encode(text));
     this.running?.engine.requestReconcile();
-    return { ...parseIgnoreFile(text), newlyIgnored: await newlyIgnored(this.o.state, before, this.rules(deviceGlobs, text)) };
+    return { ...parseIgnoreFile(text), newlyIgnored: await newlyIgnored(this.o.state, before, await this.rules(deviceGlobs, text)) };
+  }
+
+  /** This device's settings sync policy (config-policy.ts). */
+  settingsSync(): Promise<SettingsSyncPolicy> {
+    return this.o.state.getSettingsSync();
+  }
+
+  /** Saves the settings sync policy and restarts the engine with it, as setIgnoreGlobs does. */
+  async setSettingsSync(policy: SettingsSyncPolicy): Promise<void> {
+    await this.o.state.setSettingsSync(policy);
+    if (this.wanted && (this.phase === 'starting' || this.phase === 'running')) await this.restart();
+  }
+
+  /**
+   * The community plugins installed in this vault's config folder (a folder
+   * under plugins/ with a manifest.json), by folder name, with the name
+   * their manifest gives; Obsync itself is left out. Sorted by name.
+   */
+  async installedPlugins(): Promise<Array<{ id: string; name: string }>> {
+    const dir = this.o.configDir.replace(/^\/+|\/+$/g, '');
+    const plugins = `${dir}/plugins`;
+    const own = new Set([OBSYNC_PLUGIN_ID, ...(this.o.ownPluginFolders ?? [])]);
+    // Only the config folder, its plugins folder and each plugin's own folder are entered.
+    const skip = (folder: string): boolean => folder !== dir && folder !== plugins && !(folder.startsWith(`${plugins}/`) && !folder.slice(plugins.length + 1).includes('/'));
+    const out: Array<{ id: string; name: string }> = [];
+    for (const path of await this.o.adapter.list(skip)) {
+      const m = /^(.+)\/manifest\.json$/.exec(path);
+      if (!m || !m[1]!.startsWith(`${plugins}/`)) continue;
+      const id = m[1]!.slice(plugins.length + 1);
+      if (id.includes('/') || own.has(id)) continue;
+      let name = id;
+      try {
+        const data = await this.o.adapter.read(path);
+        const parsed: unknown = data ? JSON.parse(new TextDecoder().decode(data)) : null;
+        if (parsed && typeof parsed === 'object' && typeof (parsed as { name?: unknown }).name === 'string') name = (parsed as { name: string }).name;
+      } catch {
+        // an unreadable manifest: the folder name will do
+      }
+      out.push({ id, name });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /** Stops syncing for good (until the user starts again) and forgets the account, its keys and the sync state on this device. */
