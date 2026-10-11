@@ -14,7 +14,7 @@ import type { EngineEvent, SyncStatus } from '../sync/events';
 import type { Clock } from '../util/clock';
 import type { Random } from '../util/random';
 import type { VaultAdapter } from '../vault/adapter';
-import { assertValidIgnorePatterns } from '../vault/ignore';
+import { assertValidIgnorePatterns, parseIgnoreFile, VAULT_IGNORE_FILE, type ParsedIgnoreFile } from '../vault/ignore';
 import type { EngineLock } from './engine-lock';
 import { HistoryController } from './history-controller';
 
@@ -270,6 +270,27 @@ export class ShellController {
     assertValidIgnorePatterns(globs);
     await this.o.state.setIgnoreGlobs(globs);
     if (this.wanted && (this.phase === 'starting' || this.phase === 'running')) await this.restart();
+  }
+
+  /** The text of the vault's .obsyncignore ('' when there is none). */
+  async vaultIgnoreText(): Promise<string> {
+    const data = await this.o.adapter.read(VAULT_IGNORE_FILE);
+    return data === null ? '' : new TextDecoder().decode(data);
+  }
+
+  /**
+   * Saves text as the vault's .obsyncignore, the rules every device
+   * applies (no file is created for empty text when there is none), and
+   * asks the engine to compare everything with the new rules and push the
+   * file: Obsidian reports no event for a hidden file. Lines with
+   * unsupported syntax are saved too and skipped by every device; they are
+   * returned in rejected.
+   */
+  async setVaultIgnoreText(text: string): Promise<ParsedIgnoreFile> {
+    const exists = (await this.o.adapter.stat(VAULT_IGNORE_FILE)) !== null;
+    if (exists || text.trim() !== '') await this.o.adapter.write(VAULT_IGNORE_FILE, new TextEncoder().encode(text));
+    this.running?.engine.requestReconcile();
+    return parseIgnoreFile(text);
   }
 
   /** Stops syncing for good (until the user starts again) and forgets the account, its keys and the sync state on this device. */
