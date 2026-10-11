@@ -66,7 +66,7 @@ func (h *handlers) putChunk(w http.ResponseWriter, r *http.Request, sess auth.Se
 		h.writeError(w, r, err)
 		return
 	}
-	if err := requireMediaType(r, "application/octet-stream", ""); err != nil {
+	if err := requireMediaType(r, octetContentType, ""); err != nil {
 		h.writeError(w, r, err)
 		return
 	}
@@ -98,10 +98,9 @@ func (h *handlers) getChunk(w http.ResponseWriter, r *http.Request, sess auth.Se
 	}
 	defer rc.Close()
 	hdr := w.Header()
-	hdr.Set("Content-Type", "application/octet-stream")
+	hdr.Set("Content-Type", octetContentType)
 	hdr.Set("Content-Length", strconv.FormatInt(size, 10))
-	hdr.Set("Cache-Control", "no-store")
-	hdr.Set("X-Content-Type-Options", "nosniff")
+	noStoreHeaders(w)
 	// Bound the download so a client that stops reading cannot hold the
 	// connection and this handler forever. Writers that cannot set deadlines
 	// (http.ErrNotSupported) are left unbounded. net/http flushes the tail
