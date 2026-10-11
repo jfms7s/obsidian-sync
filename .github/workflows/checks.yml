@@ -65,6 +65,13 @@ jobs:
       - name: The bundle needs nothing but obsidian
         run: |
           ! grep -oE 'require\("[^"]+"\)' plugin/dist/main.js | grep -v 'require("obsidian")'
+      # The headless client (plugin/cli/): its tests run in make plugin-test; this builds the
+      # file a release attaches and checks that it starts under the Node the repo pins.
+      - run: make cli-build
+      - name: The CLI bundle runs
+        run: |
+          node plugin/dist/obsync-cli.mjs --version
+          node plugin/dist/obsync-cli.mjs --help > /dev/null
 
   generated:
     name: Generated code and test vectors are up to date

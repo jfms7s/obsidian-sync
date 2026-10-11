@@ -9,6 +9,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
     "build": "node esbuild.config.mjs production",
+    "build:cli": "node esbuild.config.mjs cli",
     "dev": "node esbuild.config.mjs watch",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
