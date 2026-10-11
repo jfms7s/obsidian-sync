@@ -1,6 +1,7 @@
 // Simulated devices running the real engine (no UI): a fixture Device plus
 // a SyncEngine over the same state, adapter and network.
 import { SyncEngine } from '../../src/sync/engine';
+import type { RestartBase } from '../../src/sync/settings-files';
 import { SETTINGS_SYNC_OFF, type SettingsSyncPolicy } from '../../src/vault/config-policy';
 import { newDevice, type Device, type DeviceOptions, type User } from './fixture';
 import type { TestServer } from './server';
@@ -9,8 +10,10 @@ export interface SimClient extends Device {
   engine: SyncEngine;
   /** The device's ignore globs; setIgnore changes them. */
   ignoreGlobs: string[];
-  /** A fresh engine over the same state and adapter, as after an app restart. */
+  /** A fresh engine over the same state and adapter, as after a settings change (the plugin keeps running). */
   restart(): Promise<void>;
+  /** A fresh engine as after Obsidian restarted: also forgets the settings files written since the last load. */
+  reload(): Promise<void>;
   /** Changes the ignore globs and restarts the engine, as the settings tab does. */
   setIgnore(globs: string[]): Promise<void>;
   /** Changes the settings sync policy and restarts the engine, as the settings tab does. */
@@ -30,10 +33,11 @@ export async function makeClient(srv: TestServer, user: User, o: ClientOptions):
   const dev = await newDevice(srv, user, o);
   let ignoreGlobs = [...(o.ignoreGlobs ?? [])];
   let settingsSync = o.settingsSync ?? SETTINGS_SYNC_OFF;
+  const restartBases = new Map<string, RestartBase>(); // as the shell keeps it: across engine restarts
   const build = () => {
     const engine = new SyncEngine({
       api: dev.api, state: dev.state, adapter: dev.adapter, ring: dev.ring, deviceName: dev.name, clock: dev.clock,
-      random: dev.random, configDir: '.obsidian', ignoreGlobs, settingsSync, webSocket: o.webSocket ? dev.net.webSocket : null,
+      random: dev.random, configDir: '.obsidian', ignoreGlobs, settingsSync, restartBases, webSocket: o.webSocket ? dev.net.webSocket : null,
       autoRun: o.autoRun ?? false, backoff: { baseMs: 20, maxMs: 200 }, maxFileBytes: dev.ctx.maxFileBytes,
     });
     engine.on((e) => dev.events.push(e));
@@ -60,6 +64,10 @@ export async function makeClient(srv: TestServer, user: User, o: ClientOptions):
       await client.engine.stop();
       client.engine = build();
       await client.engine.start();
+    },
+    reload: async () => {
+      restartBases.clear();
+      await client.restart();
     },
   };
   await client.engine.start();
