@@ -1,10 +1,11 @@
 // Reconcile (spec §5.6): catching what events missed.
-import { afterAll, beforeAll, expect, inject, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
+import type { FileRecord } from '../../src/state/store';
 import { toHex } from '../../src/util/bytes';
 import { pull } from '../../src/sync/pull';
 import { PushMemory, pushRound } from '../../src/sync/push';
 import { reconcile } from '../../src/sync/reconcile';
-import { MemoryAdapter } from '../../src/vault/memory';
+import { ManualClock } from '../../src/util/clock';
 import { files, landedPendingOvertakenTwice, newDevice, newUser, remoteCommit, text } from '../helpers/fixture';
 import { startServer, type TestServer } from '../helpers/server';
 
@@ -110,21 +111,79 @@ it('tells the adapter which folders its ignore rules skip, so ignored trees are 
 });
 
 it('does not trust an unchanged size and mtime when mtimes are whole seconds: it compares the content', async () => {
-  const d = await newDevice(srv, await newUser(srv), { name: 'D', vault: 'create' });
   // A file system that keeps whole seconds (FAT, some Android storage): an edit within the same second keeps the mtime.
-  class WholeSeconds extends MemoryAdapter {
-    override async stat(path: string) {
-      const s = await super.stat(path);
-      return s && { ...s, mtime: Math.floor(s.mtime / 1000) * 1000 };
-    }
-  }
-  const adapter = new WholeSeconds(false, d.clock);
-  d.adapter = adapter;
-  d.ctx.adapter = adapter;
-  await adapter.write('x.md', text('one\n'));
+  const d = await newDevice(srv, await newUser(srv), { name: 'D', vault: 'create', coarseMtime: true });
+  await d.adapter.write('x.md', text('one\n'));
   await d.state.markDirty('x.md');
   await pushRound(d.ctx, new PushMemory());
   expect(await reconcile(d.ctx)).toMatchObject({ markedDirty: 0 }); // nothing changed
-  adapter.writeSilently('x.md', text('two\n')); // same size, same whole second
+  d.adapter.writeSilently('x.md', text('two\n')); // same size, same whole second
   expect(await reconcile(d.ctx)).toMatchObject({ markedDirty: 1 });
+});
+
+describe('with whole-second mtimes', () => {
+  /** A device whose adapter keeps whole seconds and counts reads per path. */
+  async function coarseDevice() {
+    const user = await newUser(srv);
+    const d = await newDevice(srv, user, { name: 'D', vault: 'create', coarseMtime: true });
+    const reads: string[] = [];
+    const read = d.adapter.read.bind(d.adapter);
+    d.adapter.read = async (p) => {
+      reads.push(p);
+      return read(p);
+    };
+    const clock = d.clock as ManualClock;
+    const push = async (path: string, content: string) => {
+      await d.adapter.write(path, text(content));
+      await d.state.markDirty(path);
+      await pushRound(d.ctx, new PushMemory());
+    };
+    return { d, user, reads, clock, push };
+  }
+
+  it('reads no file of an unchanged vault once its records are older than two seconds', async () => {
+    const { d, reads, clock, push } = await coarseDevice();
+    for (const p of ['a.md', 'b.md', 'c.md']) await push(p, `${p}\n`);
+    clock.advance(3000);
+    reads.length = 0;
+    expect(await reconcile(d.ctx)).toMatchObject({ markedDirty: 0 });
+    expect(reads.sort()).toEqual(['a.md', 'b.md', 'c.md']); // pushed within their mtime's second: read once more
+    reads.length = 0;
+    expect(await reconcile(d.ctx)).toMatchObject({ markedDirty: 0 });
+    expect(reads).toEqual([]);
+  });
+
+  it('still finds a same-size edit made in the same second as the record, and pushes it', async () => {
+    const { d, user, reads, push } = await coarseDevice();
+    await push('x.md', 'one\n');
+    const mtime = (await d.adapter.stat('x.md'))!.mtime;
+    d.adapter.writeSilently('x.md', text('two\n'));
+    expect((await d.adapter.stat('x.md'))!.mtime).toBe(mtime); // invisible to size and mtime
+    reads.length = 0;
+    expect(await reconcile(d.ctx)).toMatchObject({ markedDirty: 1 });
+    expect(reads).toEqual(['x.md']);
+    await pushRound(d.ctx, new PushMemory());
+    const other = await newDevice(srv, user, { name: 'E', vault: d.vaultId });
+    await pull(other.ctx);
+    expect(files(other.adapter)).toEqual({ 'x.md': 'two\n' });
+  });
+
+  it('reads a record from before the check time was kept once, then skips it, without pushing', async () => {
+    const { d, reads, clock, push } = await coarseDevice();
+    await push('x.md', 'one\n');
+    const [rec] = await d.state.filesByPath('x.md');
+    const legacy: FileRecord = { ...rec! };
+    delete legacy.localCheckedAt;
+    await d.state.putFile(legacy);
+    clock.advance(3000);
+    reads.length = 0;
+    expect(await reconcile(d.ctx)).toMatchObject({ markedDirty: 0 });
+    expect(reads).toEqual(['x.md']);
+    expect((await d.state.filesByPath('x.md'))[0]?.localCheckedAt).toBe(clock.now());
+    reads.length = 0;
+    expect(await reconcile(d.ctx)).toMatchObject({ markedDirty: 0 });
+    expect(reads).toEqual([]);
+    expect(await d.state.allPending()).toEqual([]);
+    expect((await d.api.heads(d.vaultId, null)).heads).toHaveLength(1);
+  });
 });
