@@ -20,7 +20,26 @@ export type NoticeCode =
 
 export type EngineEvent =
   | { type: 'status'; status: SyncStatus; detail?: string }
-  | { type: 'notice'; code: NoticeCode; message: string; persistent: boolean; path?: string; /** The file that was saved beside it, for collisions. */ conflictPath?: string }
+  | {
+    type: 'notice';
+    code: NoticeCode;
+    /** For logs; the shell words what people see from the fields below (shell/notices.ts). */
+    message: string;
+    persistent: boolean;
+    path?: string;
+    /** The file that was saved beside it, for collisions (and a local copy kept when a too large version arrives). */
+    conflictPath?: string;
+    /**
+     * A short, fixed reason: for TOO_LARGE 'download' | 'upload' | 'remote' | 'server'; for INVALID_PATH
+     * why the name is refused; for COMMIT_REJECTED the server's explanation; for a per-file failure the error's class.
+     */
+    reason?: string;
+    /** For TOO_LARGE: the file's size and this device's limit, in bytes. */
+    size?: number;
+    limit?: number;
+    /** For DELETIONS_HELD: how many deleted files are on hold. */
+    count?: number;
+  }
   | { type: 'conflict'; path: string; conflictPath: string }
   | { type: 'merged'; path: string }
   | { type: 'remote-change'; path: string; action: 'write' | 'delete' };

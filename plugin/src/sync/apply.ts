@@ -152,7 +152,10 @@ async function applyOne(ctx: SyncContext, v: RemoteVersion, fileId: string, pref
     }
     await ctx.state.recordSynced(record(fileId, path, versionId, v, contentHash, -1, { tooLarge: true }), null);
     const also = kept ? `; the local changes were saved as ${kept}` : '';
-    ctx.emit({ type: 'notice', code: 'TOO_LARGE', persistent: true, path, message: `${path} (${v.size} bytes) is larger than this device syncs and was not downloaded${also}` });
+    ctx.emit({
+      type: 'notice', code: 'TOO_LARGE', persistent: true, path, reason: 'download', size: v.size, limit: ctx.maxFileBytes, ...(kept ? { conflictPath: kept } : {}),
+      message: `${path} (${v.size} bytes) is larger than this device syncs and was not downloaded${also}`,
+    });
     return;
   }
 

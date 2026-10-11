@@ -14,6 +14,7 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/apperr"
 	"github.com/jfms7s/obsidian-sync/server/internal/auth"
 	obsyncv1 "github.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1"
+	"github.com/jfms7s/obsidian-sync/server/internal/limits"
 	"github.com/jfms7s/obsidian-sync/server/internal/ratelimit"
 )
 
@@ -27,7 +28,7 @@ const (
 // be made to buffer large bodies. Every caller of readProto passes one.
 const (
 	// loginBodyLimit bounds POST /v1/auth/login (unauthenticated).
-	loginBodyLimit int64 = 16 << 10
+	loginBodyLimit = limits.LoginBodyLimit
 	// keysBodyLimit bounds PUT /v1/keys: two wrapped keys of at most
 	// maxWrappedKeyBytes, a password of at most 1 KiB and a few small
 	// fields come to under 10 KiB.
@@ -39,7 +40,7 @@ const (
 	// framing each), such as POST …/chunks/exists.
 	chunkListBodyLimit int64 = 1 << 20
 	// commitBodyLimit bounds commit batches, the largest protobuf request.
-	commitBodyLimit int64 = 8 << 20
+	commitBodyLimit = limits.CommitBodyLimit
 )
 
 // Body read deadlines bound how long a client may take to send a request

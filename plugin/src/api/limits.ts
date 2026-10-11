@@ -1,5 +1,5 @@
-// Protocol limits enforced by the server (server/internal/api/codec.go,
-// server/internal/syncsvc/service.go). The client stays inside them.
+// Protocol limits enforced by the server (server/internal/limits). The
+// client stays inside them; test/unit/limits.test.ts checks they match.
 export const CHUNK_SIZE = 4 << 20;
 export const MAX_COMMITS_PER_REQUEST = 500;
 export const COMMIT_BODY_LIMIT = 8 << 20;

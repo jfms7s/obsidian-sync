@@ -67,7 +67,8 @@ export async function recordFailure(ctx: SyncContext, key: string, path: string,
   await ctx.state.putFailure({ key, attempts, nextAt: ctx.clock.now() + backoffDelay(attempts - 1, ctx.random, FAILURE_BACKOFF), message });
   if (attempts === 1) {
     const code: NoticeCode = err instanceof FileSyncError ? err.code : err instanceof CryptoError ? 'DECRYPT_FAILED' : 'FILE_FAILED';
-    ctx.emit({ type: 'notice', code, persistent: false, path, message: `${path}: ${message}` });
+    const reason = err instanceof FileSyncError ? err.code : err instanceof Error ? err.name : 'unknown';
+    ctx.emit({ type: 'notice', code, persistent: false, path, reason, message: `${path}: ${message}` });
   }
 }
 

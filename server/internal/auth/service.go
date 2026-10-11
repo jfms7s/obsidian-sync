@@ -13,6 +13,7 @@ import (
 
 	"github.com/jfms7s/obsidian-sync/server/internal/apperr"
 	"github.com/jfms7s/obsidian-sync/server/internal/ids"
+	"github.com/jfms7s/obsidian-sync/server/internal/limits"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 )
 
@@ -42,7 +43,7 @@ type Session struct {
 }
 
 // maxPasswordBytes bounds the input to a password check.
-const maxPasswordBytes = 1024
+const maxPasswordBytes = limits.MaxPasswordBytes
 
 type Options struct {
 	Params  Params // cost of the timing-equalising dummy hash; match real hashes. Zero = DefaultParams

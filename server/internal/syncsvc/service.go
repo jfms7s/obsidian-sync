@@ -14,20 +14,21 @@ import (
 	"github.com/jfms7s/obsidian-sync/server/internal/blob"
 	"github.com/jfms7s/obsidian-sync/server/internal/bus"
 	"github.com/jfms7s/obsidian-sync/server/internal/ids"
+	"github.com/jfms7s/obsidian-sync/server/internal/limits"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
 	"github.com/jfms7s/obsidian-sync/server/internal/vaultsvc"
 )
 
 const (
-	ChunkSize            = 4 << 20
+	ChunkSize            = limits.ChunkSize
 	MaxChunkCipherBytes  = ChunkSize + 64 // AES-GCM nonce + tag fit with room to spare
-	MaxCommitsPerRequest = 500
-	MaxEncMetaBytes      = 64 << 10
-	MaxChunkExistsBatch  = 1000
+	MaxCommitsPerRequest = limits.MaxCommitsPerRequest
+	MaxEncMetaBytes      = limits.MaxEncMetaBytes
+	MaxChunkExistsBatch  = limits.MaxChunkExistsBatch
 	DefaultPageSize      = 500
-	MaxPageSize          = 1000
+	MaxPageSize          = limits.MaxPageSize
 	DefaultHeadsPageSize = 1000
-	MaxHeadsPageSize     = 5000
+	MaxHeadsPageSize     = limits.MaxHeadsPageSize
 
 	fileIDLen    = 32
 	versionIDLen = 16

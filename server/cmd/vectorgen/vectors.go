@@ -18,6 +18,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	obsyncv1 "github.com/jfms7s/obsidian-sync/server/internal/gen/obsync/v1"
+	"github.com/jfms7s/obsidian-sync/server/internal/limits"
 )
 
 // Labels from the project's crypto and encoding specification (kept with its
@@ -433,6 +434,26 @@ func padding() any {
 	return map[string]any{"cases": cases}
 }
 
+// protocolLimits are the server's limits that the plugin mirrors in
+// limits.ts and ARGON2_LIMITS (test/unit/limits.test.ts compares them).
+func protocolLimits() any {
+	return map[string]any{
+		"chunk_size":              limits.ChunkSize,
+		"max_commits_per_request": limits.MaxCommitsPerRequest,
+		"commit_body_limit":       limits.CommitBodyLimit,
+		"max_enc_meta_bytes":      limits.MaxEncMetaBytes,
+		"max_chunk_exists_batch":  limits.MaxChunkExistsBatch,
+		"max_page_size":           limits.MaxPageSize,
+		"max_heads_page_size":     limits.MaxHeadsPageSize,
+		"max_password_bytes":      limits.MaxPasswordBytes,
+		"login_body_limit":        limits.LoginBodyLimit,
+		"min_argon2_memory_kib":   limits.MinArgon2MemoryKib,
+		"max_argon2_memory_kib":   limits.MaxArgon2MemoryKib,
+		"max_argon2_iterations":   limits.MaxArgon2Iterations,
+		"max_argon2_parallelism":  limits.MaxArgon2Parallelism,
+	}
+}
+
 var files = []struct {
 	name string
 	gen  func() any
@@ -447,6 +468,7 @@ var files = []struct {
 	{"bip39.json", bip39},
 	{"padding.json", padding},
 	{"rejects.json", rejects},
+	{"limits.json", protocolLimits},
 }
 
 // render returns every vector file's exact contents.
