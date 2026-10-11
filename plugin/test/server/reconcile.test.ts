@@ -187,3 +187,44 @@ describe('with whole-second mtimes', () => {
     expect((await d.api.heads(d.vaultId, null)).heads).toHaveLength(1);
   });
 });
+
+it('reads no file record one by one and imports the naming key at most once for an unchanged vault', async () => {
+  const d = await newDevice(srv, await newUser(srv), { name: 'D', vault: 'create' });
+  for (let i = 0; i < 12; i++) {
+    await d.adapter.write(`n${i}.md`, text(`${i}\n`));
+    await d.state.markDirty(`n${i}.md`);
+  }
+  await pushRound(d.ctx, new PushMemory());
+  await pull(d.ctx); // its own commits come back once; after that the change log is quiet
+  const getFile = vi.spyOn(d.state, 'getFile');
+  const importKey = vi.spyOn(crypto.subtle, 'importKey');
+  try {
+    expect(await reconcile(d.ctx)).toMatchObject({ fetched: 0, markedDirty: 0 });
+    expect(getFile).not.toHaveBeenCalled();
+    const hmacImports = importKey.mock.calls.filter((c) => (c[2] as { name?: string }).name === 'HMAC');
+    expect(hmacImports.length).toBeLessThanOrEqual(1);
+  } finally {
+    getFile.mockRestore();
+    importKey.mockRestore();
+  }
+});
+
+it('marks local changes dirty in path order, whatever order the stats finish in', async () => {
+  const d = await newDevice(srv, await newUser(srv), { name: 'D', vault: 'create' });
+  const names = Array.from({ length: 20 }, (_, i) => `f${String(i).padStart(2, '0')}.md`);
+  for (const p of names) {
+    await d.adapter.write(p, text('one\n'));
+    await d.state.markDirty(p);
+  }
+  await pushRound(d.ctx, new PushMemory());
+  for (const p of names) d.adapter.writeSilently(p, text('changed\n'));
+  // Later paths answer their stat sooner.
+  const stat = d.adapter.stat.bind(d.adapter);
+  d.adapter.stat = async (p) => {
+    await new Promise((r) => setTimeout(r, 40 - names.indexOf(p) * 2));
+    return stat(p);
+  };
+  expect(await reconcile(d.ctx)).toMatchObject({ markedDirty: 20 });
+  const dirty = await d.state.dirtyEntries();
+  expect([...dirty].sort((a, b) => a.gen - b.gen).map((e) => e.path)).toEqual(names);
+});
