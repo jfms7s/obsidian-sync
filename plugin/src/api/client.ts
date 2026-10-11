@@ -5,7 +5,7 @@
 import { create, fromBinary, toBinary, type DescMessage, type MessageShape } from '@bufbuild/protobuf';
 import {
   ChangesResponseSchema, ChunkExistsRequestSchema, ChunkExistsResponseSchema, CommitRequestSchema, CommitResponseSchema,
-  CreateVaultRequestSchema, ErrorCode, ErrorSchema, HeadsResponseSchema, KeyBundleSchema, ListDevicesResponseSchema,
+  CreateVaultRequestSchema, ErrorCode, ErrorSchema, GetUsageResponseSchema, HeadsResponseSchema, KeyBundleSchema, ListDevicesResponseSchema,
   ListVaultsResponseSchema, LoginRequestSchema, LoginResponseSchema, VaultKeysResponseSchema, VaultSchema,
   VersionsResponseSchema, type Vault, type Version,
 } from '../gen/obsync/v1/obsync_pb';
@@ -19,7 +19,7 @@ import {
   CHANGES_PAGE_SIZE, COMMIT_BODY_LIMIT, HEADS_PAGE_SIZE, LOGIN_BODY_LIMIT, MAX_CHUNK_EXISTS_BATCH, MAX_COMMITS_PER_REQUEST, MAX_PASSWORD_BYTES,
 } from './limits';
 import type {
-  ChangesPage, CommitInput, CommitReply, DeviceInfo, HeadsPage, KeyBundleFields, LoginResult, RemoteVersion,
+  AccountUsage, ChangesPage, CommitInput, CommitReply, DeviceInfo, HeadsPage, KeyBundleFields, LoginResult, RemoteVersion,
   SealedVaultKey, VaultInfo,
 } from './types';
 
@@ -237,6 +237,22 @@ export class ApiClient {
   async revokeDevice(deviceId: string): Promise<void> {
     if (!/^[0-9a-f]{32}$/.test(deviceId)) throw new Error(`bad device id ${deviceId}`);
     await this.send('DELETE', `/v1/devices/${deviceId}`);
+  }
+
+  /** The account's storage use, or null from a server older than the route (any 404). */
+  async usage(): Promise<AccountUsage | null> {
+    let resp: HttpResponse;
+    try {
+      resp = await this.send('GET', '/v1/account/usage');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
+    const r = await this.decode(GetUsageResponseSchema, resp, 'usage');
+    return {
+      usedBytes: num(r.usedBytes, 'used_bytes'), quotaBytes: num(r.quotaBytes, 'quota_bytes'),
+      vaults: new Map(r.vaults.map((v) => [v.vaultId, num(v.usedBytes, 'used_bytes')])),
+    };
   }
 
   // ---------- key bundle ----------

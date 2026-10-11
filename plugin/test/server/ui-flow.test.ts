@@ -9,6 +9,7 @@ import { createEngineLock } from '../../src/shell/engine-lock';
 import { ShellController } from '../../src/shell/controller';
 import { ObsyncSettingTab } from '../../src/shell/settings-tab';
 import { LocalState } from '../../src/state/store';
+import { ManualClock, type Clock } from '../../src/util/clock';
 import { MemoryAdapter } from '../../src/vault/memory';
 import { App, Modal, Notice, Plugin, Vault, type ButtonComponent, type FakeEl, type Setting, type TextComponent } from '../fakes/obsidian';
 import { Net } from '../helpers/net';
@@ -30,6 +31,7 @@ interface Screen {
   shell: ShellController;
   state: LocalState;
   adapter: MemoryAdapter;
+  net: Net;
   render(): Promise<void>;
   el(): FakeEl;
   setting(name: string): Setting;
@@ -40,7 +42,7 @@ interface Screen {
   text(): string;
 }
 
-async function screen(deviceName: string): Promise<Screen> {
+async function screen(deviceName: string, opts: { clock?: Clock } = {}): Promise<Screen> {
   const net = new Net();
   const state = await LocalState.open(new IDBFactory(), `ui-${deviceName}-${Math.random()}`);
   const adapter = new MemoryAdapter();
@@ -49,11 +51,11 @@ async function screen(deviceName: string): Promise<Screen> {
     state, adapter, configDir: '.obsidian', fetch: net.fetch, webSocket: null, autoRun: false,
     lock: createEngineLock('ui-test', { locks: null, registry: new Map() }),
   });
-  const tab = new ObsyncSettingTab(app as unknown as RealApp, new Plugin(app) as never, shell, state, net.fetch);
+  const tab = new ObsyncSettingTab(app as unknown as RealApp, new Plugin(app) as never, shell, state, net.fetch, opts.clock);
   const el = () => (tab as unknown as { containerEl: FakeEl }).containerEl;
   const all = (): Setting[] => el().settings;
   const s: Screen = {
-    tab, shell, state, adapter, el,
+    tab, shell, state, adapter, net, el,
     render: () => (tab as unknown as { render(): Promise<void> }).render(),
     setting: (name) => {
       const found = all().find((x) => x.name === name);
@@ -368,7 +370,7 @@ describe('the settings tab', () => {
     s.type('Ignored files', '.venv/\n');
     await s.press('Save');
     const offer = Modal.opened.at(-1)!;
-    expect(offer.contentEl.allText()).toMatch(/The new rules match 1 synced file \(6 bytes\): \.venv\/lib\/a\.py/);
+    expect(offer.contentEl.allText()).toMatch(/The new rules match 1 synced file \(6 B\): \.venv\/lib\/a\.py/);
     expect(offer.contentEl.allText()).toMatch(/move their copies to the trash/);
     await offer.contentEl.settings.flatMap((x) => x.buttons).find((b) => b.text === 'Cancel')!.click();
     await s.shell.engine!.runCycle();
@@ -511,10 +513,65 @@ describe('the settings tab', () => {
     expect(confirm.contentEl.allText()).toMatch(/Sign out of Obsync/);
     const confirmButton = confirm.contentEl.settings.flatMap((x) => x.buttons).find((b) => b.text === 'Sign out')!;
     await confirmButton.click();
-    await new Promise((r) => setTimeout(r, 100));
-    expect(await s.state.getSession()).toBeUndefined();
+    // Signing out revokes the token on the server first: wait for it rather than a fixed time.
+    await vi.waitFor(async () => expect(await s.state.getSession()).toBeUndefined(), { timeout: 5000 });
     expect(s.shell.engine).toBeNull();
     await s.render();
     expect(s.setting('Sign in').heading).toBe(true);
+  }, 120_000);
+  it('shows the storage used, adds the vault line once the account owns two vaults, hides both on a failure, and refreshes after a sync at most once a minute', async () => {
+    const user = await newUser(srv);
+    const clock = new ManualClock(Date.now());
+    const s = await screen('laptop', { clock });
+    await s.render();
+    s.type('Server address', srv.url);
+    s.type('Username', user.username);
+    s.type('Password', user.password);
+    await s.press('Sign in');
+    s.type('Passphrase', 'a long enough passphrase');
+    s.type('Repeat the passphrase', 'a long enough passphrase');
+    await s.press('Create keys');
+    await s.press('I have saved them');
+    await s.press('Create vault');
+    await s.press('Start syncing');
+    expect(s.setting('Sync').heading).toBe(true);
+    await s.render();
+    expect(s.text()).toMatch(/Storage: \d+(\.\d)? (B|KB) of \d+(\.\d)? [KMGT]?B used/);
+    expect(s.text()).not.toMatch(/This vault:/);
+
+    // A second vault on the account: the line for this vault appears.
+    await apiFor((await s.state.getSession())!).createVault('c'.repeat(32), new Uint8Array(40), [
+      { epoch: 0, sealedKey: new Uint8Array(92) }, { epoch: 1, sealedKey: new Uint8Array(92) },
+    ]);
+    await s.render();
+    expect(s.text()).toMatch(/This vault: \d+(\.\d)? (B|KB) \(history and trash included\)/);
+
+    // A failed request shows neither line, and no error.
+    s.net.failNextRequest('GET', '/v1/account/usage');
+    await s.render();
+    expect(s.text()).not.toMatch(/Storage:|This vault:/);
+    expect(s.setting('Sync').heading).toBe(true);
+    expect(Notice.shown.some((n) => /usage/i.test(n.message))).toBe(false);
+
+    // Uploading changes the number; the refresh after the cycle waits until a minute has passed since the last request.
+    await s.render();
+    const before = s.net.count('GET', '/v1/account/usage');
+    for (let i = 0; i < 5; i++) await s.adapter.write(`n${i}.md`, new TextEncoder().encode('x'.repeat(2000)));
+    await s.shell.engine!.runCycle();
+    await s.shell.engine!.runCycle();
+    expect(s.net.count('GET', '/v1/account/usage')).toBe(before);
+    clock.advance(60_000);
+    await vi.waitFor(() => expect(s.net.count('GET', '/v1/account/usage')).toBe(before + 1));
+    await vi.waitFor(() => expect(s.text()).toMatch(/Storage: \d+(\.\d)? KB of/));
+    clock.advance(120_000);
+    expect(s.net.count('GET', '/v1/account/usage')).toBe(before + 1); // no sync cycle, no request
+
+    // Once the tab is closed, a sync cycle asks for nothing.
+    s.tab.hide();
+    await s.shell.engine!.runCycle();
+    clock.advance(120_000);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(s.net.count('GET', '/v1/account/usage')).toBe(before + 1);
+    await s.shell.stop();
   }, 120_000);
 });

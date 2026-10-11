@@ -4,7 +4,7 @@ import { ApiClient, parseRetryAfter, type FetchLike } from '../../src/api/client
 import { ApiError, ErrorCode, isAuthFailure, isTemporary, NetworkError } from '../../src/api/errors';
 import { LOGIN_BODY_LIMIT, MAX_CHUNK_EXISTS_BATCH } from '../../src/api/limits';
 import { InsecureServerUrlError, hubUrl, normalizeServerUrl } from '../../src/api/url';
-import { ChangesResponseSchema, CommitRequestSchema, ErrorSchema, KeyBundleSchema } from '../../src/gen/obsync/v1/obsync_pb';
+import { ChangesResponseSchema, CommitRequestSchema, ErrorSchema, GetUsageResponseSchema, KeyBundleSchema } from '../../src/gen/obsync/v1/obsync_pb';
 import { ManualClock } from '../../src/util/clock';
 
 interface Seen {
@@ -55,6 +55,23 @@ describe('ApiClient', () => {
     expect(m.seen[0]!.headers).toMatchObject({ 'Content-Type': 'application/octet-stream', Authorization: 'Bearer tok' });
     expect(m.seen[1]!.headers['Content-Type']).toBe('application/x-protobuf');
     expect(fromBinary(KeyBundleSchema, m.seen[1]!.body!).currentPassword).toBe('login pw');
+  });
+
+  it('reads the account usage, and null from a server without the route (404)', async () => {
+    const body = toBinary(GetUsageResponseSchema, create(GetUsageResponseSchema, {
+      usedBytes: 345n, quotaBytes: 10n * 1024n ** 3n, vaults: [{ vaultId: 'a'.repeat(32), usedBytes: 300n }, { vaultId: 'b'.repeat(32), usedBytes: 45n }],
+    }));
+    const ok = mock(() => protoResponse(200, body));
+    expect(await new ApiClient({ baseUrl: 'https://s', token: 't', fetch: ok.fetch }).usage())
+      .toEqual({ usedBytes: 345, quotaBytes: 10 * 1024 ** 3, vaults: new Map([['a'.repeat(32), 300], ['b'.repeat(32), 45]]) });
+    expect(ok.seen[0]).toMatchObject({ method: 'GET', url: 'https://s/v1/account/usage' });
+
+    const old = mock(() => errorResponse(404, ErrorCode.NOT_FOUND, 'no such endpoint'));
+    expect(await new ApiClient({ baseUrl: 'https://s', token: 't', fetch: old.fetch }).usage()).toBeNull();
+    const proxy404 = mock(() => new Response('not found', { status: 404, headers: { 'Content-Type': 'text/plain' } }));
+    expect(await new ApiClient({ baseUrl: 'https://s', token: 't', fetch: proxy404.fetch }).usage()).toBeNull();
+    const revoked = mock(() => errorResponse(401, ErrorCode.DEVICE_REVOKED, 'revoked'));
+    await expect(new ApiClient({ baseUrl: 'https://s', token: 't', fetch: revoked.fetch }).usage()).rejects.toMatchObject({ code: ErrorCode.DEVICE_REVOKED });
   });
 
   it('decodes protobuf errors with their code', async () => {

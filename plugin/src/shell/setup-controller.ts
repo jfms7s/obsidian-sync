@@ -22,6 +22,17 @@ export interface SetupOptions {
 /** What setupKeys did: new keys (their recovery words), or none because another device set them up first. */
 export type SetupKeysResult = { recoveryWords: string } | { alreadySetUp: KeysAlreadySetUpError };
 
+/**
+ * The storage figures the settings tab shows. vaultBytes is this device's
+ * vault, given only when the account owns more than one vault (else it is
+ * the total) and owns this one.
+ */
+export interface StorageUsage {
+  usedBytes: number;
+  quotaBytes: number;
+  vaultBytes: number | null;
+}
+
 /** The vaults on the server, or locked: this device has no keys (unlock first). */
 export type RemoteVaults = { locked: true } | { locked: false; vaults: vaults.RemoteVaultSummary[] };
 
@@ -125,6 +136,16 @@ export class SetupController {
 
   async devices(): Promise<DeviceInfo[]> {
     return account.listDevices(this.api(await this.session()));
+  }
+
+  /** The account's storage use, or null from a server without the route. */
+  async storageUsage(): Promise<StorageUsage | null> {
+    const session = await this.session();
+    const vault = await this.o.state.getVault();
+    const u = await this.api(session).usage();
+    if (!u) return null;
+    const vaultBytes = u.vaults.size > 1 && vault ? u.vaults.get(vault.vaultId) ?? null : null;
+    return { usedBytes: u.usedBytes, quotaBytes: u.quotaBytes, vaultBytes };
   }
 
   async removeDevice(deviceId: string): Promise<void> {

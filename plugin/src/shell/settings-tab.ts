@@ -6,15 +6,18 @@ import { Notice, Platform, PluginSettingTab, Setting, type App, type ButtonCompo
 import type { FetchLike } from '../api/client';
 import { PASSPHRASE_MIN_CHARS, PASSPHRASE_MIN_WORDS } from '../services/account';
 import type { LocalState } from '../state/store';
+import type { SyncStatus } from '../sync/events';
+import { systemClock, type Clock, type TimerHandle } from '../util/clock';
 import type { NewlyIgnored } from '../sync/server-removal';
 import type { ShellController, StartResult } from './controller';
 import { describeError } from './errors';
+import { formatBytes } from './format-bytes';
 import { ConfirmModal, TrashModal } from './history-modal';
 import { CORE_SETTINGS_FILES, defaultSettingsSyncPolicy, type CoreSettingsFile, type SettingsSyncPolicy } from '../vault/config-policy';
 import { parseIgnoreFile, VAULT_IGNORE_FILE } from '../vault/ignore';
 import { formatIgnoreText, parseIgnoreText } from './ignore-text';
 import { describePlatform } from './platform';
-import { SetupController, type RemoteVaults } from './setup-controller';
+import { SetupController, type RemoteVaults, type StorageUsage } from './setup-controller';
 import type { SetupStep } from './steps';
 import { statusLabel } from './status';
 
@@ -40,19 +43,15 @@ interface Form {
 }
 
 /** A text area for typed text that is not prose (recovery words, ignore rules): no spell check or autocorrect. */
+/** The storage lines are refreshed after a sync cycle at most this often. */
+export const USAGE_REFRESH_MS = 60_000;
+
 function plainTextArea(a: TextAreaComponent, rows: number): void {
   a.inputEl.rows = rows;
   a.inputEl.spellcheck = false;
   a.inputEl.setAttr('autocapitalize', 'off');
   a.inputEl.setAttr('autocorrect', 'off');
   a.inputEl.setAttr('autocomplete', 'off');
-}
-
-/** A size for people: bytes, KB or MB (powers of 1,024, as file managers show them). */
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} bytes`;
-  if (bytes < 1 << 20) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1 << 20)).toFixed(bytes < 10 << 20 ? 1 : 0)} MB`;
 }
 
 const CORE_LABELS: Record<CoreSettingsFile, string> = {
@@ -68,8 +67,13 @@ export class ObsyncSettingTab extends PluginSettingTab {
   private renderToken = 0;
   private errorEl: HTMLElement | null = null;
   private readonly setup: SetupController;
+  /** While the ready view is shown: the storage lines, and the listener that refreshes them. */
+  private usageEl: HTMLElement | null = null;
+  private stopUsageRefresh: (() => void) | null = null;
+  private usageTimer: TimerHandle | null = null;
+  private lastUsageFetchMs = Number.NEGATIVE_INFINITY;
 
-  constructor(app: App, plugin: Plugin, private readonly shell: ShellController, state: LocalState, fetch: FetchLike) {
+  constructor(app: App, plugin: Plugin, private readonly shell: ShellController, state: LocalState, fetch: FetchLike, private readonly clock: Clock = systemClock) {
     super(app, plugin);
     this.setup = new SetupController({ state, fetch, shell });
     this.form = {
@@ -84,11 +88,13 @@ export class ObsyncSettingTab extends PluginSettingTab {
 
   override hide(): void {
     this.renderToken++;
+    this.endUsageRefresh();
     this.form.password = this.form.passphrase = this.form.passphrase2 = this.form.recoveryWords = '';
   }
 
   private async render(): Promise<void> {
     const token = ++this.renderToken;
+    this.endUsageRefresh();
     const { containerEl } = this;
     containerEl.empty();
     this.errorEl = null;
@@ -307,6 +313,9 @@ export class ObsyncSettingTab extends PluginSettingTab {
   }
 
   private async renderReady(): Promise<void> {
+    const token = this.renderToken;
+    // Asked for now, shown once the rest is built: it must not hold the screen up.
+    const usage = this.fetchUsage();
     const session = await this.setup.session();
     const vaultName = await this.setup.vaultName();
     this.heading('Sync');
@@ -321,6 +330,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
         await this.reportStart(await this.shell.start({ byUser: true }), b);
       })));
     }
+    this.usageEl = this.containerEl.createDiv({ cls: 'obsync-usage' });
     await this.renderHeldDeletions();
     this.renderVaultIgnore();
     this.renderIgnore();
@@ -328,6 +338,9 @@ export class ObsyncSettingTab extends PluginSettingTab {
     new Setting(this.containerEl).setName('Deleted files').setDesc('Restore a file that was deleted. To see the earlier versions of a note, use the history command or the note\'s menu.')
       .addButton((b) => b.setButtonText('Show deleted files').onClick(() => new TrashModal(this.app, this.shell).open()));
     await this.renderDevices();
+    if (token !== this.renderToken) return;
+    this.showUsage(await usage);
+    this.startUsageRefresh(token);
     new Setting(this.containerEl).setName('Sign out').setDesc('Stops syncing and removes the account and its keys from this device. Your files stay.')
       .addButton((b) => b.setButtonText('Sign out').setWarning().onClick(() => {
         new ConfirmModal(this.app, 'Sign out of Obsync on this device? Your files stay. You will need your passphrase or recovery words to sign in again.', 'Sign out', async () => {
@@ -335,6 +348,60 @@ export class ObsyncSettingTab extends PluginSettingTab {
           await this.render();
         }).open();
       }));
+  }
+
+  /** The storage figures, or null when the server cannot say (an old server, offline, any failure): the lines are information only. */
+  private async fetchUsage(): Promise<StorageUsage | null> {
+    this.lastUsageFetchMs = this.clock.now();
+    try {
+      return await this.setup.storageUsage();
+    } catch {
+      return null;
+    }
+  }
+
+  private showUsage(usage: StorageUsage | null): void {
+    const el = this.usageEl;
+    if (!el) return;
+    el.empty();
+    if (!usage) return;
+    el.createDiv({ text: `Storage: ${formatBytes(usage.usedBytes)} of ${formatBytes(usage.quotaBytes)} used` });
+    if (usage.vaultBytes !== null) el.createDiv({ cls: 'setting-item-description', text: `This vault: ${formatBytes(usage.vaultBytes)} (history and trash included)` });
+  }
+
+  /**
+   * While this ready view is shown, a sync cycle that ends (syncing, then
+   * synced) refreshes the storage lines, at most once per USAGE_REFRESH_MS:
+   * a cycle sooner than that refreshes them when the time is up.
+   */
+  private startUsageRefresh(token: number): void {
+    let last: SyncStatus = this.shell.status;
+    const off = this.shell.on((e) => {
+      if (e.type !== 'status') return;
+      const ended = last === 'syncing' && e.status === 'synced';
+      last = e.status;
+      if (!ended || this.usageTimer) return;
+      const refresh = () => {
+        this.usageTimer = null;
+        void this.fetchUsage().then((u) => {
+          if (token === this.renderToken) this.showUsage(u);
+        });
+      };
+      const wait = this.lastUsageFetchMs + USAGE_REFRESH_MS - this.clock.now();
+      if (wait <= 0) refresh();
+      else this.usageTimer = this.clock.setTimeout(refresh, wait);
+    });
+    this.stopUsageRefresh = () => {
+      off();
+      if (this.usageTimer) this.clock.clearTimeout(this.usageTimer);
+      this.usageTimer = null;
+    };
+  }
+
+  private endUsageRefresh(): void {
+    this.stopUsageRefresh?.();
+    this.stopUsageRefresh = null;
+    this.usageEl = null;
   }
 
   private async renderHeldDeletions(): Promise<void> {
