@@ -309,6 +309,40 @@ describe('the settings tab', () => {
     await s.shell.stop();
   }, 120_000);
 
+  it('edits the rules for every device in .obsyncignore, listing the lines it skips', async () => {
+    const user = await newUser(srv);
+    const s = await screen('laptop');
+    await s.render();
+    s.type('Server address', srv.url);
+    s.type('Username', user.username);
+    s.type('Password', user.password);
+    await s.press('Sign in');
+    s.type('Passphrase', 'a long enough passphrase');
+    s.type('Repeat the passphrase', 'a long enough passphrase');
+    await s.press('Create keys');
+    await s.press('I have saved them');
+    await s.press('Create vault');
+    expect(s.text()).toMatch(/\.obsyncignore apply on every device too/);
+    await s.press('Start syncing');
+
+    expect(s.field('Ignored on every device').value).toBe('');
+    await s.adapter.write('big/data.md', new TextEncoder().encode('generated\n'));
+    await s.adapter.write('note.md', new TextEncoder().encode('note\n'));
+    s.type('Ignored on every device', 'big/\n!keep.md\n');
+    await s.press('Save for every device');
+    expect(new TextDecoder().decode(s.adapter.snapshot().get('.obsyncignore'))).toBe('big/\n!keep.md\n');
+    expect(s.text()).toMatch(/Line 2 is skipped: !keep\.md/);
+    expect(Notice.shown.some((n) => n.message.includes('1 line is skipped'))).toBe(true);
+    await s.shell.engine!.runCycle();
+    const vault = (await s.state.getVault())!;
+    const api = apiFor((await s.state.getSession())!);
+    expect((await api.heads(vault.vaultId, null)).heads).toHaveLength(2); // .obsyncignore and note.md, not big/data.md
+    expect(s.shell.engine!.vaultIgnoreFile.globs).toEqual(['big/']);
+    await s.render();
+    expect(s.field('Ignored on every device').value).toBe('big/\n!keep.md\n');
+    await s.shell.stop();
+  }, 120_000);
+
   it('saves ignore rules, reports bad lines by their line number, and signs out after a confirmation', async () => {
     const user = await newUser(srv);
     const s = await screen('laptop');
