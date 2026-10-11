@@ -186,3 +186,28 @@ func TestTOTPBeginAgainReplacesThePendingSecret(t *testing.T) {
 	status, apiErr = e.do("POST", "/v1/account/totp/confirm", bobTok, &obsyncv1.TotpConfirmRequest{Code: "123456"}, nil)
 	wantErr(t, status, apiErr, http.StatusBadRequest, apperr.Invalid)
 }
+
+// A set-up not confirmed within ten minutes expires: a device token alone
+// cannot keep guessing codes for a secret someone started and abandoned.
+func TestTOTPSetUpExpires(t *testing.T) {
+	e := newTestEnv(t)
+	e.createUser("alice", "correct horse")
+	token, _ := e.login("alice", "correct horse")
+	var begin obsyncv1.TotpBeginResponse
+	e.do("POST", "/v1/account/totp/begin", token, &obsyncv1.TotpBeginRequest{CurrentPassword: "correct horse"}, &begin)
+	e.clk.Advance(10*time.Minute + time.Second)
+	status, apiErr := e.do("POST", "/v1/account/totp/confirm", token, &obsyncv1.TotpConfirmRequest{Code: codeFor(t, begin.Secret, e.clk.Now())}, nil)
+	wantErr(t, status, apiErr, http.StatusBadRequest, apperr.Invalid)
+	if !strings.Contains(apiErr.Message, "expired") {
+		t.Fatalf("message = %q", apiErr.Message)
+	}
+	if e.totpStatus(token).Enabled {
+		t.Fatal("an expired set-up turned TOTP on")
+	}
+	// Starting again works.
+	e.do("POST", "/v1/account/totp/begin", token, &obsyncv1.TotpBeginRequest{CurrentPassword: "correct horse"}, &begin)
+	e.clk.Advance(9 * time.Minute)
+	if status, apiErr := e.do("POST", "/v1/account/totp/confirm", token, &obsyncv1.TotpConfirmRequest{Code: codeFor(t, begin.Secret, e.clk.Now())}, nil); status != http.StatusOK {
+		t.Fatalf("confirm within ten minutes = %d %v", status, apiErr)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jfms7s/obsidian-sync/server/internal/apperr"
 	"github.com/jfms7s/obsidian-sync/server/internal/store"
@@ -19,7 +20,13 @@ var (
 	errTOTPAlreadyOn = apperr.New(apperr.Invalid, "two-step sign-in is already on; turn it off first")
 	errTOTPOff       = apperr.New(apperr.Invalid, "two-step sign-in is off")
 	errTOTPNotBegun  = apperr.New(apperr.Invalid, "start setting up two-step sign-in first")
+	errTOTPExpired   = apperr.New(apperr.Invalid, "the two-step sign-in set-up expired; start it again")
 )
+
+// totpSetupTTL is how long a begun set-up can be confirmed. Confirming
+// needs only the device token and a code, so a set-up left unfinished must
+// not stay open to guessing.
+const totpSetupTTL = 10 * time.Minute
 
 // TOTPStatus is whether the account has TOTP on and how many recovery codes
 // it has left.
@@ -84,6 +91,8 @@ func (s *Service) ConfirmTOTP(ctx context.Context, userID, code string) ([]strin
 		return nil, errTOTPAlreadyOn
 	case st.PendingSecret == nil:
 		return nil, errTOTPNotBegun
+	case s.now().Sub(time.UnixMilli(st.PendingAtMs)) > totpSetupTTL:
+		return nil, errTOTPExpired
 	}
 	if len(code) > maxCodeBytes {
 		return nil, ErrWrongCode

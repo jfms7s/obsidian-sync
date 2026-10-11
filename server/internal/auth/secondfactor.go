@@ -25,7 +25,7 @@ func (s *Service) checkSecondFactor(ctx context.Context, userID string, st store
 			return false, nil
 		}
 		// Recorded atomically: of two logins racing with one code, one wins.
-		used, err := s.st.UseTOTPStep(ctx, userID, step)
+		used, err := s.st.UseTOTPStep(ctx, userID, st.Secret, step)
 		if err != nil {
 			return false, fmt.Errorf("record totp step: %w", err)
 		}
