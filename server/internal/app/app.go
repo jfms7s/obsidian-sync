@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -52,7 +54,8 @@ type App struct {
 	// Metrics is nil unless metrics_listen is set; ServeWithMetrics serves it.
 	Metrics *metrics.Obsync
 
-	log *slog.Logger
+	profiling bool
+	log       *slog.Logger
 }
 
 // Build opens and migrates the database and assembles the single-node server.
@@ -107,10 +110,35 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts Option
 		},
 		Metrics: m,
 	})
+	if cfg.Profiling {
+		// The mutex and block profiles are empty unless sampled. At these
+		// rates (1 in 5 contention events, blocking events of 1ms or more)
+		// the overhead is negligible.
+		runtime.SetMutexProfileFraction(5)
+		runtime.SetBlockProfileRate(int(time.Millisecond))
+	}
 	jc := JobsConfig(cfg)
 	jc.Metrics = m
 	runner := jobs.New(st, blobs, jc, time.Now, log)
-	return &App{Store: st, Blobs: blobs, Handler: handler, Hub: h, Jobs: runner, Metrics: m, log: log}, nil
+	return &App{Store: st, Blobs: blobs, Handler: handler, Hub: h, Jobs: runner, Metrics: m, profiling: cfg.Profiling, log: log}, nil
+}
+
+// metricsHandler is what the metrics listener serves: /metrics, plus Go's
+// pprof endpoints when profiling is on. The API listener never gets these.
+// pprof is wired here by hand, never blank-imported: a blank import would
+// register it on http.DefaultServeMux.
+func (a *App) metricsHandler() http.Handler {
+	if !a.profiling {
+		return a.Metrics.Handler()
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", a.Metrics.Handler())
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	return mux
 }
 
 // EnsureDatabaseDir creates the directory of a local (file:) database, mode
@@ -213,8 +241,9 @@ func (a *App) Serve(ctx context.Context, ln net.Listener) error {
 }
 
 // ServeWithMetrics is Serve, plus GET /metrics on metricsLn (nil: none) when
-// metrics are on. The metrics server has nothing else, and it stops with
-// the API server.
+// metrics are on, and /debug/pprof/ there too when profiling is on. The
+// metrics server has nothing else, and it stops with the API server. It has
+// no write timeout, so a CPU profile can stream for its full duration.
 func (a *App) ServeWithMetrics(ctx context.Context, ln, metricsLn net.Listener) error {
 	if metricsLn != nil && a.Metrics == nil {
 		metricsLn.Close()
@@ -245,7 +274,7 @@ func (a *App) ServeWithMetrics(ctx context.Context, ln, metricsLn net.Listener) 
 	var metricsSrv *http.Server
 	if metricsLn != nil {
 		metricsSrv = &http.Server{
-			Handler:           a.Metrics.Handler(),
+			Handler:           a.metricsHandler(),
 			ReadHeaderTimeout: readHeaderTimeout,
 			IdleTimeout:       idleTimeout,
 			ErrorLog:          slog.NewLogLogger(a.log.Handler(), slog.LevelWarn),

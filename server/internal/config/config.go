@@ -64,7 +64,10 @@ type Config struct {
 	Listen string `yaml:"listen"`
 	// MetricsListen, when set (host:port), serves Prometheus metrics at
 	// /metrics on a second listener. Empty: no metrics listener.
-	MetricsListen     string `yaml:"metrics_listen"`
+	MetricsListen string `yaml:"metrics_listen"`
+	// Profiling, when true, also serves Go's pprof endpoints (/debug/pprof/)
+	// on the metrics listener. Needs metrics_listen; never on the API listener.
+	Profiling         bool   `yaml:"profiling"`
 	DataDir           string `yaml:"data_dir"`
 	DatabaseURL       string `yaml:"database_url"`
 	DatabaseAuthToken string `yaml:"database_auth_token"`
@@ -203,6 +206,7 @@ func applyEnv(c *Config, getenv func(string) string) error {
 
 	str("OBSYNC_LISTEN", &c.Listen)
 	str("OBSYNC_METRICS_LISTEN", &c.MetricsListen)
+	boolean("OBSYNC_PROFILING", &c.Profiling)
 	str("OBSYNC_DATA_DIR", &c.DataDir)
 	str("OBSYNC_DATABASE_URL", &c.DatabaseURL)
 	str("OBSYNC_DATABASE_AUTH_TOKEN", &c.DatabaseAuthToken)
@@ -251,6 +255,9 @@ func (c Config) Validate() error {
 		} else if n != 0 && c.MetricsListen == c.Listen {
 			add("metrics_listen must not be the same address as listen")
 		}
+	}
+	if c.Profiling && c.MetricsListen == "" {
+		add("profiling needs metrics_listen: pprof is only served on the metrics listener")
 	}
 	if c.DataDir == "" {
 		add("data_dir must not be empty")
@@ -397,6 +404,7 @@ func (c Config) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("listen", c.Listen),
 		slog.String("metrics_listen", c.MetricsListen),
+		slog.Bool("profiling", c.Profiling),
 		slog.String("data_dir", c.DataDir),
 		slog.String("database_url", redactURL(c.DatabaseURL)),
 		slog.String("database_auth_token", token),

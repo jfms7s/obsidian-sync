@@ -204,3 +204,55 @@ func putChunk(c *client, vaultID string, id []byte, body string) {
 		c.t.Fatalf("put chunk = %d", resp.StatusCode)
 	}
 }
+
+// serveBoth runs ServeWithMetrics on two loopback listeners until the test
+// ends and returns the API and metrics base URLs.
+func serveBoth(t *testing.T, a *app.App) (api, metricsBase string) {
+	t.Helper()
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	mln, _ := net.Listen("tcp", "127.0.0.1:0")
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.ServeWithMetrics(ctx, ln, mln) }()
+	t.Cleanup(func() {
+		stop()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	})
+	return "http://" + ln.Addr().String(), "http://" + mln.Addr().String()
+}
+
+// With profiling on, pprof answers on the metrics listener only, and a CPU
+// profile streams through the real server (no write timeout cuts it off).
+func TestMetricsListenerProfiling(t *testing.T) {
+	a, _ := buildWith(t, map[string]string{"OBSYNC_METRICS_LISTEN": "127.0.0.1:0", "OBSYNC_PROFILING": "true"})
+	api, m := serveBoth(t, a)
+	for _, path := range []string{"/debug/pprof/", "/debug/pprof/heap", "/debug/pprof/goroutine", "/debug/pprof/mutex", "/debug/pprof/block", "/metrics"} {
+		if status, _ := get(t, m+path); status != 200 {
+			t.Errorf("GET %s on the metrics listener = %d, want 200", path, status)
+		}
+	}
+	if status, body := get(t, m+"/debug/pprof/profile?seconds=1"); status != 200 || len(body) == 0 {
+		t.Errorf("CPU profile = %d, %d bytes", status, len(body))
+	}
+	for _, path := range []string{"/debug/pprof/", "/debug/pprof/profile?seconds=1", "/debug/pprof/heap"} {
+		if status, _ := get(t, api+path); status != 404 {
+			t.Errorf("GET %s on the API = %d, want 404", path, status)
+		}
+	}
+}
+
+// With profiling off, the metrics listener serves /metrics and no pprof.
+func TestMetricsListenerNoProfiling(t *testing.T) {
+	a, _ := buildWith(t, map[string]string{"OBSYNC_METRICS_LISTEN": "127.0.0.1:0"})
+	api, m := serveBoth(t, a)
+	if status, _ := get(t, m+"/metrics"); status != 200 {
+		t.Errorf("GET /metrics = %d, want 200", status)
+	}
+	for _, base := range []string{m, api} {
+		if status, _ := get(t, base+"/debug/pprof/"); status != 404 {
+			t.Errorf("GET %s/debug/pprof/ = %d, want 404", base, status)
+		}
+	}
+}

@@ -134,6 +134,7 @@ Settings come from environment variables (or a YAML file named by `OBSYNC_CONFIG
 | `OBSYNC_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 | `OBSYNC_RATE_LIMIT_DEVICE_RPS`, `_BURST`, `OBSYNC_RATE_LIMIT_IP_RPS`, `_BURST` | 100 / 1000, 1 / 10 | Request limits per device and per address (0 turns one off) |
 | `OBSYNC_METRICS_LISTEN` | none (off) | Address (`host:port`, e.g. `:9090`) of a second listener that serves Prometheus metrics at `/metrics`. Keep it off the public route: scrape it from inside your network (see [Metrics](#metrics)) |
+| `OBSYNC_PROFILING` | `false` | `true` also serves Go's pprof endpoints at `/debug/pprof/` on the metrics listener, for a continuous profiler such as Pyroscope or Alloy. Needs `OBSYNC_METRICS_LISTEN` (it is an error without one). The main listener never serves them (see [Profiling](#profiling)) |
 
 #### Metrics
 
@@ -146,6 +147,10 @@ With `OBSYNC_METRICS_LISTEN` set, `GET /metrics` on that address returns Prometh
 - counted at each scrape from the database: `obsync_users`, `obsync_vaults`, `obsync_devices_active`, `obsync_storage_used_bytes` (left out of a scrape whose query fails, counted in `obsync_scrape_errors_total`)
 
 A useful alert: `time() - obsync_maintenance_last_success_timestamp_seconds > 3 * 86400` (maintenance has not succeeded for three days).
+
+#### Profiling
+
+With `OBSYNC_PROFILING=true` (and `OBSYNC_METRICS_LISTEN` set), the metrics listener also serves Go's [pprof](https://pkg.go.dev/net/http/pprof) endpoints under `/debug/pprof/`: CPU, heap, goroutine, mutex and block profiles, for `go tool pprof` or a continuous profiler. Mutex and block sampling is turned on with it, at rates cheap enough to leave on. Profiles show goroutine stacks and allocation sites, so keep that listener as private as the metrics: the main listener never serves them.
 
 `deploy/systemd/obsync.env.example` lists the rest, with comments. `obsync health` checks the server's own `/readyz` (it is what the container's health check runs). `obsync migrate` applies database migrations and exits; `obsync serve` does it by itself on start.
 
