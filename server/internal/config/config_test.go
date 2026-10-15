@@ -412,3 +412,31 @@ func TestMetricsListen(t *testing.T) {
 		t.Errorf("startup log %q lacks metrics_listen", buf.String())
 	}
 }
+
+func TestProfiling(t *testing.T) {
+	cfg, err := config.Load("", env(nil))
+	if err != nil || cfg.Profiling {
+		t.Fatalf("default profiling = %v (err %v), want false", cfg.Profiling, err)
+	}
+	cfg, err = config.Load("", env(map[string]string{"OBSYNC_PROFILING": "true", "OBSYNC_METRICS_LISTEN": ":9090"}))
+	if err != nil || !cfg.Profiling {
+		t.Fatalf("profiling = %v, err %v", cfg.Profiling, err)
+	}
+	cfg, err = config.Load(writeFile(t, "metrics_listen: :9090\nprofiling: true\n"), env(nil))
+	if err != nil || !cfg.Profiling {
+		t.Fatalf("yaml profiling = %v, err %v", cfg.Profiling, err)
+	}
+	_, err = config.Load("", env(map[string]string{"OBSYNC_PROFILING": "true"}))
+	if err == nil || !strings.Contains(err.Error(), "profiling") || !strings.Contains(err.Error(), "metrics_listen") {
+		t.Errorf("profiling without metrics_listen: err = %v", err)
+	}
+	_, err = config.Load("", env(map[string]string{"OBSYNC_PROFILING": "nope", "OBSYNC_METRICS_LISTEN": ":9090"}))
+	if err == nil || !strings.Contains(err.Error(), "OBSYNC_PROFILING") || !strings.Contains(err.Error(), "is not a boolean") {
+		t.Errorf("OBSYNC_PROFILING=nope: err = %v", err)
+	}
+	var buf bytes.Buffer
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("config", "cfg", cfg)
+	if !strings.Contains(buf.String(), "profiling=true") {
+		t.Errorf("startup log %q lacks profiling", buf.String())
+	}
+}
