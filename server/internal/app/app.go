@@ -277,7 +277,11 @@ func (a *App) ServeWithMetrics(ctx context.Context, ln, metricsLn net.Listener) 
 			Handler:           a.metricsHandler(),
 			ReadHeaderTimeout: readHeaderTimeout,
 			IdleTimeout:       idleTimeout,
-			ErrorLog:          slog.NewLogLogger(a.log.Handler(), slog.LevelWarn),
+			// A CPU profile or trace runs until its request context ends;
+			// srv.Shutdown cancels baseCtx first, so one in flight stops
+			// at once instead of holding this server's Shutdown.
+			BaseContext: func(net.Listener) context.Context { return baseCtx },
+			ErrorLog:    slog.NewLogLogger(a.log.Handler(), slog.LevelWarn),
 		}
 		go func() {
 			if err := metricsSrv.Serve(metricsLn); !errors.Is(err, http.ErrServerClosed) {

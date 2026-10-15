@@ -256,3 +256,43 @@ func TestMetricsListenerNoProfiling(t *testing.T) {
 		}
 	}
 }
+
+// A CPU profile in flight (Alloy holds one 14s of every 15s) must not hold
+// up a graceful shutdown: it ends with the server, and Serve returns nil.
+func TestMetricsListenerShutdownDuringProfile(t *testing.T) {
+	a, _ := buildWith(t, map[string]string{"OBSYNC_METRICS_LISTEN": "127.0.0.1:0", "OBSYNC_PROFILING": "true"})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.ServeWithMetrics(ctx, ln, mln) }()
+	profiled := make(chan struct{})
+	go func() {
+		defer close(profiled)
+		if resp, err := http.Get("http://" + mln.Addr().String() + "/debug/pprof/profile?seconds=30"); err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+	}()
+	time.Sleep(300 * time.Millisecond) // let the profile start
+	start := time.Now()
+	stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Serve = %v, want nil", err)
+		}
+		if d := time.Since(start); d > 3*time.Second {
+			t.Fatalf("shutdown took %s with a profile in flight", d)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Serve did not return")
+	}
+	<-profiled
+}
