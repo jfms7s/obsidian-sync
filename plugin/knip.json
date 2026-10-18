@@ -1,0 +1,6 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": ["cli/bin.ts"],
+  "ignore": ["esbuild.config.d.mts", "lint/eslint.config.mjs"],
+  "ignoreDependencies": ["@bufbuild/protoc-gen-es", "obsidian"]
+}
