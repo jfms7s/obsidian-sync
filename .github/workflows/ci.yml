@@ -68,3 +68,41 @@ jobs:
               echo "$bin is dynamically linked" >&2; exit 1
             fi
           done
+
+  # Report-only: never gates the build; fragments feed the quality-report image.
+  quality:
+    name: Code quality (report-only, eng-metrics-lab)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Dead code, Go (deadcode)
+        run: |
+          mkdir -p .quality
+          cd server && go run golang.org/x/tools/cmd/deadcode@v0.52.0 -json ./... > ../.quality/deadcode-go.json
+        continue-on-error: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: plugin/package-lock.json
+      - name: Install plugin dependencies
+        working-directory: plugin
+        run: npm ci
+        continue-on-error: true
+      - name: Dead code, TypeScript (knip)
+        run: |
+          mkdir -p .quality
+          cd plugin && npx --yes knip@5.88.1 --reporter json --no-exit-code > ../.quality/deadcode-ts.json
+        continue-on-error: true
+      - name: Code quality (report-only)
+        uses: jfms7s/eng-metrics-lab/action@v0
+        continue-on-error: true
