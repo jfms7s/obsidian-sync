@@ -84,7 +84,8 @@ jobs:
       # the second half; the convergence suite is skipped as before. The relative
       # SF: paths vitest writes get the package directory put in front, so they are
       # repo-relative. cli/ is shipped code with its own tests, so it is included
-      # next to src/.
+      # next to src/. Code reached only through CLI child processes (cli.test.ts,
+      # cli-restart.test.ts) is not counted.
       - run: make plugin/node_modules
       - run: cd plugin && npm run typecheck
       - name: Plugin tests with coverage (eng-metrics-lab)
@@ -107,7 +108,7 @@ jobs:
       - name: The bundle needs nothing but obsidian
         run: |
           ! grep -oE 'require\("[^"]+"\)' plugin/dist/main.js | grep -v 'require("obsidian")'
-      # The headless client (plugin/cli/): its tests run in make plugin-test; this builds the
+      # The headless client (plugin/cli/): its tests run in the coverage step above; this builds the
       # file a release attaches and checks that it starts under the Node the repo pins.
       - run: make cli-build
       - name: The CLI bundle runs
