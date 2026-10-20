@@ -1,0 +1,2 @@
+# Generated protobuf code (buf generate) is not hand-written: keep it out of every metric.
+exclude: [server/internal/gen/**, plugin/src/gen/**]
