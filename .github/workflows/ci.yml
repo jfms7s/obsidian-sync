@@ -72,6 +72,10 @@ jobs:
   # Report-only: never gates the build; fragments feed the quality-report image.
   quality:
     name: Code quality (report-only, eng-metrics-lab)
+    # Waits for the checks, which write the coverage fragments; still runs when
+    # they fail (the report then has no coverage), but not when cancelled.
+    needs: [checks]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -102,6 +106,14 @@ jobs:
         run: |
           mkdir -p .quality
           cd plugin && npx --yes knip@5.88.1 --reporter json --no-exit-code > ../.quality/deadcode-ts.json
+        continue-on-error: true
+      # The fragments the checks workflow uploaded (Go and TypeScript coverage). Same
+      # workflow run, so artifacts of the called workflow are visible here.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-fragments-*
+          merge-multiple: true
+          path: .quality
         continue-on-error: true
       - name: Code quality (report-only)
         uses: jfms7s/eng-metrics-lab/action@v0

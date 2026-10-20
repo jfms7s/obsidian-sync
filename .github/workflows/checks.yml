@@ -27,7 +27,25 @@ jobs:
           go version
           grep '^toolchain' go.mod
       - run: cd server && go vet ./...
-      - run: cd server && go test -race ./...
+      # The test run and the coverage run are one run: report-only telemetry, but a
+      # failing test still fails the job, and the fragment is only moved into
+      # .quality/ after a green run. quality-report maps the import paths in the
+      # profile to files through go.mod. Go code that only the plugin's server
+      # tests exercise is not counted (known gap).
+      - name: Go tests with coverage (eng-metrics-lab)
+        run: |
+          cd server
+          go test -race -covermode=atomic -coverpkg=./... -coverprofile="$RUNNER_TEMP/coverage-go.out" ./...
+          mkdir -p ../.quality
+          mv "$RUNNER_TEMP/coverage-go.out" ../.quality/coverage-go.out
+      # Report-only: release.yml needs this workflow, so a failed upload must not block a release.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
+        with:
+          name: coverage-fragments-go
+          path: .quality/coverage-go.out
+          include-hidden-files: true
+          retention-days: 7
       # Known vulnerabilities in the Go code, its modules and the standard library
       # it calls. It must check the standard library of the toolchain go.mod
       # names, the one the binary ships with, and be built by that toolchain
@@ -62,13 +80,35 @@ jobs:
           cache-dependency-path: |
             plugin/package-lock.json
             plugin/lint/package-lock.json
-      - run: make plugin-test
+      # make plugin-test (typecheck, then the unit and server tests) with coverage on
+      # the second half; the convergence suite is skipped as before. The relative
+      # SF: paths vitest writes get the package directory put in front, so they are
+      # repo-relative. cli/ is shipped code with its own tests, so it is included
+      # next to src/. Code reached only through CLI child processes (cli.test.ts,
+      # cli-restart.test.ts) is not counted.
+      - run: make plugin/node_modules
+      - run: cd plugin && npm run typecheck
+      - name: Plugin tests with coverage (eng-metrics-lab)
+        run: |
+          cd plugin
+          npx vitest run --project '!convergence' --coverage.enabled --coverage.provider=v8 --coverage.reporter=lcovonly --coverage.reportsDirectory="$RUNNER_TEMP/coverage-ts" '--coverage.include=src/**' '--coverage.include=cli/**'
+          mkdir -p ../.quality
+          sed 's|^SF:\([^/]\)|SF:plugin/\1|' "$RUNNER_TEMP/coverage-ts/lcov.info" > "$RUNNER_TEMP/coverage-ts.lcov"
+          mv "$RUNNER_TEMP/coverage-ts.lcov" ../.quality/coverage-ts.lcov
+      # Report-only: release.yml needs this workflow, so a failed upload must not block a release.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
+        with:
+          name: coverage-fragments-ts
+          path: .quality/coverage-ts.lcov
+          include-hidden-files: true
+          retention-days: 7
       - run: make plugin-lint
       - run: make plugin-build
       - name: The bundle needs nothing but obsidian
         run: |
           ! grep -oE 'require\("[^"]+"\)' plugin/dist/main.js | grep -v 'require("obsidian")'
-      # The headless client (plugin/cli/): its tests run in make plugin-test; this builds the
+      # The headless client (plugin/cli/): its tests run in the coverage step above; this builds the
       # file a release attaches and checks that it starts under the Node the repo pins.
       - run: make cli-build
       - name: The CLI bundle runs
