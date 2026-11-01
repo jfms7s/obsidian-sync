@@ -193,6 +193,16 @@ Sign in with the same account, **unlock** with the passphrase (or the recovery w
 - **Ignored on every device** keeps rules for all devices in `.obsyncignore` at the vault root. It is an ordinary file that syncs like a note, so a rule written once applies everywhere; Obsidian hides dot-files, so the settings tab edits it (any text editor works on a desktop). A device ignores the union of the built-in list, the configuration folder, `.obsyncignore` and its own list: it can add rules, never un-ignore one from the file. A new device applies the vault's `.obsyncignore` before anything else arrives; a changed file applies at the next sync, and removing a rule brings the matching files back. The syntax is the same as the device list: one pattern per line, `#` comments, a trailing `/` for folders, `*`, `?` and `**`; negation (`!`) and character classes (`[...]`) are not supported, and lines that use them are skipped (the settings tab lists them) while the rest applies. No rule ever matches `.obsyncignore` itself. `.gitignore` files are not read.
 - Files deleted by another device are moved the way Obsidian's **Files and links → Deleted files** setting says (system trash by default). The server keeps the content for the history view either way.
 
+### Away from home
+
+Keep the server private and reach it over a VPN into the network it runs on (your router's or NAS's VPN server, WireGuard, or Tailscale with a subnet router). No port forwarding to the server is needed, and every device keeps the same server address:
+
+- The VPN must route to the server and resolve its name, for example by handing out your network's DNS server or a split-DNS rule for the server's domain.
+- Keep the HTTPS name and its certificate: the plugin refuses plain `http://` except on `localhost`, so a bare IP address does not work.
+- When the VPN drops and comes back, the plugin reconnects and catches up by itself.
+
+Exposing the server to the internet is not recommended. If you do, turn on [two-step sign-in](#two-step-sign-in) for every account, and make sure the reverse proxy passes each client's own address (`OBSYNC_TRUSTED_PROXIES`); otherwise clients share the per-address rate limits and one of them can lock the others out. A VPN that translates its clients to one address has the same effect on those limits, which only matters with many devices.
+
 ### Two-step sign-in
 
 An account can ask for a code from an authenticator app (any app that supports TOTP, such as Aegis, 2FAS, Google Authenticator or 1Password) as well as the password, whenever a device signs in:
