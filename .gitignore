@@ -7,3 +7,4 @@ node_modules/
 /plugin/dist/
 /plugin/.vitest/
 .quality/
+.worktrees/

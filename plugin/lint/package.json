@@ -7,6 +7,9 @@
   "scripts": {
     "lint": "cd ../.. && plugin/lint/node_modules/.bin/eslint --config plugin/lint/eslint.config.mjs --max-warnings 0 plugin/src"
   },
+  "engines": {
+    "node": ">=22.12"
+  },
   "devDependencies": {
     "@types/node": "22.20.5",
     "eslint": "10.12.0",
