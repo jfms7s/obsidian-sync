@@ -292,7 +292,7 @@ export async function acknowledgeRecoveryWords(state: LocalState): Promise<void>
   if (pending?.uploaded) await state.clearPendingKeySetup();
 }
 
-export async function bundleOrThrow(api: ApiClient): Promise<KeyBundleFields> {
+async function bundleOrThrow(api: ApiClient): Promise<KeyBundleFields> {
   const kb = await api.getKeyBundle();
   if (!kb) throw new Error('this account has no keys yet; set them up on your first device');
   return kb;
@@ -358,18 +358,30 @@ export class KeyBundleMismatchError extends Error {
  * the passphrase (PassphraseIsPasswordError, WeakPassphraseError, before any
  * request) and the account password (ApiError WRONG_PASSWORD, bundle
  * unchanged). KeyBundleMismatchError, before the upload, when the server's
- * bundle belongs to other keys than keys. Returns the new recovery words.
+ * bundle belongs to other keys than keys. Returns the new recovery words and
+ * the bundle that was uploaded.
+ *
+ * beforeUpload gets both just before the PUT is sent, so the caller can keep
+ * the words even if the response is lost after the server applied it.
  */
+export interface ResetSecretsResult {
+  recoveryWords: string;
+  bundle: KeyBundleFields;
+}
+
 export async function resetSecrets(
   api: ApiClient, session: Session, keys: UserKeys, newPassphrase: string, accountPassword: string, random: Random = cryptoRandom,
-): Promise<string> {
+  beforeUpload?: (r: ResetSecretsResult) => Promise<void>,
+): Promise<ResetSecretsResult> {
   if (newPassphrase === accountPassword) throw new PassphraseIsPasswordError();
   if (!isStrongPassphrase(newPassphrase)) throw new WeakPassphraseError();
   const current = await bundleOrThrow(api);
   if (!equalBytes(current.publicEncKey, keys.encPub) || !equalBytes(current.publicSignKey, keys.signPub)) throw new KeyBundleMismatchError();
   const created = await createKeyBundle(session.userId, newPassphrase, random, strengthenParams(current.passParams), keys);
+  const result = { recoveryWords: created.recoveryWords, bundle: created.bundle };
+  await beforeUpload?.(result);
   await api.putKeyBundle(created.bundle, accountPassword);
-  return created.recoveryWords;
+  return result;
 }
 
 export function listDevices(api: ApiClient): Promise<DeviceInfo[]> {

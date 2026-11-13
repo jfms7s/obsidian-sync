@@ -784,8 +784,49 @@ describe('the settings tab', () => {
       expect(s.field('Repeat the new passphrase').value).toBe(NEW);
       expect(s.field('Your account password').value).toBe(user.password);
       expect(s.text()).not.toMatch(/Write down your recovery words/);
+      // The request never reached the server: the next render drops the unsent words and shows the settings.
+      expect(await apiFor(session).getKeyBundle()).toEqual(before);
+      await s.render();
+      expect(s.text()).not.toMatch(/Write down your recovery words/);
+      expect(s.setting('Sync').heading).toBe(true);
       expect(await s.state.getPendingKeySetup()).toBeUndefined();
       expect(await apiFor(session).getKeyBundle()).toEqual(before);
+      await s.shell.stop();
+    }, 120_000);
+
+    it('shows the new words on the next render when the upload landed but its response was lost', async () => {
+      const user = await newUser(srv);
+      const s = await readyDevice(user);
+      const session = (await s.state.getSession())!;
+      const before = await apiFor(session).getKeyBundle();
+      fill(s, NEW, NEW, user.password);
+      s.net.loseNextResponse('PUT', '/v1/keys');
+      await s.press('Reset passphrase and recovery words');
+      expect(Notice.shown.at(-1)?.message).toMatch(/recovery words will be shown/);
+      expect(s.text()).not.toMatch(/Write down your recovery words/);
+      const after = (await apiFor(session).getKeyBundle())!;
+      expect(after).not.toEqual(before);
+
+      await s.render();
+      expect(s.setting('Write down your recovery words').heading).toBe(true);
+      const grid = s.el().children.find((c) => c.cls === 'obsync-recovery-words')!;
+      const words = grid.children.map((c) => c.text.replace(/^\d+\. /, '')).join(' ');
+      expect((await unlockWithRecoveryWords(after, session.userId, words)).encPub).toEqual((await unlockWithPassphrase(after, session.userId, NEW)).encPub);
+      await s.press('I have saved them');
+      expect(s.setting('Sync').heading).toBe(true);
+      await s.shell.stop();
+    }, 120_000);
+
+    it('still shows the words after a restart while offline once the upload succeeded', async () => {
+      const user = await newUser(srv);
+      const s = await readyDevice(user);
+      fill(s, NEW, NEW, user.password);
+      await s.press('Reset passphrase and recovery words');
+      expect(s.setting('Write down your recovery words').heading).toBe(true);
+      s.net.setOnline(false);
+      await s.render();
+      expect(s.setting('Write down your recovery words').heading).toBe(true);
+      s.net.setOnline(true);
       await s.shell.stop();
     }, 120_000);
   });
