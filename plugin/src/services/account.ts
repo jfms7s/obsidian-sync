@@ -5,7 +5,7 @@ import { ApiError, ErrorCode } from '../api/errors';
 import type { DeviceInfo, KeyBundleFields } from '../api/types';
 import { normalizeServerUrl } from '../api/url';
 import {
-  createKeyBundle, rewrapPassphrase, unlockWithPassphrase, unlockWithRecoveryWords, userKeysFromSecrets,
+  createKeyBundle, rewrapPassphrase, strengthenParams, unlockWithPassphrase, unlockWithRecoveryWords, userKeysFromSecrets,
   DEFAULT_ARGON2, type Argon2Params, type UserKeys,
 } from '../crypto/userkeys';
 import { CryptoError, hmacSha256 } from '../crypto/primitives';
@@ -292,7 +292,7 @@ export async function acknowledgeRecoveryWords(state: LocalState): Promise<void>
   if (pending?.uploaded) await state.clearPendingKeySetup();
 }
 
-async function bundleOrThrow(api: ApiClient): Promise<KeyBundleFields> {
+export async function bundleOrThrow(api: ApiClient): Promise<KeyBundleFields> {
   const kb = await api.getKeyBundle();
   if (!kb) throw new Error('this account has no keys yet; set them up on your first device');
   return kb;
@@ -336,6 +336,40 @@ export async function changePassphrase(
   if (!isStrongPassphrase(newPassphrase)) throw new WeakPassphraseError();
   const current = await bundleOrThrow(api);
   await api.putKeyBundle(await rewrapPassphrase(current, session.userId, keys, newPassphrase, random), accountPassword);
+}
+
+/**
+ * Thrown by resetSecrets when the keys on the server are not the ones this
+ * device holds (another device set the account up again): nothing was
+ * uploaded, so the server's keys are untouched.
+ */
+export class KeyBundleMismatchError extends Error {
+  constructor() {
+    super('The keys on the server are not the ones this device holds, so they cannot be reset from here. Sign out and unlock this device again.');
+    this.name = 'KeyBundleMismatchError';
+  }
+}
+
+/**
+ * Stores this device's unlocked keys again under a new passphrase and new
+ * recovery words, without the old ones, in one upload: the passphrase and
+ * the words never disagree. The keypairs and vault keys are unchanged, so
+ * every vault and device keeps working. Same rules as changePassphrase for
+ * the passphrase (PassphraseIsPasswordError, WeakPassphraseError, before any
+ * request) and the account password (ApiError WRONG_PASSWORD, bundle
+ * unchanged). KeyBundleMismatchError, before the upload, when the server's
+ * bundle belongs to other keys than keys. Returns the new recovery words.
+ */
+export async function resetSecrets(
+  api: ApiClient, session: Session, keys: UserKeys, newPassphrase: string, accountPassword: string, random: Random = cryptoRandom,
+): Promise<string> {
+  if (newPassphrase === accountPassword) throw new PassphraseIsPasswordError();
+  if (!isStrongPassphrase(newPassphrase)) throw new WeakPassphraseError();
+  const current = await bundleOrThrow(api);
+  if (!equalBytes(current.publicEncKey, keys.encPub) || !equalBytes(current.publicSignKey, keys.signPub)) throw new KeyBundleMismatchError();
+  const created = await createKeyBundle(session.userId, newPassphrase, random, strengthenParams(current.passParams), keys);
+  await api.putKeyBundle(created.bundle, accountPassword);
+  return created.recoveryWords;
 }
 
 export function listDevices(api: ApiClient): Promise<DeviceInfo[]> {

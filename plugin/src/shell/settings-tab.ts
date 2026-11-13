@@ -46,6 +46,10 @@ interface Form {
   /** The password and code fields of the two-step sign-in section. */
   twoStepPassword: string;
   twoStepCode: string;
+  /** The fields of the reset-passphrase section. */
+  resetPassphrase: string;
+  resetPassphrase2: string;
+  resetPassword: string;
 }
 
 /** What the two-step sign-in section shows besides its status: a set-up in progress, or new recovery codes. Memory only. */
@@ -89,6 +93,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
     this.form = {
       server: '', username: '', password: '', deviceName: describePlatform().name, passphrase: '', passphrase2: '', recoveryWords: '',
       vaultName: app.vault.getName(), ignoreText: null, vaultIgnoreText: null, totpCode: '', needsCode: false, twoStepPassword: '', twoStepCode: '',
+      resetPassphrase: '', resetPassphrase2: '', resetPassword: '',
     };
   }
 
@@ -101,6 +106,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
     this.endUsageRefresh();
     this.form.password = this.form.passphrase = this.form.passphrase2 = this.form.recoveryWords = '';
     this.form.totpCode = this.form.twoStepPassword = this.form.twoStepCode = '';
+    this.form.resetPassphrase = this.form.resetPassphrase2 = this.form.resetPassword = '';
     this.form.needsCode = false;
     // A secret on screen or recovery codes not confirmed as saved are not kept once the tab closes.
     this.twoStep = { kind: 'status' };
@@ -369,6 +375,7 @@ export class ObsyncSettingTab extends PluginSettingTab {
       .addButton((b) => b.setButtonText('Show deleted files').onClick(() => new TrashModal(this.app, this.shell).open()));
     await this.renderDevices();
     await this.renderTwoStep();
+    this.renderReset();
     if (token !== this.renderToken) return;
     this.showUsage(await usage);
     this.startUsageRefresh(token);
@@ -626,6 +633,29 @@ export class ObsyncSettingTab extends PluginSettingTab {
         await this.setup.twoStepDisable(f.twoStepPassword, f.twoStepCode);
         f.twoStepPassword = f.twoStepCode = '';
         new Notice('Obsync: two-step sign-in is off.');
+        await this.render();
+      })));
+  }
+
+  /**
+   * Forgotten passphrase and recovery words, on a device that is still
+   * unlocked: stores its keys again under a new passphrase with new words.
+   * Only built in the ready view, which only an unlocked device reaches.
+   */
+  private renderReset(): void {
+    const f = this.form;
+    this.heading('Reset passphrase and recovery words');
+    this.containerEl.createEl('p', {
+      text: 'If you lost your passphrase and recovery words, this device can still set new ones, because it holds your keys. Your notes and your other devices are not affected. The old passphrase and recovery words stop working.',
+    });
+    this.text('New passphrase', `At least ${PASSPHRASE_MIN_WORDS} words or ${PASSPHRASE_MIN_CHARS} characters, and different from your account password.`,
+      () => f.resetPassphrase, (v) => (f.resetPassphrase = v), { secret: true, autocomplete: 'new-password' });
+    this.text('Repeat the new passphrase', '', () => f.resetPassphrase2, (v) => (f.resetPassphrase2 = v), { secret: true, autocomplete: 'new-password' });
+    this.text('Your account password', 'The server needs it to replace your keys.', () => f.resetPassword, (v) => (f.resetPassword = v), { secret: true, autocomplete: 'current-password' });
+    new Setting(this.containerEl).setDesc('This takes a few seconds, longer on a phone. You will then get new recovery words to write down.')
+      .addButton((b) => b.setButtonText('Reset passphrase and recovery words').setWarning().onClick(this.action(b, async () => {
+        await this.setup.resetSecrets(f.resetPassphrase, f.resetPassphrase2, f.resetPassword);
+        f.resetPassphrase = f.resetPassphrase2 = f.resetPassword = '';
         await this.render();
       })));
   }

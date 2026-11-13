@@ -4,11 +4,11 @@ import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { ApiError, ErrorCode, NetworkError } from '../../src/api/errors';
 import { encryptVaultName } from '../../src/crypto/objects';
 import { CryptoError } from '../../src/crypto/primitives';
-import { Argon2TooCostlyError, createKeyBundle, generateUserKeys } from '../../src/crypto/userkeys';
+import { Argon2TooCostlyError, createKeyBundle, generateUserKeys, unlockWithPassphrase, unlockWithRecoveryWords } from '../../src/crypto/userkeys';
 import { deriveEpochKeys, sealKey } from '../../src/crypto/vaultkeys';
 import {
   acknowledgeRecoveryWords, apiFor, changePassphrase, KeysAlreadySetUpError, keyStatus, listDevices, login, logout,
-  matchesPassword, PassphraseIsPasswordError, WeakPassphraseError, passwordFingerprint, recoveryWordsToConfirm, revokeDevice, SetupPassphraseMismatchError, setupKeys, unlockWithPassphraseService, unlockWithRecoveryService,
+  KeyBundleMismatchError, matchesPassword, PassphraseIsPasswordError, resetSecrets, WeakPassphraseError, passwordFingerprint, recoveryWordsToConfirm, revokeDevice, SetupPassphraseMismatchError, setupKeys, unlockWithPassphraseService, unlockWithRecoveryService,
 } from '../../src/services/account';
 import { chooseVault, createVault, listRemoteVaults, openVaultKeys } from '../../src/services/vaults';
 import { LocalState } from '../../src/state/store';
@@ -256,6 +256,70 @@ describe('account and keys', () => {
     expect((err as ApiError).code).toBe(ErrorCode.DEVICE_REVOKED);
     await logout(other);
     expect(await other.getSession()).toBeUndefined();
+  });
+});
+
+describe('resetSecrets', () => {
+  /** A user with keys set up under OLD, and the unlocked keys of the device that did it. */
+  async function userWithKeys(name: string) {
+    await srv.createUser(name, `${name}-password`);
+    const s = await newState(`r-${name}`);
+    const session = await login(s, srv.url, name, `${name}-password`, 'Desk', 'linux');
+    const api = apiFor(session);
+    const { keys } = await setupKeys(s, api, session, 'the old passphrase', seededRandom(20), TEST_ARGON2);
+    return { s, session, api, keys, password: `${name}-password` };
+  }
+
+  it('gives a bundle the new passphrase and the new words both open, with the same keys', async () => {
+    const u = await userWithKeys('reset-rita');
+    const words = await resetSecrets(u.api, u.session, u.keys, 'a brand new passphrase', u.password, seededRandom(21));
+    const bundle = (await u.api.getKeyBundle())!;
+    const byPass = await unlockWithPassphrase(bundle, u.session.userId, 'a brand new passphrase');
+    const byWords = await unlockWithRecoveryWords(bundle, u.session.userId, words);
+    for (const k of [byPass, byWords]) {
+      expect(k.encPriv).toEqual(u.keys.encPriv);
+      expect(k.signSeed).toEqual(u.keys.signSeed);
+      expect(k.encPub).toEqual(u.keys.encPub);
+      expect(k.signPub).toEqual(u.keys.signPub);
+    }
+  });
+
+  it('the old passphrase no longer opens the new bundle, and the old recovery words neither', async () => {
+    const u = await userWithKeys('reset-rosa');
+    const old = (await u.api.getKeyBundle())!;
+    await resetSecrets(u.api, u.session, u.keys, 'a brand new passphrase', u.password, seededRandom(22));
+    const bundle = (await u.api.getKeyBundle())!;
+    await expect(unlockWithPassphrase(bundle, u.session.userId, 'the old passphrase')).rejects.toBeInstanceOf(CryptoError);
+    expect(bundle.recoveryWrapped).not.toEqual(old.recoveryWrapped);
+  });
+
+  it('refuses a weak passphrase or one equal to the account password without sending a request', async () => {
+    const u = await userWithKeys('reset-rudy');
+    const net = new Net();
+    const api = apiFor(u.session, { fetch: net.fetch });
+    await expect(resetSecrets(api, u.session, u.keys, 'password12', u.password, seededRandom(23))).rejects.toBeInstanceOf(WeakPassphraseError);
+    await expect(resetSecrets(api, u.session, u.keys, u.password, u.password, seededRandom(23))).rejects.toBeInstanceOf(PassphraseIsPasswordError);
+    expect(net.log).toEqual([]);
+  });
+
+  it('refuses a server bundle with other public keys before uploading anything', async () => {
+    const u = await userWithKeys('reset-ruth');
+    const net = new Net();
+    const other = generateUserKeys(seededRandom(24));
+    const before = (await u.api.getKeyBundle())!;
+    await expect(resetSecrets(apiFor(u.session, { fetch: net.fetch }), u.session, other, 'a brand new passphrase', u.password, seededRandom(25)))
+      .rejects.toBeInstanceOf(KeyBundleMismatchError);
+    expect(net.count('PUT', '/v1/keys')).toBe(0);
+    expect(await u.api.getKeyBundle()).toEqual(before);
+  });
+
+  it('leaves the server bundle unchanged for a wrong account password', async () => {
+    const u = await userWithKeys('reset-reed');
+    const before = (await u.api.getKeyBundle())!;
+    await expect(resetSecrets(u.api, u.session, u.keys, 'a brand new passphrase', 'wrong-password', seededRandom(26)))
+      .rejects.toMatchObject({ code: ErrorCode.WRONG_PASSWORD, status: 403 });
+    expect(await u.api.getKeyBundle()).toEqual(before);
+    expect((await unlockWithPassphrase(before, u.session.userId, 'the old passphrase')).encPub).toEqual(u.keys.encPub);
   });
 });
 
