@@ -27,6 +27,8 @@ export interface ClientOptions extends DeviceOptions {
   webSocket?: boolean;
   /** Default SETTINGS_SYNC_OFF. */
   settingsSync?: SettingsSyncPolicy;
+  /** EngineOptions.onlyFolders: default every folder. */
+  onlyFolders?: readonly string[];
 }
 
 export async function makeClient(srv: TestServer, user: User, o: ClientOptions): Promise<SimClient> {
@@ -38,6 +40,7 @@ export async function makeClient(srv: TestServer, user: User, o: ClientOptions):
     const engine = new SyncEngine({
       api: dev.api, state: dev.state, adapter: dev.adapter, ring: dev.ring, deviceName: dev.name, clock: dev.clock,
       random: dev.random, configDir: '.obsidian', ignoreGlobs, settingsSync, restartBases, webSocket: o.webSocket ? dev.net.webSocket : null,
+      ...(o.onlyFolders ? { onlyFolders: o.onlyFolders } : {}),
       autoRun: o.autoRun ?? false, backoff: { baseMs: 20, maxMs: 200 }, maxFileBytes: dev.ctx.maxFileBytes,
     });
     engine.on((e) => dev.events.push(e));

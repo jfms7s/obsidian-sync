@@ -30,6 +30,8 @@ export interface SyncSessionOptions extends ClientDeps {
   ownPluginFolders?: readonly string[];
   /** SyncEngine's restartBases: one map for the plugin's lifetime. */
   restartBases?: Map<string, RestartBase>;
+  /** SyncEngine's onlyFolders: sync only these folders (the CLI's --only). */
+  onlyFolders?: readonly string[];
 }
 
 export type SyncSessionResult =
@@ -57,6 +59,7 @@ export async function openSyncSession(o: SyncSessionOptions): Promise<SyncSessio
     configDir: o.configDir, ignoreGlobs: await o.state.getIgnoreGlobs(), settingsSync: await o.state.getSettingsSync(),
     ...(o.ownPluginFolders ? { ownPluginFolders: o.ownPluginFolders } : {}),
     ...(o.restartBases ? { restartBases: o.restartBases } : {}),
+    ...(o.onlyFolders ? { onlyFolders: o.onlyFolders } : {}),
     webSocket: o.webSocket === undefined ? defaultWebSocketFactory : o.webSocket,
     refreshKeyring: () => refreshKeyring(o.state, api, session, keys),
     ...(o.random ? { random: o.random } : {}),

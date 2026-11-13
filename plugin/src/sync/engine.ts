@@ -72,6 +72,11 @@ export interface EngineOptions {
    * engine reads itself). Throws InvalidIgnorePatternError for unsupported syntax.
    */
   ignoreGlobs?: readonly string[];
+  /**
+   * Sync only these folders (IgnoreOptions.only: each with a trailing '/',
+   * already validated); everything outside them is ignored. Default: all.
+   */
+  onlyFolders?: readonly string[];
   /** Opens hub WebSockets; null runs without one (tests, or a manual "sync now" mode). */
   webSocket?: WebSocketFactory | null;
   /**
@@ -98,7 +103,8 @@ export interface EngineOptions {
 
 /**
  * The ignore rules an engine with these options applies: the defaults, the
- * config folder, the vault's .obsyncignore globs and the device's own. The
+ * config folder, the vault's .obsyncignore globs, the device's own and its
+ * only-folders whitelist. The
  * one place they are composed; the settings use it to tell what a change
  * of either list newly ignores.
  */
@@ -109,9 +115,10 @@ export function composeIgnoreRules(o: {
   vaultGlobs: readonly string[];
   settingsSync?: SettingsSyncPolicy | undefined;
   ownPluginFolders?: readonly string[] | undefined;
+  only?: readonly string[] | undefined;
 }): IgnoreRules {
   return new IgnoreRules(o.ignoreGlobs, {
-    caseInsensitive: o.caseInsensitive, configDir: o.configDir, vaultGlobs: o.vaultGlobs,
+    caseInsensitive: o.caseInsensitive, configDir: o.configDir, vaultGlobs: o.vaultGlobs, only: o.only,
     configSync: new ConfigCarveOut(o.configDir, o.settingsSync ?? SETTINGS_SYNC_OFF, o.ownPluginFolders ?? []),
   });
 }
@@ -206,7 +213,7 @@ export class SyncEngine {
     const o = this.opts;
     return composeIgnoreRules({
       configDir: o.configDir, caseInsensitive: o.adapter.caseInsensitive, ignoreGlobs: o.ignoreGlobs ?? [], vaultGlobs: this.vaultIgnore.globs,
-      settingsSync: o.settingsSync, ownPluginFolders: o.ownPluginFolders,
+      settingsSync: o.settingsSync, ownPluginFolders: o.ownPluginFolders, only: o.onlyFolders,
     });
   }
 

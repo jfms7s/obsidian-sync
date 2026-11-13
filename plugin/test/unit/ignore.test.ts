@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { IgnoreRules, InvalidIgnorePatternError, isVaultIgnoreFile, parseIgnoreFile, validateIgnorePattern, VAULT_IGNORE_FILE } from '../../src/vault/ignore';
+import { IgnoreRules, InvalidIgnorePatternError, isVaultIgnoreFile, ONLY_MARKER_FILE, parseIgnoreFile, validateIgnorePattern, VAULT_IGNORE_FILE } from '../../src/vault/ignore';
 
 describe('ignore rules', () => {
   const rules = new IgnoreRules(['Private/', '*.pdf', 'drafts/**/*.md', 'Templates/Daily.md'], { configDir: '.obsidian' });
@@ -93,5 +93,42 @@ describe('the vault ignore file', () => {
     expect(isVaultIgnoreFile('.obsyncignore')).toBe(true);
     expect(isVaultIgnoreFile('.ObsyncIgnore', true)).toBe(true);
     expect(isVaultIgnoreFile('.ObsyncIgnore')).toBe(false);
+  });
+});
+
+describe('the only-folders whitelist', () => {
+  it('ignores every path outside the listed folders, the vault ignore file included', () => {
+    const r = new IgnoreRules([], { only: ['mimir/', 'people/'] });
+    expect(r.matches('mimir/a.md')).toBe(false);
+    expect(r.matches('people/sub/p.md')).toBe(false);
+    expect(r.matches('work/x.md')).toBe(true);
+    expect(r.matches('mimir.md')).toBe(true);
+    expect(r.matches('.obsyncignore')).toBe(true);
+    expect(r.outside('work/x.md')).toBe(true);
+    expect(r.outside('mimir/a.md')).toBe(false);
+    expect(new IgnoreRules().outside('work/x.md')).toBe(false);
+  });
+  it('still applies the defaults and the vault globs inside the folders', () => {
+    const r = new IgnoreRules([], { only: ['mimir/'], vaultGlobs: ['mimir/private/'] });
+    expect(r.matches('mimir/private/x.md')).toBe(true);
+    expect(r.matches('mimir/.trash/x.md')).toBe(true); // .trash/ at any depth
+    expect(r.matches('mimir/x.tmp')).toBe(true);
+  });
+  it('skipsFolder enters ancestors only', () => {
+    const r = new IgnoreRules([], { only: ['a/b/'] });
+    expect(r.skipsFolder('a')).toBe(false);
+    expect(r.skipsFolder('a/b')).toBe(false);
+    expect(r.skipsFolder('a/c')).toBe(true);
+    expect(r.skipsFolder('z')).toBe(true);
+    expect(r.matches('a/top.md')).toBe(true);
+  });
+  it('matches the whitelist regardless of case on a case-insensitive vault', () => {
+    const r = new IgnoreRules([], { only: ['mimir/'], caseInsensitive: true });
+    expect(r.matches('Mimir/a.md')).toBe(false);
+    expect(new IgnoreRules([], { only: ['mimir/'] }).matches('Mimir/a.md')).toBe(true);
+  });
+  it('always ignores the marker file at the root, on every device', () => {
+    expect(new IgnoreRules().matches(ONLY_MARKER_FILE)).toBe(true);
+    expect(new IgnoreRules().matches(`notes/${ONLY_MARKER_FILE}`)).toBe(false);
   });
 });
