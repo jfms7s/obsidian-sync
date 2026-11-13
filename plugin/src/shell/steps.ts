@@ -28,6 +28,11 @@ export async function nextStep(state: LocalState, deps: ClientDeps = {}): Promis
   } catch (err) {
     // Offline: a device that was set up keeps syncing (and reports being offline itself).
     const keys = await state.getUserKeys();
+    // Finished but not confirmed recovery words come first, as they do online.
+    if (err instanceof NetworkError) {
+      const words = await recoveryWordsToConfirm(state, session);
+      if (words !== null) return { kind: 'confirm-recovery', words };
+    }
     if (err instanceof NetworkError && keys?.userId === session.userId && vaultReady) return vault.ignoresUnconfirmed ? { kind: 'confirm-ignores' } : { kind: 'ready' };
     throw err;
   }

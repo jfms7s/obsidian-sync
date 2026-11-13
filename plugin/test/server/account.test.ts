@@ -272,8 +272,9 @@ describe('resetSecrets', () => {
 
   it('gives a bundle the new passphrase and the new words both open, with the same keys', async () => {
     const u = await userWithKeys('reset-rita');
-    const words = await resetSecrets(u.api, u.session, u.keys, 'a brand new passphrase', u.password, seededRandom(21));
+    const { recoveryWords: words, bundle: returned } = await resetSecrets(u.api, u.session, u.keys, 'a brand new passphrase', u.password, seededRandom(21));
     const bundle = (await u.api.getKeyBundle())!;
+    expect(returned).toEqual(bundle);
     const byPass = await unlockWithPassphrase(bundle, u.session.userId, 'a brand new passphrase');
     const byWords = await unlockWithRecoveryWords(bundle, u.session.userId, words);
     for (const k of [byPass, byWords]) {
@@ -282,6 +283,20 @@ describe('resetSecrets', () => {
       expect(k.encPub).toEqual(u.keys.encPub);
       expect(k.signPub).toEqual(u.keys.signPub);
     }
+  });
+
+  it('hands the new words and bundle to beforeUpload before the PUT is sent', async () => {
+    const u = await userWithKeys('reset-pat');
+    const net = new Net();
+    let putsSeen = -1;
+    let seen: { recoveryWords: string } | undefined;
+    await resetSecrets(apiFor(u.session, { fetch: net.fetch }), u.session, u.keys, 'a brand new passphrase', u.password, seededRandom(27), async (r) => {
+      putsSeen = net.count('PUT', '/v1/keys');
+      seen = r;
+    });
+    expect(putsSeen).toBe(0);
+    expect(seen?.recoveryWords.split(' ')).toHaveLength(24);
+    expect(net.count('PUT', '/v1/keys')).toBe(1);
   });
 
   it('the old passphrase no longer opens the new bundle, and the old recovery words neither', async () => {
