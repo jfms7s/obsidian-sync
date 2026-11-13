@@ -98,6 +98,27 @@ export class SetupController {
     return result;
   }
 
+  /**
+   * Stores this device's keys again under a new passphrase with new
+   * recovery words (account.resetSecrets), then keeps the words to show
+   * until confirmed, like a first setup does. This device's own unlocked
+   * keys are never touched. The repeat is checked here, before anything is sent.
+   */
+  async resetSecrets(passphrase: string, repeated: string, accountPassword: string): Promise<void> {
+    if (passphrase !== repeated) throw new Error('The two passphrases are not the same.');
+    const session = await this.session();
+    const keys = await account.loadUserKeys(this.o.state, session.userId);
+    if (!keys) throw new Error('This device is locked. Open the settings again to unlock it.');
+    const api = this.api(session);
+    const recoveryWords = await account.resetSecrets(api, session, keys, passphrase, accountPassword);
+    // The bundle is stored only to fit the record: an uploaded setup is never resent.
+    const bundle = await account.bundleOrThrow(api);
+    await this.o.state.setPendingKeySetup({
+      userId: session.userId, bundle, recoveryWords, uploaded: true,
+      keys: { userId: session.userId, encPriv: keys.encPriv, signSeed: keys.signSeed },
+    });
+  }
+
   acknowledgeRecoveryWords(): Promise<void> {
     return account.acknowledgeRecoveryWords(this.o.state);
   }

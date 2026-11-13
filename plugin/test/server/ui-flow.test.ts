@@ -5,6 +5,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import type { App as RealApp } from 'obsidian';
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it, vi } from 'vitest';
 import { apiFor } from '../../src/services/account';
+import { unlockWithPassphrase, unlockWithRecoveryWords } from '../../src/crypto/userkeys';
 import { createEngineLock } from '../../src/shell/engine-lock';
 import { ShellController } from '../../src/shell/controller';
 import { ObsyncSettingTab } from '../../src/shell/settings-tab';
@@ -668,4 +669,124 @@ describe('the settings tab', () => {
     old.mockRestore();
     await s.shell.stop();
   }, 120_000);
+  describe('reset passphrase and recovery words', () => {
+    const OLD = 'a long enough passphrase';
+    const NEW = 'a brand new passphrase';
+
+    /** A signed-in, unlocked, syncing device. */
+    async function readyDevice(user: { username: string; password: string }): Promise<Screen> {
+      const s = await screen('laptop');
+      await s.render();
+      s.type('Server address', srv.url);
+      s.type('Username', user.username);
+      s.type('Password', user.password);
+      await s.press('Sign in');
+      s.type('Passphrase', OLD);
+      s.type('Repeat the passphrase', OLD);
+      await s.press('Create keys');
+      await s.press('I have saved them');
+      await s.press('Create vault');
+      await s.press('Start syncing');
+      return s;
+    }
+    const fill = (s: Screen, pass: string, repeat: string, password: string) => {
+      s.type('New passphrase', pass);
+      s.type('Repeat the new passphrase', repeat);
+      s.type('Your account password', password);
+    };
+
+    it('shows the reset section only on an unlocked device', async () => {
+      const user = await newUser(srv);
+      const first = await readyDevice(user);
+      expect(first.setting('Reset passphrase and recovery words').heading).toBe(true);
+      expect(first.button('Reset passphrase and recovery words')).toBeTruthy();
+
+      // Signed out: no section.
+      const signedOut = await screen('signed-out');
+      await signedOut.render();
+      expect(() => signedOut.setting('Reset passphrase and recovery words')).toThrow();
+
+      // Signed in but locked (a second device before unlocking): no section.
+      const locked = await screen('phone');
+      await locked.render();
+      locked.type('Server address', srv.url);
+      locked.type('Username', user.username);
+      locked.type('Password', user.password);
+      await locked.press('Sign in');
+      expect(locked.setting('Unlock this device').heading).toBe(true);
+      expect(() => locked.setting('Reset passphrase and recovery words')).toThrow();
+      await first.shell.stop();
+    }, 120_000);
+
+    it('checks the repeat locally, then shows the recovery-words step with the new words, which open the bundle', async () => {
+      const user = await newUser(srv);
+      const s = await readyDevice(user);
+      const session = (await s.state.getSession())!;
+      const keysBefore = await s.state.getUserKeys();
+      const putsBefore = s.net.count('PUT', '/v1/keys');
+
+      fill(s, NEW, 'another new passphrase', user.password);
+      await s.press('Reset passphrase and recovery words');
+      expect(Notice.shown.at(-1)?.message).toMatch(/not the same/);
+      expect(s.net.count('PUT', '/v1/keys')).toBe(putsBefore);
+
+      fill(s, NEW, NEW, user.password);
+      await s.press('Reset passphrase and recovery words');
+      expect(s.setting('Write down your recovery words').heading).toBe(true);
+      const grid = s.el().children.find((c) => c.cls === 'obsync-recovery-words')!;
+      const words = grid.children.map((c) => c.text.replace(/^\d+\. /, '')).join(' ');
+      expect(grid.children).toHaveLength(24);
+
+      const bundle = (await apiFor(session).getKeyBundle())!;
+      const byPass = await unlockWithPassphrase(bundle, session.userId, NEW);
+      const byWords = await unlockWithRecoveryWords(bundle, session.userId, words);
+      expect(byWords.encPriv).toEqual(byPass.encPriv);
+      // The device keeps its own unlocked keys, untouched.
+      expect(await s.state.getUserKeys()).toEqual(keysBefore);
+
+      // The words stay until confirmed, also after a re-render; then back to the settings, form emptied.
+      await s.render();
+      expect(s.setting('Write down your recovery words').heading).toBe(true);
+      await s.press('I have saved them');
+      expect(s.setting('Sync').heading).toBe(true);
+      expect(s.field('New passphrase').value).toBe('');
+      expect(await s.state.getPendingKeySetup()).toBeUndefined();
+      await s.shell.stop();
+    }, 120_000);
+
+    it('keeps the form and shows a notice when the account password is wrong, leaving the device unlocked', async () => {
+      const user = await newUser(srv);
+      const s = await readyDevice(user);
+      const session = (await s.state.getSession())!;
+      const before = await apiFor(session).getKeyBundle();
+      fill(s, NEW, NEW, 'not the password');
+      await s.press('Reset passphrase and recovery words');
+      expect(Notice.shown.at(-1)?.message).toMatch(/account password is wrong/);
+      expect(s.field('New passphrase').value).toBe(NEW);
+      expect(s.field('Your account password').value).toBe('not the password');
+      expect(s.text()).not.toMatch(/Write down your recovery words/);
+      expect(await apiFor(session).getKeyBundle()).toEqual(before);
+      expect(await s.state.getUserKeys()).toBeDefined();
+      expect(await s.state.getPendingKeySetup()).toBeUndefined();
+      await s.shell.stop();
+    }, 120_000);
+
+    it('keeps the form and shows no words when the upload fails on the network', async () => {
+      const user = await newUser(srv);
+      const s = await readyDevice(user);
+      const session = (await s.state.getSession())!;
+      const before = await apiFor(session).getKeyBundle();
+      fill(s, NEW, NEW, user.password);
+      s.net.failNextRequest('PUT', '/v1/keys');
+      await s.press('Reset passphrase and recovery words');
+      expect(Notice.shown.length).toBeGreaterThan(0);
+      expect(s.field('New passphrase').value).toBe(NEW);
+      expect(s.field('Repeat the new passphrase').value).toBe(NEW);
+      expect(s.field('Your account password').value).toBe(user.password);
+      expect(s.text()).not.toMatch(/Write down your recovery words/);
+      expect(await s.state.getPendingKeySetup()).toBeUndefined();
+      expect(await apiFor(session).getKeyBundle()).toEqual(before);
+      await s.shell.stop();
+    }, 120_000);
+  });
 });
