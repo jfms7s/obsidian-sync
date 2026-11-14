@@ -1,0 +1,14 @@
+# Allowlist: the obsync-cli build needs only these inputs. BuildKit reads this
+# file instead of the root .dockerignore, which allowlists just the server.
+*
+!manifest.json
+!plugin/package.json
+!plugin/package-lock.json
+!plugin/esbuild.config.mjs
+!plugin/tsconfig.json
+!plugin/src
+!plugin/cli
+
+# Never ship local installs or builds into the build context.
+**/node_modules
+plugin/dist

@@ -2,7 +2,7 @@
 // run by Node as a user would, logs in, unlocks, chooses the vault and
 // syncs a real folder with the test server, next to an engine device.
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { build } from 'esbuild';
@@ -248,6 +248,15 @@ describe('obsync-cli against the real server', () => {
     }
   });
 
+  it('refuses to add --only to a state that synced without it', async () => {
+    const before = await readdir(vaultDir, { recursive: true });
+    const r = await cli(['sync', '--vault-dir', vaultDir, '--once', '--only', 'mimir/', ...S()]);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/another --only list/);
+    expect(r.err).not.toContain('mimir');
+    expect(await readdir(vaultDir, { recursive: true })).toEqual(before);
+  });
+
   it('logs out: the device is revoked and the state deleted', async () => {
     const cliDevice = () => phone.api.listDevices().then((ds) => ds.find((d) => d.name === 'Desktop CLI'));
     expect((await cliDevice())?.revoked).toBe(false);
@@ -256,5 +265,152 @@ describe('obsync-cli against the real server', () => {
     expect(r.code, r.err).toBe(0);
     expect((await cliDevice())?.revoked ?? true).toBe(true);
     expect((await cli(['status', ...S()])).code).toBe(2);
+  });
+});
+
+describe('obsync-cli --only', () => {
+  let a: SimClient;
+  let user: User;
+  let d: string;
+  const N = ['--name', 'only'];
+  const marker = () => join(d, '.obsync-cli-only');
+  /** The files in the folder, its subfolders' files as 'folder/name'. */
+  const tree = async () =>
+    (await readdir(d, { recursive: true, withFileTypes: true }))
+      .filter((e) => e.isFile())
+      .map((e) => join(e.parentPath, e.name).slice(d.length + 1))
+      .sort();
+
+  beforeAll(async () => {
+    user = await newUser(srv);
+    a = await makeClient(srv, user, { name: 'a', vault: 'create' });
+    await a.adapter.write('mimir/a.md', text('mimir\n'));
+    await a.adapter.write('people/p.md', text('people\n'));
+    await a.adapter.write('work/w.md', text('work\n'));
+    await a.engine.runCycle();
+    d = join(work, 'only-vault');
+    await mkdir(d);
+    const login = await cli(['login', '--server', srv.url, '--username', user.username, '--password-fd', '3', ...N], user.password);
+    expect(login.code, login.err).toBe(0);
+    expect((await cli(['unlock', '--passphrase-fd', '3', ...N], PASSPHRASE)).code).toBe(0);
+    expect((await cli(['vaults', '--choose', a.vaultId, ...N])).code).toBe(0);
+  });
+
+  it('refuses --only without --init on the first sync (exit 2)', async () => {
+    const r = await cli(['sync', ...N, '--vault-dir', d, '--only', 'mimir/', '--once']);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/--init/);
+    expect(await readdir(d)).toEqual([]);
+  });
+
+  it('syncs only the listed folders and writes the marker', async () => {
+    const r = await cli(['sync', ...N, '--vault-dir', d, '--init', '--only', 'mimir/', '--only', 'people/', '--once']);
+    expect(r.code, r.err).toBe(0);
+    expect(r.err).toMatch(/from now on, only 2 folders/);
+    expect(r.err).not.toMatch(/mimir|people/); // the log names no listed folder
+    expect(await tree()).toEqual(['.obsync-cli-only', 'mimir/a.md', 'people/p.md']);
+    expect(await readFile(marker(), 'utf8')).toBe('mimir/\npeople/\n');
+    expect((await stat(marker())).mode & 0o777).toBe(0o644);
+  });
+
+  it('uses the stored list without --only, and refuses another one', async () => {
+    const plain = await cli(['sync', ...N, '--vault-dir', d, '--once']);
+    expect(plain.code, plain.err).toBe(0);
+    expect(await tree()).toEqual(['.obsync-cli-only', 'mimir/a.md', 'people/p.md']);
+    const other = await cli(['sync', ...N, '--vault-dir', d, '--once', '--only', 'mimir/']);
+    expect(other.code).toBe(2);
+    expect(other.err).toMatch(/this state was set up with another --only list; see obsync-cli status/);
+    expect(other.err).not.toMatch(/mimir|people/);
+    const same = await cli(['sync', ...N, '--vault-dir', d, '--once', '--only', 'people/', '--only', 'mimir/']);
+    expect(same.code, same.err).toBe(0);
+  });
+
+  it('rewrites the marker at start', async () => {
+    await writeFile(marker(), 'x/\n');
+    const r = await cli(['sync', ...N, '--vault-dir', d, '--once']);
+    expect(r.code, r.err).toBe(0);
+    expect(await readFile(marker(), 'utf8')).toBe('mimir/\npeople/\n');
+  });
+
+  it('shows the list in status', async () => {
+    const r = await cli(['status', ...N]);
+    expect(r.out).toMatch(/^only: {5}mimir\/, people\/$/m);
+  });
+
+  it('forgets the list when another vault is chosen', async () => {
+    const b = await makeClient(srv, user, { name: 'b', vault: 'create' });
+    await b.adapter.write('x/x.md', text('x\n'));
+    await b.engine.runCycle();
+    expect((await cli(['vaults', '--choose', b.vaultId, ...N])).code).toBe(0);
+    expect((await cli(['status', ...N])).out).not.toMatch(/^only:/m);
+    const e = join(work, 'other-vault');
+    await mkdir(e);
+    const r = await cli(['sync', ...N, '--vault-dir', e, '--init', '--once']);
+    expect(r.code, r.err).toBe(0);
+    expect(r.err).not.toMatch(/another --only list/);
+    expect(await readdir(e)).toEqual(['x']);
+  });
+
+  describe('prints no path', () => {
+    const Q = ['--name', 'only-quiet'];
+    let q: string;
+    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const leaks = () => new RegExp(`Unique Title|Some Person|Another Title|mimir|people|\\.md|/vault|${escape(work)}`);
+
+    beforeAll(async () => {
+      await a.adapter.write('mimir/Unique Title.md', text('one\ntwo\nthree\n'));
+      await a.adapter.write('people/Some Person.md', text('one\ntwo\nthree\n'));
+      await a.engine.runCycle();
+      q = join(work, 'quiet');
+      await mkdir(q);
+      expect((await cli(['login', '--server', srv.url, '--username', user.username, '--password-fd', '3', ...Q], user.password)).code).toBe(0);
+      expect((await cli(['unlock', '--passphrase-fd', '3', ...Q], PASSPHRASE)).code).toBe(0);
+      expect((await cli(['vaults', '--choose', a.vaultId, ...Q])).code).toBe(0);
+    });
+
+    it('prints no file or folder path under --only', async () => {
+      const init = await cli(['sync', ...Q, '--vault-dir', q, '--init', '--only', 'mimir/', '--only', 'people/', '--once', '--verbose']);
+      expect(init.code, init.err).toBe(0);
+      expect(await readText(join(q, 'mimir', 'Unique Title.md'))).toBe('one\ntwo\nthree\n');
+
+      // Both sides edit the same notes: overlapping lines in one (a conflict), apart in the other (a merge).
+      await writeFile(join(q, 'mimir', 'Unique Title.md'), 'one\nTWO here\nthree\n');
+      await writeFile(join(q, 'people', 'Some Person.md'), 'one\ntwo\nthree\nfour here\n');
+      await a.adapter.write('mimir/Unique Title.md', text('one\nTWO there\nthree\n'));
+      await a.adapter.write('people/Some Person.md', text('zero\none\ntwo\nthree\n'));
+      await a.engine.runCycle();
+
+      const daemon = start(['sync', ...Q, '--vault-dir', q, '--verbose']);
+      try {
+        await until('the merge to reach the folder', async () =>
+          (await readText(join(q, 'people', 'Some Person.md'))) === 'zero\none\ntwo\nthree\nfour here\n');
+        await until('the conflict copy to reach the device', async () => {
+          await a.engine.runCycle();
+          return Object.keys(files(a.adapter)).some((p) => p.startsWith('mimir/Unique Title (') && p.endsWith('.md'));
+        });
+        await a.adapter.write('mimir/Another Title.md', text('new\n'));
+        await a.engine.runCycle();
+        await until('the new note to reach the folder', async () => (await readText(join(q, 'mimir', 'Another Title.md'))) === 'new\n');
+      } finally {
+        daemon.child.kill('SIGTERM');
+      }
+      const r = await daemon.done;
+      expect(r.code, r.err).toBe(0);
+      expect(r.err).toMatch(/conflict: both versions kept$/m);
+      expect(r.err).toMatch(/merged edits to a file$/m);
+      expect(r.err).toMatch(/wrote a file$/m);
+      expect(r.err).toMatch(/sync started \(daemon\)$/m);
+      const all = init.out + init.err + r.out + r.err;
+      expect(all).toContain('status: synced');
+      expect(all).not.toMatch(leaks());
+    });
+
+    it('prints only the error kind when the folder is gone', async () => {
+      await rm(q, { recursive: true });
+      const r = await cli(['sync', ...Q, '--vault-dir', q, '--once']);
+      expect(r.code).toBe(2);
+      expect(r.err).toMatch(/the vault folder does not exist/);
+      expect(r.out + r.err).not.toMatch(leaks());
+    });
   });
 });

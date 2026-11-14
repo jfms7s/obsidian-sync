@@ -23,7 +23,7 @@ import { pathOfPushKey } from '../state/failure-keys';
 import { isSyncedHere } from './local';
 import { isCycleError, nextRetryAt } from './failures';
 import type { EngineEvent, EngineListener, SyncStatus } from './events';
-import { applyVaultIgnoreFirst, pull } from './pull';
+import { applyVaultIgnoreFirst, fetchVaultIgnoreText, pull } from './pull';
 import { PushMemory, pushRound } from './push';
 import { reconcile } from './reconcile';
 import type { RestartBase } from './settings-files';
@@ -72,6 +72,11 @@ export interface EngineOptions {
    * engine reads itself). Throws InvalidIgnorePatternError for unsupported syntax.
    */
   ignoreGlobs?: readonly string[];
+  /**
+   * Sync only these folders (IgnoreOptions.only: each with a trailing '/',
+   * already validated); everything outside them is ignored. Default: all.
+   */
+  onlyFolders?: readonly string[];
   /** Opens hub WebSockets; null runs without one (tests, or a manual "sync now" mode). */
   webSocket?: WebSocketFactory | null;
   /**
@@ -98,9 +103,9 @@ export interface EngineOptions {
 
 /**
  * The ignore rules an engine with these options applies: the defaults, the
- * config folder, the vault's .obsyncignore globs and the device's own. The
- * one place they are composed; the settings use it to tell what a change
- * of either list newly ignores.
+ * config folder, the vault's .obsyncignore globs, the device's own and its
+ * only-folders whitelist. The one place they are composed; the settings
+ * use it to tell what a change of either list newly ignores.
  */
 export function composeIgnoreRules(o: {
   configDir: string;
@@ -109,9 +114,10 @@ export function composeIgnoreRules(o: {
   vaultGlobs: readonly string[];
   settingsSync?: SettingsSyncPolicy | undefined;
   ownPluginFolders?: readonly string[] | undefined;
+  only?: readonly string[] | undefined;
 }): IgnoreRules {
   return new IgnoreRules(o.ignoreGlobs, {
-    caseInsensitive: o.caseInsensitive, configDir: o.configDir, vaultGlobs: o.vaultGlobs,
+    caseInsensitive: o.caseInsensitive, configDir: o.configDir, vaultGlobs: o.vaultGlobs, only: o.only,
     configSync: new ConfigCarveOut(o.configDir, o.settingsSync ?? SETTINGS_SYNC_OFF, o.ownPluginFolders ?? []),
   });
 }
@@ -206,7 +212,7 @@ export class SyncEngine {
     const o = this.opts;
     return composeIgnoreRules({
       configDir: o.configDir, caseInsensitive: o.adapter.caseInsensitive, ignoreGlobs: o.ignoreGlobs ?? [], vaultGlobs: this.vaultIgnore.globs,
-      settingsSync: o.settingsSync, ownPluginFolders: o.ownPluginFolders,
+      settingsSync: o.settingsSync, ownPluginFolders: o.ownPluginFolders, only: o.onlyFolders,
     });
   }
 
@@ -217,16 +223,25 @@ export class SyncEngine {
    * sends no event for a hidden file. Called at the start of each cycle
    * and right after pull applied a version of it, so a rule never applies
    * half-way through one file. An unreadable file keeps the rules as they were.
+   * With onlyFolders the file is outside the whitelist and never on disk:
+   * its text is the server's head instead, and any failure to fetch it
+   * fails the cycle, which is retried: rules kept from before (none, at
+   * start) could let through what the file ignores.
    */
   private async loadVaultIgnore(): Promise<void> {
-    let data: Uint8Array | null;
-    try {
-      data = await this.opts.adapter.read(VAULT_IGNORE_FILE);
-    } catch (err) {
-      if (isCycleError(err)) throw err;
-      return;
+    let text: string | null;
+    if (this.opts.onlyFolders) {
+      text = await fetchVaultIgnoreText(this.ctx);
+    } else {
+      let data: Uint8Array | null;
+      try {
+        data = await this.opts.adapter.read(VAULT_IGNORE_FILE);
+      } catch (err) {
+        if (isCycleError(err)) throw err;
+        return;
+      }
+      text = data === null ? null : new TextDecoder().decode(data);
     }
-    const text = data === null ? null : new TextDecoder().decode(data);
     if (text === this.vaultIgnoreText) return;
     const first = this.vaultIgnoreText === undefined;
     this.vaultIgnoreText = text;
@@ -254,9 +269,18 @@ export class SyncEngine {
   /**
    * Before every cycle: the vault's .obsyncignore as it is on disk now and,
    * on a device that never pulled, as the server has it, before anything else arrives.
+   * With onlyFolders: the server's head once per engine start (each cycle
+   * until a fetch succeeds); pull fetches
+   * it again whenever a new version of the file arrives.
    */
   private async prepareVaultIgnore(): Promise<void> {
     this.ctx.vaultIgnoreFileId ??= toHex(await fileIdFor(this.ctx.ring.namingKey, VAULT_IGNORE_FILE));
+    if (this.opts.onlyFolders) {
+      if (this.vaultIgnoreFetched) return;
+      await this.loadVaultIgnore();
+      this.vaultIgnoreFetched = true;
+      return;
+    }
     await this.loadVaultIgnore();
     if (this.vaultIgnoreFetched) return;
     if ((await this.ctx.state.getCursor()) === 0) await applyVaultIgnoreFirst(this.ctx);

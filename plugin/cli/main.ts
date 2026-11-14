@@ -13,6 +13,7 @@ import { runSync, VAULT_DIR_SETTING } from './daemon';
 import { CliError, EXIT_ERROR, EXIT_NEEDS_SETUP, EXIT_OK } from './exit';
 import { acquireLock, lockHolder, StateLockedError } from './lock';
 import type { Logger } from './log';
+import { ONLY_SETTING, parseOnlyFolders } from './only';
 import { NoTerminalError, secret } from './prompt';
 import { PersistentState, SNAPSHOT_FILE, StateFileError } from './state';
 import { readStatus, STATUS_FILE } from './status';
@@ -33,10 +34,12 @@ Commands:
           --recovery, the 24 recovery words). Set the keys up in Obsidian first.
   vaults  [--choose ID]
           List the account's vaults, or choose the one to sync.
-  sync    --vault-dir DIR [--once] [--init] [--config-dir NAME] [--no-trash]
+  sync    --vault-dir DIR [--once] [--init] [--only FOLDER/ ...] [--config-dir NAME] [--no-trash]
           Sync DIR, as a daemon until stopped, or one round with --once. The
           first sync of a folder needs --init; afterwards no other folder is
-          accepted. --config-dir names the vault's Obsidian folder (default
+          accepted. --only FOLDER/ (repeatable, with the first sync) keeps a
+          copy of just those folders; later runs use that list and refuse
+          another one. --config-dir names the vault's Obsidian folder (default
           .obsidian), which is never synced. Deleted files go to DIR/.trash
           unless --no-trash.
   status  Show the account, the vault, the folder and what the daemon is doing.
@@ -81,14 +84,14 @@ const COMMANDS = {
   login: { server: { type: 'string' }, username: { type: 'string' }, 'device-name': { type: 'string' }, 'password-fd': { type: 'string' } },
   unlock: { recovery: { type: 'boolean' }, 'passphrase-fd': { type: 'string' } },
   vaults: { choose: { type: 'string' } },
-  sync: { 'vault-dir': { type: 'string' }, once: { type: 'boolean' }, init: { type: 'boolean' }, 'config-dir': { type: 'string' }, 'no-trash': { type: 'boolean' } },
+  sync: { 'vault-dir': { type: 'string' }, once: { type: 'boolean' }, init: { type: 'boolean' }, only: { type: 'string', multiple: true }, 'config-dir': { type: 'string' }, 'no-trash': { type: 'boolean' } },
   status: {},
   deletions: { release: { type: 'boolean' }, restore: { type: 'boolean' } },
   logout: {},
 } as const satisfies Record<string, ParseArgsConfig['options']>;
 
 type Command = keyof typeof COMMANDS;
-type Values = Record<string, string | boolean | undefined>;
+type Values = Record<string, string | string[] | boolean | undefined>;
 
 /** The state directory: --state-dir, or $XDG_STATE_HOME/obsync-cli/<name>. */
 export function stateDirFor(values: Values, env: NodeJS.ProcessEnv): string {
@@ -137,7 +140,11 @@ export async function run(argv: string[], io: Io): Promise<number> {
   try {
     values = parseArgs({ args: rest, options: { ...GLOBAL, ...COMMANDS[command] }, strict: true, allowPositionals: false }).values as Values;
   } catch (err) {
-    io.err(`${(err as Error).message}\n\n${USAGE}\n`);
+    // A stray argument after --only is a folder name: sync's logs name no folder, so its errors quote no argument.
+    const code = (err as { code?: unknown }).code;
+    const quotesArgument = code === 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL' || code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION';
+    const message = command === 'sync' && quotesArgument ? 'unexpected argument; each folder needs its own --only' : (err as Error).message;
+    io.err(`${message}\n\n${USAGE}\n`);
     return EXIT_ERROR;
   }
   if (values.help) {
@@ -186,6 +193,7 @@ async function dispatch(command: Command, values: Values, io: Io, log: Logger): 
           vaultDir: required(values, 'vault-dir'),
           once: values.once === true,
           init: values.init === true,
+          only: Array.isArray(values.only) ? parseOnlyFolders(values.only) : null,
           trash: values['no-trash'] !== true,
           configDir: typeof values['config-dir'] === 'string' ? values['config-dir'] : '.obsidian',
           ...heartbeatCheck(io.env),
@@ -314,7 +322,10 @@ async function chooseVault(ps: PersistentState, id: string, io: Io, log: Logger)
   const previous = await ps.state.getVault();
   const v = await vaults.chooseVault(ps.state, account.apiFor(session, deps(io)), session, keys, id);
   // Another vault is another folder: the next sync needs --init again.
-  if (previous?.vaultId !== v.vaultId) await ps.state.setSetting(VAULT_DIR_SETTING, null);
+  if (previous?.vaultId !== v.vaultId) {
+    await ps.state.setSetting(VAULT_DIR_SETTING, null);
+    await ps.state.setSetting(ONLY_SETTING, null);
+  }
   await ps.save();
   log.info(`vault "${v.name}" chosen`);
   io.out('Next: obsync-cli sync --vault-dir DIR --init (once), then run it as a service\n');
@@ -379,6 +390,8 @@ async function status(dir: string, io: Io): Promise<number> {
     line('vault', vault && vault.userId === session.userId ? `${vault.name} (${vault.vaultId})` : 'none chosen (obsync-cli vaults)');
     const folder = await st.getSetting<string | null>(VAULT_DIR_SETTING, null);
     line('folder', folder ?? 'none yet (obsync-cli sync --vault-dir DIR --init)');
+    const only = await st.getSetting<string[] | null>(ONLY_SETTING, null);
+    if (only) line('only', only.join(', '));
     const pid = await lockHolder(dir);
     const d = await readStatus(dir);
     if (pid !== null && d?.pid === pid) {

@@ -22,7 +22,15 @@ export const DEFAULT_IGNORES: readonly string[] = [
   '~$*',
   '*.tmp',
   '*.swp',
+  '/.obsync-cli-only', // ONLY_MARKER_FILE: anchored, so a nested file of that name still syncs
 ];
+
+/**
+ * At the vault root of a device that syncs only some folders (the CLI's
+ * --only), naming them. It describes that one device, so no device ever
+ * syncs it (DEFAULT_IGNORES).
+ */
+export const ONLY_MARKER_FILE = '.obsync-cli-only';
 
 /**
  * The vault-level ignore file, at the vault root. It syncs like any file so
@@ -126,6 +134,12 @@ export interface IgnoreOptions {
    * folder's rule does not cover them, the other rules still do.
    */
   configSync?: ConfigCarveOut;
+  /**
+   * Sync only these folders (each with a trailing '/', already validated):
+   * every path in none of them is ignored, the vault's .obsyncignore
+   * included. Inside them the other rules still apply.
+   */
+  only?: readonly string[];
 }
 
 export class IgnoreRules {
@@ -133,6 +147,8 @@ export class IgnoreRules {
   private readonly configRe: RegExp | null;
   private readonly configSync: ConfigCarveOut | null;
   private readonly ci: boolean;
+  /** The only-folders whitelist, case-folded on a case-insensitive vault (null: every folder syncs). */
+  private readonly only: readonly string[] | null;
 
   /** Throws InvalidIgnorePatternError for a glob that uses unsupported syntax ('!', '['). */
   constructor(readonly userGlobs: readonly string[] = [], o: IgnoreOptions = {}) {
@@ -140,15 +156,24 @@ export class IgnoreRules {
     const config = o.configDir?.replace(/^\/+|\/+$/g, '');
     this.configRe = config ? compileGlob(`${config}/`, ci) : null;
     this.configSync = o.configSync ?? null;
+    this.only = o.only ? o.only.map((f) => this.fold(f)) : null;
     this.res = [...(o.defaults ?? DEFAULT_IGNORES), ...(o.vaultGlobs ?? []), ...userGlobs]
       .filter((g) => g.trim() !== '' && !g.trim().startsWith('#'))
       .map((g) => compileGlob(g, ci));
   }
 
   matches(path: string): boolean {
+    if (this.outside(path)) return true;
     if (isVaultIgnoreFile(path, this.ci)) return false;
     if (this.configRe?.test(path) && !this.configSync?.syncs(path)) return true;
     return this.res.some((re) => re.test(path));
+  }
+
+  /** A whitelist of folders is set and path is in none of them. */
+  outside(path: string): boolean {
+    if (this.only === null) return false;
+    const p = this.fold(path);
+    return !this.only.some((f) => p.startsWith(f));
   }
 
   /** A file in the config folder that the settings policy syncs (it merges as settings, never into a conflict copy). */
@@ -163,8 +188,17 @@ export class IgnoreRules {
    */
   skipsFolder(folder: string): boolean {
     const asFolder = `${folder}/`;
+    if (this.only !== null) {
+      const f = this.fold(asFolder);
+      // Entered when inside a listed folder or on the way to one.
+      if (!this.only.some((o) => f.startsWith(o) || o.startsWith(f))) return true;
+    }
     if (this.configRe?.test(asFolder) && !this.configSync?.mayHoldSynced(folder)) return true;
     return this.res.some((re) => re.test(asFolder));
+  }
+
+  private fold(path: string): string {
+    return this.ci ? path.toLowerCase() : path;
   }
 }
 

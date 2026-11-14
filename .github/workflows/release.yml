@@ -2,9 +2,9 @@ name: Release
 
 # A tag X.Y.Z (no "v") that matches manifest.json publishes, all together: the
 # plugin files Obsidian installs from, the headless client obsync-cli.mjs, the
-# server binaries (Linux, macOS and Windows), and the container image. Nothing is
-# published until every CI check (checks.yml) and the
-# 1,000-seed convergence suite have passed.
+# server binaries (Linux, macOS and Windows), and the two container images (the
+# server's, and obsync-cli's). Nothing is published until every CI check
+# (checks.yml) and the 1,000-seed convergence suite have passed.
 on:
   push:
     tags: ["[0-9]+.[0-9]+.[0-9]+"]
@@ -14,6 +14,7 @@ permissions:
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/obsync
+  CLI_IMAGE: ghcr.io/${{ github.repository_owner }}/obsync-cli
 
 jobs:
   verify:
@@ -170,9 +171,57 @@ jobs:
           # Storage records exist only for organization-owned repositories.
           create-storage-record: false
 
+  cli-image:
+    name: obsync-cli container image
+    # Same gate as the server image.
+    needs: [verify, checks, convergence, binary-linux, binaries, plugin]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      # Build provenance for the pushed image.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.CLI_IMAGE }}
+          # latest is moved by the publish job, after the release exists.
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: obsync-cli.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      # gh attestation verify oci://ghcr.io/jfms7s/obsync-cli:X.Y.Z --repo jfms7s/obsidian-sync
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.CLI_IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          # Storage records exist only for organization-owned repositories.
+          create-storage-record: false
+
   publish:
     name: Publish the release
-    needs: [checks, convergence, binary-linux, binaries, plugin, image]
+    needs: [checks, convergence, binary-linux, binaries, plugin, image, cli-image]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -222,3 +271,4 @@ jobs:
             exit 0
           fi
           docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:${GITHUB_REF_NAME}"
+          docker buildx imagetools create --tag "$CLI_IMAGE:latest" "$CLI_IMAGE:${GITHUB_REF_NAME}"

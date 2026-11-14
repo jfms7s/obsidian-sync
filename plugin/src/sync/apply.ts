@@ -17,6 +17,13 @@ import { rememberBeforeWrite, rememberWritten } from './settings-files';
 
 export { isSyncedHere, readLocal, type LocalFile } from './local';
 
+/**
+ * The path recorded for a file outside a device's only-folders whitelist,
+ * followed by its file id: the real path never reaches this device's state.
+ * The placeholder is outside the whitelist too, so the record stays applied.
+ */
+export const OUTSIDE_PATH_PREFIX = '.obsync-outside/';
+
 /** Whether applying versionId to rec has nothing left to do. */
 export function alreadyApplied(rec: FileRecord | undefined, versionId: string, ctx: SyncContext): boolean {
   if (!rec || rec.versionId !== versionId) return false;
@@ -151,7 +158,9 @@ async function applyOne(ctx: SyncContext, v: RemoteVersion, fileId: string, pref
   const contentHash = v.deleted ? null : toHex(meta.contentHash);
 
   if (ctx.ignore.matches(path)) {
-    await ctx.state.recordSynced(record(fileId, path, versionId, v, contentHash, -1, { ignored: true }), null);
+    // Outside the only-folders whitelist the real path is not kept either.
+    const kept = ctx.ignore.outside(path) ? OUTSIDE_PATH_PREFIX + fileId : path;
+    await ctx.state.recordSynced(record(fileId, kept, versionId, v, contentHash, -1, { ignored: true }), null);
     return;
   }
   if (!v.deleted && v.size > ctx.maxFileBytes) {
