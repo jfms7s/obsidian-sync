@@ -216,6 +216,21 @@ export async function applyVaultIgnoreFirst(ctx: SyncContext): Promise<boolean> 
   return ok;
 }
 
+/**
+ * The text of the server's head of the vault's .obsyncignore (one history
+ * request, then its content), or null when there is none or it is deleted.
+ * Writes nothing to disk or state: a device whose whitelist leaves the file
+ * outside still applies its rules.
+ */
+export async function fetchVaultIgnoreText(ctx: SyncContext): Promise<string | null> {
+  if (!ctx.vaultIgnoreFileId) return null;
+  const fileId = fromHex(ctx.vaultIgnoreFileId);
+  const head = (await ctx.api.history(ctx.ring.vaultId, fileId)).find((v) => equalBytes(v.fileId, fileId)); // newest first
+  if (!head || head.deleted) return null;
+  const meta = await decryptMeta(ctx.ring, head.epoch, head.fileId, head.versionId, head.encMeta);
+  return new TextDecoder().decode(await downloadContent(ctx.api, ctx.ring, head, meta.contentHash));
+}
+
 /** After a commit got CONFLICT: make sure the server's head for the file is applied locally, so the next push merges against it. */
 export async function resolveConflict(ctx: SyncContext, fileId: Uint8Array, head: Uint8Array): Promise<void> {
   const hex = toHex(fileId);
