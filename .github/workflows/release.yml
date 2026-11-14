@@ -3,9 +3,8 @@ name: Release
 # A tag X.Y.Z (no "v") that matches manifest.json publishes, all together: the
 # plugin files Obsidian installs from, the headless client obsync-cli.mjs, the
 # server binaries (Linux, macOS and Windows), and the two container images (the
-# server's, and obsync-cli's). Nothing is
-# published until every CI check (checks.yml) and the
-# 1,000-seed convergence suite have passed.
+# server's, and obsync-cli's). Nothing is published until every CI check
+# (checks.yml) and the 1,000-seed convergence suite have passed.
 on:
   push:
     tags: ["[0-9]+.[0-9]+.[0-9]+"]

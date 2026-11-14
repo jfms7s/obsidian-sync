@@ -8,6 +8,8 @@
 #   docker buildx build -f obsync-cli.Dockerfile --platform linux/amd64,linux/arm64 \
 #     -t obsync-cli .
 #
+# The final stage only copies files, so a cross-platform build needs no emulation.
+#
 # State (the login and the unlocked keys) lives in the /state volume.
 
 # node:22.23.5-bookworm-slim, index digest as of 2026-11-14.
@@ -23,14 +25,17 @@ RUN npm ci
 COPY plugin/esbuild.config.mjs plugin/tsconfig.json ./
 COPY plugin/src ./src
 COPY plugin/cli ./cli
-RUN npm run build:cli
+RUN npm run build:cli \
+ # The runtime stage has no RUN (it would need emulation for the other
+ # platform), so /state is created here and copied over with its owner set.
+ && mkdir -p /out/state
 
 # The same Node image, for the target platform.
 FROM node:22.23.5-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
 
 COPY --from=build /src/plugin/dist/obsync-cli.mjs /app/obsync-cli.mjs
 # The node user is uid 1000; a fresh named volume takes this owner.
-RUN mkdir /state && chown 1000:1000 /state
+COPY --from=build --chown=1000:1000 /out/state /state
 
 ENV XDG_STATE_HOME=/state
 USER 1000:1000

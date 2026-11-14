@@ -277,7 +277,7 @@ A machine that needs only part of the vault (an agent that works in `Projects/` 
 obsync-cli sync --vault-dir ~/Documents/Vault --init --once --only Projects/ --only Journal/2026/
 ```
 
-- The list is stored with the folder, so later runs take no `--only`. A run that names a different list is refused with exit code 2: to change it, start from a new folder.
+- The list is stored with the folder, so later runs take no `--only`. A run that names a different list is refused with exit code 2, and so is `--only` on a state that already holds file records. To change the list, start from a new folder; `vaults --choose` with another vault also clears the stored list.
 - Nothing outside the listed folders is downloaded, uploaded or deleted. Files elsewhere on the server stay there; files you put elsewhere in the local folder stay local.
 - Inside them, `.obsyncignore` and the default skips (`.trash/`, `.git/`, junk files) apply as usual.
 - While syncing, the CLI prints no file or folder paths, so a log does not reveal what the vault holds. `status` and `deletions` may show them.
