@@ -140,7 +140,11 @@ export async function run(argv: string[], io: Io): Promise<number> {
   try {
     values = parseArgs({ args: rest, options: { ...GLOBAL, ...COMMANDS[command] }, strict: true, allowPositionals: false }).values as Values;
   } catch (err) {
-    io.err(`${(err as Error).message}\n\n${USAGE}\n`);
+    // A stray argument after --only is a folder name: sync's logs name no folder, so its errors quote no argument.
+    const code = (err as { code?: unknown }).code;
+    const quotesArgument = code === 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL' || code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION';
+    const message = command === 'sync' && quotesArgument ? 'unexpected argument; each folder needs its own --only' : (err as Error).message;
+    io.err(`${message}\n\n${USAGE}\n`);
     return EXIT_ERROR;
   }
   if (values.help) {

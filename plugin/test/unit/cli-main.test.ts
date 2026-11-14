@@ -52,6 +52,16 @@ describe('obsync-cli arguments', () => {
     expect(await run(['status', 'extra'], c.io)).toBe(1);
   });
 
+  it('names no argument value when sync gets a stray argument (a forgotten --only)', async () => {
+    const a = io();
+    expect(await run(['sync', '--only', 'mimir/', 'people/'], a.io)).toBe(1);
+    expect(a.r.err).toMatch(/each folder needs its own --only/);
+    expect(a.r.err).not.toMatch(/people/);
+    const b = io();
+    expect(await run(['sync', '--only=mimir/', '--people/x=1'], b.io)).toBe(1);
+    expect(b.r.err).not.toMatch(/people|mimir/);
+  });
+
   it('keeps the state under $XDG_STATE_HOME/obsync-cli/<name>, or where --state-dir says', () => {
     expect(stateDirFor({}, { XDG_STATE_HOME: '/x/state', HOME: '/home/u' })).toBe('/x/state/obsync-cli/default');
     expect(stateDirFor({ name: 'work' }, { HOME: '/home/u' })).toBe('/home/u/.local/state/obsync-cli/work');

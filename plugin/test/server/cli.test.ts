@@ -337,6 +337,20 @@ describe('obsync-cli --only', () => {
     expect(r.out).toMatch(/^only: {5}mimir\/, people\/$/m);
   });
 
+  it('forgets the list when another vault is chosen', async () => {
+    const b = await makeClient(srv, user, { name: 'b', vault: 'create' });
+    await b.adapter.write('x/x.md', text('x\n'));
+    await b.engine.runCycle();
+    expect((await cli(['vaults', '--choose', b.vaultId, ...N])).code).toBe(0);
+    expect((await cli(['status', ...N])).out).not.toMatch(/^only:/m);
+    const e = join(work, 'other-vault');
+    await mkdir(e);
+    const r = await cli(['sync', ...N, '--vault-dir', e, '--init', '--once']);
+    expect(r.code, r.err).toBe(0);
+    expect(r.err).not.toMatch(/another --only list/);
+    expect(await readdir(e)).toEqual(['x']);
+  });
+
   describe('prints no path', () => {
     const Q = ['--name', 'only-quiet'];
     let q: string;

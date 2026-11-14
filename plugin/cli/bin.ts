@@ -1,7 +1,10 @@
 // The obsync-cli executable: the network, signals and exit code around run().
 import { setDefaultTransport, type FetchLike } from '../src/index';
+import { crashLine, installCrashHandlers } from './crash';
 import { streamLogger } from './log';
 import { run } from './main';
+
+installCrashHandlers((t) => process.stderr.write(t), (code) => process.exit(code));
 
 const fetchTransport: FetchLike = (url, req) => {
   const init: RequestInit = { method: req.method, headers: req.headers, cache: 'no-store' };
@@ -39,7 +42,7 @@ main().then(
     setTimeout(() => process.exit(code), 1000).unref();
   },
   (err: unknown) => {
-    process.stderr.write(`${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+    process.stderr.write(crashLine(err));
     process.exit(1);
   },
 );
