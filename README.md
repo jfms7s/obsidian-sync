@@ -269,6 +269,43 @@ loginctl enable-linger "$USER"         # optional: keep it running while you are
 
 `obsync-cli status` shows the account, the vault, the folder, whether the daemon runs and what it is doing, and recent warnings. Exit codes: 0 ok, 1 error, 2 when a person must act: log in, unlock, choose a vault, or check the folder (the first sync needs `--init`; the folder is missing, empty although files were synced from it, or not the one this login syncs). The unit does not restart on 2. For a timer or cron job instead of a service, use `sync --once`.
 
+### Only some folders
+
+A machine that needs only part of the vault (an agent that works in `Projects/` and nothing else) can sync just those folders. Pass `--only` with `--init`, once per folder (the flag repeats):
+
+```bash
+obsync-cli sync --vault-dir ~/Documents/Vault --init --once --only Projects/ --only Journal/2026/
+```
+
+- The list is stored with the folder, so later runs take no `--only`. A run that names a different list is refused with exit code 2: to change it, start from a new folder.
+- Nothing outside the listed folders is downloaded, uploaded or deleted. Files elsewhere on the server stay there; files you put elsewhere in the local folder stay local.
+- Inside them, `.obsyncignore` and the default skips (`.trash/`, `.git/`, junk files) apply as usual.
+- While syncing, the CLI prints no file or folder paths, so a log does not reveal what the vault holds. `status` and `deletions` may show them.
+- The vault root gets a `.obsync-cli-only` file listing the folders, one per line, so a person or a program can see that this copy is partial.
+
+### Run it in a container
+
+Each release also publishes `ghcr.io/jfms7s/obsync-cli:X.Y.Z` (amd64 and arm64; `X.Y` follows the latest patch, `latest` the latest release). It runs `obsync-cli` as user 1000, with the state in the `/state` volume (`XDG_STATE_HOME=/state`) and the vault where you mount it. Pin a release rather than following `latest`. Check the image like the other files:
+
+```bash
+gh attestation verify oci://ghcr.io/jfms7s/obsync-cli:X.Y.Z --repo jfms7s/obsidian-sync
+```
+
+The arguments after the image name are the commands above. The vault folder you mount must be writable by uid 1000. `docker run` does not pass extra file descriptors into the container, so give `--password-fd` and `--passphrase-fd` a mounted secret file and let a shell open it:
+
+```bash
+IMG=ghcr.io/jfms7s/obsync-cli:X.Y.Z
+RUN="docker run --rm -v obsync-state:/state -v $PWD/secrets:/run/secrets:ro -v $HOME/Vault:/vault"
+$RUN --entrypoint sh $IMG -c 'exec node /app/obsync-cli.mjs login --server https://sync.example.com --username alice --device-name "agent (cli)" --password-fd 3 3</run/secrets/password'
+$RUN --entrypoint sh $IMG -c 'exec node /app/obsync-cli.mjs unlock --passphrase-fd 3 3</run/secrets/passphrase'
+$RUN $IMG vaults --choose 3f2a…
+$RUN $IMG sync --vault-dir /vault --init --once
+docker run -d --name obsync-cli -v obsync-state:/state -v $HOME/Vault:/vault $IMG sync --vault-dir /vault
+docker run --rm -v obsync-state:/state $IMG status
+```
+
+In an orchestrator, mount the password and passphrase as secret files the same way. Keep the `/state` volume: it holds this device's keys (see below), and without it the container has to log in again. `status` and the other commands exit as described above, including 2 when a person must act, so a restart policy on the long-running container will loop on 2.
+
 ### With Obsidian on the same folder
 
 Obsidian's plugin and the CLI on one folder would each take the other's writes for new edits. So they take turns: while Obsidian syncs the folder, its plugin keeps a heartbeat file in its own folder (`.obsidian/plugins/obsync/active`, rewritten every 30 seconds), and the daemon pauses within 10 seconds, after the sync round it is in. It resumes within about 10 seconds after Obsidian closes, or about 100 seconds if Obsidian was killed (the heartbeat then has to go stale), with a full comparison of the folder and the server. If your vault's configuration folder is not `.obsidian`, pass `--config-dir`.
@@ -320,7 +357,7 @@ Dependabot proposes grouped updates every week for the workflows' actions, the i
 
 The plugin tests start the real `obsync` server; the convergence suite runs three simulated devices through 60 random operations per seed (edits, edits made while a sync cycle is running, renames, deletes, going offline, crashes, server backups and restores, server maintenance passes (history pruning, trash purge, chunk collection) on a server with very short retention, case-only renames, folder and file clashes, one device with whole-second mtimes in a third of the seeds) and checks that every device ends with the same vault and that no edit is lost. CI runs 100 seeds on every push, 1,000 before every release, and 1,000 new seeds every night. A failing seed prints its whole history and can be replayed with `CONVERGENCE_SEED=<n> make convergence`.
 
-Releases are made by pushing a tag `X.Y.Z` that matches `manifest.json` (no `v`): the release workflow runs 1,000 convergence seeds, builds the binaries, the plugin files, `obsync-cli.mjs` and the multi-arch image, and publishes them together.
+Releases are made by pushing a tag `X.Y.Z` that matches `manifest.json` (no `v`): the release workflow runs 1,000 convergence seeds, builds the binaries, the plugin files, `obsync-cli.mjs` and the multi-arch images (`obsync`, the server, and `obsync-cli`), and publishes them together.
 
 ## License
 
