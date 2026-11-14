@@ -270,6 +270,7 @@ describe('obsync-cli against the real server', () => {
 
 describe('obsync-cli --only', () => {
   let a: SimClient;
+  let user: User;
   let d: string;
   const N = ['--name', 'only'];
   const marker = () => join(d, '.obsync-cli-only');
@@ -281,7 +282,7 @@ describe('obsync-cli --only', () => {
       .sort();
 
   beforeAll(async () => {
-    const user = await newUser(srv);
+    user = await newUser(srv);
     a = await makeClient(srv, user, { name: 'a', vault: 'create' });
     await a.adapter.write('mimir/a.md', text('mimir\n'));
     await a.adapter.write('people/p.md', text('people\n'));
@@ -334,5 +335,68 @@ describe('obsync-cli --only', () => {
   it('shows the list in status', async () => {
     const r = await cli(['status', ...N]);
     expect(r.out).toMatch(/^only: {5}mimir\/, people\/$/m);
+  });
+
+  describe('prints no path', () => {
+    const Q = ['--name', 'only-quiet'];
+    let q: string;
+    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const leaks = () => new RegExp(`Unique Title|Some Person|Another Title|mimir|people|\\.md|/vault|${escape(work)}`);
+
+    beforeAll(async () => {
+      await a.adapter.write('mimir/Unique Title.md', text('one\ntwo\nthree\n'));
+      await a.adapter.write('people/Some Person.md', text('one\ntwo\nthree\n'));
+      await a.engine.runCycle();
+      q = join(work, 'quiet');
+      await mkdir(q);
+      expect((await cli(['login', '--server', srv.url, '--username', user.username, '--password-fd', '3', ...Q], user.password)).code).toBe(0);
+      expect((await cli(['unlock', '--passphrase-fd', '3', ...Q], PASSPHRASE)).code).toBe(0);
+      expect((await cli(['vaults', '--choose', a.vaultId, ...Q])).code).toBe(0);
+    });
+
+    it('prints no file or folder path under --only', async () => {
+      const init = await cli(['sync', ...Q, '--vault-dir', q, '--init', '--only', 'mimir/', '--only', 'people/', '--once', '--verbose']);
+      expect(init.code, init.err).toBe(0);
+      expect(await readText(join(q, 'mimir', 'Unique Title.md'))).toBe('one\ntwo\nthree\n');
+
+      // Both sides edit the same notes: overlapping lines in one (a conflict), apart in the other (a merge).
+      await writeFile(join(q, 'mimir', 'Unique Title.md'), 'one\nTWO here\nthree\n');
+      await writeFile(join(q, 'people', 'Some Person.md'), 'one\ntwo\nthree\nfour here\n');
+      await a.adapter.write('mimir/Unique Title.md', text('one\nTWO there\nthree\n'));
+      await a.adapter.write('people/Some Person.md', text('zero\none\ntwo\nthree\n'));
+      await a.engine.runCycle();
+
+      const daemon = start(['sync', ...Q, '--vault-dir', q, '--verbose']);
+      try {
+        await until('the merge to reach the folder', async () =>
+          (await readText(join(q, 'people', 'Some Person.md'))) === 'zero\none\ntwo\nthree\nfour here\n');
+        await until('the conflict copy to reach the device', async () => {
+          await a.engine.runCycle();
+          return Object.keys(files(a.adapter)).some((p) => p.startsWith('mimir/Unique Title (') && p.endsWith('.md'));
+        });
+        await a.adapter.write('mimir/Another Title.md', text('new\n'));
+        await a.engine.runCycle();
+        await until('the new note to reach the folder', async () => (await readText(join(q, 'mimir', 'Another Title.md'))) === 'new\n');
+      } finally {
+        daemon.child.kill('SIGTERM');
+      }
+      const r = await daemon.done;
+      expect(r.code, r.err).toBe(0);
+      expect(r.err).toMatch(/conflict: both versions kept$/m);
+      expect(r.err).toMatch(/merged edits to a file$/m);
+      expect(r.err).toMatch(/wrote a file$/m);
+      expect(r.err).toMatch(/sync started \(daemon\)$/m);
+      const all = init.out + init.err + r.out + r.err;
+      expect(all).toContain('status: synced');
+      expect(all).not.toMatch(leaks());
+    });
+
+    it('prints only the error kind when the folder is gone', async () => {
+      await rm(q, { recursive: true });
+      const r = await cli(['sync', ...Q, '--vault-dir', q, '--once']);
+      expect(r.code).toBe(2);
+      expect(r.err).toMatch(/the vault folder does not exist/);
+      expect(r.out + r.err).not.toMatch(leaks());
+    });
   });
 });

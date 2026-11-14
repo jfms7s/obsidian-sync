@@ -4,11 +4,11 @@
 import { readdir, readFile, realpath } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import {
-  HEARTBEAT_FILE, isHeartbeatFresh, openSyncSession, parseHeartbeat, type EngineEvent, type FetchLike, type Heartbeat, type SyncEngine, type SyncStatus, type WebSocketFactory,
+  HEARTBEAT_FILE, isAuthFailure, isHeartbeatFresh, openSyncSession, parseHeartbeat, type EngineEvent, type FetchLike, type Heartbeat, type SyncEngine, type SyncStatus, type WebSocketFactory,
 } from '../src/index';
 import { CliError, EXIT_ERROR, EXIT_NEEDS_SETUP, EXIT_OK } from './exit';
 import { FsAdapter } from './fs-adapter';
-import type { Logger } from './log';
+import { errorKind, type Logger } from './log';
 import { ONLY_SETTING, sameFolders, syncMarker } from './only';
 import type { PersistentState } from './state';
 import { MAX_NOTICES, writeStatus, type DaemonStatus } from './status';
@@ -56,22 +56,24 @@ const inside = (child: string, parent: string): boolean => {
  * The folder this state syncs, and the --only list it keeps (null: every
  * folder). The first sync needs --init, which records both; later runs
  * refuse any other folder or list, so a typo in the unit file cannot make
- * the CLI upload some other folder or drop folders it kept.
+ * the CLI upload some other folder or drop folders it kept. With hidePaths
+ * (--only) its messages name no folder.
  */
-export async function boundFolder(o: SyncOptions): Promise<{ dir: string; only: string[] | null }> {
+export async function boundFolder(o: SyncOptions, hidePaths: boolean): Promise<{ dir: string; only: string[] | null }> {
   // Each of these needs a person (exit 2): restarting the unit would not help.
   let dir: string;
   try {
     dir = await realpath(o.vaultDir);
   } catch {
-    throw new CliError(`the vault folder ${o.vaultDir} does not exist (a disk not mounted?)`, EXIT_NEEDS_SETUP);
+    throw new CliError(`the vault folder ${hidePaths ? '' : `${o.vaultDir} `}does not exist (a disk not mounted?)`, EXIT_NEEDS_SETUP);
   }
   const stateDir = await realpath(o.ps.dir);
-  if (inside(stateDir, dir)) throw new CliError(`the state directory ${o.ps.dir} is inside the vault folder: it holds the keys and must not be synced`, EXIT_NEEDS_SETUP);
+  if (inside(stateDir, dir)) throw new CliError(`the state directory ${hidePaths ? '' : `${o.ps.dir} `}is inside the vault folder: it holds the keys and must not be synced`, EXIT_NEEDS_SETUP);
   const bound = await o.ps.state.getSetting<string | null>(VAULT_DIR_SETTING, null);
+  const folder = hidePaths ? 'the vault folder' : dir;
   let only: string[] | null;
   if (bound === null) {
-    if (!o.init) throw new CliError(`this state has not synced a folder yet: check that ${dir} is the vault folder, then run the first sync with --init`, EXIT_NEEDS_SETUP);
+    if (!o.init) throw new CliError(`this state has not synced a folder yet: check that ${hidePaths ? '--vault-dir names' : `${dir} is`} the vault folder, then run the first sync with --init`, EXIT_NEEDS_SETUP);
     // The state's records are of every folder: a list now would leave them with no file on disk.
     if (o.only !== null && (await o.ps.state.allFiles()).length > 0) {
       throw new CliError('this state has synced every folder before: use --name for a new state to sync only some folders', EXIT_NEEDS_SETUP);
@@ -79,11 +81,11 @@ export async function boundFolder(o: SyncOptions): Promise<{ dir: string; only: 
     await o.ps.state.setSetting(VAULT_DIR_SETTING, dir);
     await o.ps.state.setSetting(ONLY_SETTING, o.only);
     await o.ps.save();
-    o.log.info(`syncing ${dir} from now on${o.only ? `, only ${o.only.length} folder${o.only.length === 1 ? '' : 's'}` : ''}`);
+    o.log.info(`syncing ${folder} from now on${o.only ? `, only ${o.only.length} folder${o.only.length === 1 ? '' : 's'}` : ''}`);
     only = o.only;
   } else {
-    if (bound !== dir) throw new CliError(`this state syncs ${bound}, not ${dir}; use --name for another vault folder`, EXIT_NEEDS_SETUP);
-    await checkNotEmptied(o.ps, dir);
+    if (bound !== dir) throw new CliError(hidePaths ? 'this state syncs another folder; use --name for another vault folder' : `this state syncs ${bound}, not ${dir}; use --name for another vault folder`, EXIT_NEEDS_SETUP);
+    await checkNotEmptied(o.ps, dir, folder);
     only = await o.ps.state.getSetting<string[] | null>(ONLY_SETTING, null);
     if (o.only !== null && (only === null || !sameFolders(o.only, only))) {
       throw new CliError('this state was set up with another --only list; see obsync-cli status', EXIT_NEEDS_SETUP);
@@ -99,12 +101,12 @@ export async function boundFolder(o: SyncOptions): Promise<{ dir: string; only: 
  * on purpose; syncing it would delete those files on every device, and a
  * small vault stays under the deletion hold's threshold.
  */
-async function checkNotEmptied(ps: PersistentState, dir: string): Promise<void> {
+async function checkNotEmptied(ps: PersistentState, dir: string, folder: string): Promise<void> {
   if ((await readdir(dir)).length > 0) return;
   const synced = (await ps.state.allFiles()).filter((r) => !r.deleted && r.contentHash !== null && !r.ignored && !r.shadowed).length;
   if (synced === 0) return;
   throw new CliError(
-    `${dir} is empty, but ${synced} files were synced from it: is its disk mounted? Nothing was deleted. To empty the vault on purpose, delete the files in Obsidian or on another device.`,
+    `${folder} is empty, but ${synced} files were synced from it: is its disk mounted? Nothing was deleted. To empty the vault on purpose, delete the files in Obsidian or on another device.`,
     EXIT_NEEDS_SETUP,
   );
 }
@@ -150,13 +152,27 @@ export async function obsidianHeartbeat(vaultDir: string, configDir: string, now
 const pausedReason = (hb: Heartbeat) => `Obsidian is syncing this folder${hb.device ? ` (device "${hb.device}")` : ''}`;
 
 export async function runSync(o: SyncOptions): Promise<number> {
+  await checkSetup(o.ps);
+  // A copy of chosen folders runs where others read its output (a pod's log):
+  // the notes' names are private, so no line names a file or folder.
+  const hidePaths = o.only !== null || (await o.ps.state.getSetting<string[] | null>(ONLY_SETTING, null)) !== null;
+  if (!hidePaths) return syncFolder(o, false);
+  try {
+    return await syncFolder(o, true);
+  } catch (err) {
+    if (err instanceof CliError) throw err;
+    // Its message or stack may name a file.
+    throw new CliError(`sync failed: ${errorKind(err)}`, isAuthFailure(err) ? EXIT_NEEDS_SETUP : EXIT_ERROR);
+  }
+}
+
+async function syncFolder(o: SyncOptions, hidePaths: boolean): Promise<number> {
   const { ps, log } = o;
-  await checkSetup(ps);
-  const { dir, only } = await boundFolder(o);
+  const { dir, only } = await boundFolder(o, hidePaths);
   const adapter = await FsAdapter.create(dir, {
     trash: o.trash,
     unwatched: (folder) => folder === '.git' || folder === o.configDir,
-    onWatchError: (err) => log.warn(`watching ${dir}: ${err.message}; changes made by other programs are found by the periodic check only`),
+    onWatchError: (err) => log.warn(`watching ${hidePaths ? 'the vault folder' : dir}: ${hidePaths ? errorKind(err) : err.message}; changes made by other programs are found by the periodic check only`),
   });
   const session = await openSyncSession({
     state: ps.state, adapter, configDir: o.configDir, autoRun: !o.once,
@@ -174,7 +190,7 @@ export async function runSync(o: SyncOptions): Promise<number> {
     throw new CliError(why[session.reason], EXIT_NEEDS_SETUP);
   }
   const { engine } = session;
-  const daemon = new Daemon(o, dir, engine);
+  const daemon = new Daemon(o, dir, engine, hidePaths);
   return daemon.run();
 }
 
@@ -190,7 +206,7 @@ class Daemon {
   private checking: Promise<void> | null = null;
   private statusWrites: Promise<void> = Promise.resolve();
 
-  constructor(private readonly o: SyncOptions, dir: string, private readonly engine: SyncEngine) {
+  constructor(private readonly o: SyncOptions, dir: string, private readonly engine: SyncEngine, private readonly hidePaths: boolean) {
     this.status = { pid: process.pid, vaultDir: dir, status: 'stopped', since: Date.now(), lastSynced: null, paused: null, notices: [] };
   }
 
@@ -211,7 +227,7 @@ class Daemon {
     } else {
       await this.engine.start();
     }
-    log.info(`sync started (${this.o.once ? 'once' : 'daemon'}) for ${this.status.vaultDir}`);
+    log.info(`sync started (${this.o.once ? 'once' : 'daemon'})${this.hidePaths ? '' : ` for ${this.status.vaultDir}`}`);
     if (this.o.once) {
       for (let i = 0; i < ONCE_MAX_CYCLES && this.halted === null; i++) {
         await this.engine.runCycle();
@@ -264,7 +280,7 @@ class Daemon {
         } catch (err) {
           // The folder may be gone meanwhile (a disk unmounted): end with an error, so the
           // service manager starts the CLI again and its checks of the folder run first.
-          this.o.log.error(`cannot resume: ${(err as Error).message}`);
+          this.o.log.error(`cannot resume: ${this.why(err)}`);
           this.failed = true;
           this.onHalt();
           return;
@@ -273,7 +289,7 @@ class Daemon {
         await this.writeStatus();
       }
     })().catch((err: unknown) => {
-      this.o.log.error(`pausing or resuming for Obsidian: ${(err as Error).message}`);
+      this.o.log.error(`pausing or resuming for Obsidian: ${this.why(err)}`);
     }).finally(() => {
       this.checking = null;
     });
@@ -284,7 +300,7 @@ class Daemon {
     switch (e.type) {
       case 'status':
         if (e.status !== this.status.status || e.detail !== this.status.detail) {
-          const line = `status: ${e.status}${e.detail ? ` (${e.detail})` : ''}`;
+          const line = `status: ${e.status}${e.detail && !this.hidePaths ? ` (${e.detail})` : ''}`;
           if (e.status === 'error' || e.status === 'offline') log.warn(line);
           else log.info(line);
         }
@@ -297,7 +313,7 @@ class Daemon {
         this.scheduleSave();
         return;
       case 'notice':
-        log.warn(`${e.code}: ${e.message}${e.path ? ` (${e.path})` : ''}`);
+        log.warn(this.hidePaths ? `${e.code}${e.count !== undefined ? ` (${e.count})` : ''}` : `${e.code}: ${e.message}${e.path ? ` (${e.path})` : ''}`);
         this.status.notices = [...this.status.notices, { at: Date.now(), code: e.code, message: e.message, ...(e.path ? { path: e.path } : {}) }].slice(-MAX_NOTICES);
         void this.writeStatus();
         if (HALTS.has(e.code) && this.halted === null) {
@@ -307,15 +323,20 @@ class Daemon {
         }
         return;
       case 'conflict':
-        log.info(`conflict: both versions kept, the other one as ${e.conflictPath}`);
+        log.info(`conflict: both versions kept${this.hidePaths ? '' : `, the other one as ${e.conflictPath}`}`);
         return;
       case 'merged':
-        log.info(`merged edits to ${e.path}`);
+        log.info(`merged edits to ${this.hidePaths ? 'a file' : e.path}`);
         return;
       case 'remote-change':
-        log.debug(`${e.action === 'delete' ? 'deleted' : 'wrote'} ${e.path}`);
+        log.debug(`${e.action === 'delete' ? 'deleted' : 'wrote'} ${this.hidePaths ? 'a file' : e.path}`);
         return;
     }
+  }
+
+  /** What went wrong, for the log: without a path when paths are hidden. */
+  private why(err: unknown): string {
+    return this.hidePaths ? errorKind(err) : (err as Error).message;
   }
 
   private scheduleSave(): void {
@@ -331,7 +352,7 @@ class Daemon {
       const ms = await this.o.ps.saveIfChanged();
       if (ms !== null) this.o.log.debug(`state saved in ${ms.toFixed(0)} ms`);
     } catch (err) {
-      this.o.log.error(`cannot save the state: ${(err as Error).message}`);
+      this.o.log.error(`cannot save the state: ${this.why(err)}`);
     }
   }
 
@@ -342,7 +363,7 @@ class Daemon {
       try {
         await writeStatus(this.o.ps.dir, snapshot);
       } catch (err) {
-        this.o.log.warn(`cannot write the status file: ${(err as Error).message}`);
+        this.o.log.warn(`cannot write the status file: ${this.why(err)}`);
       }
     });
     return this.statusWrites;

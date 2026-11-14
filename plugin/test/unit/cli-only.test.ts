@@ -72,7 +72,7 @@ describe('--only', () => {
       const err = await boundFolder({
         ps, vaultDir, once: true, init: true, only: ['mimir/'], trash: true, configDir: '.obsidian',
         log: streamLogger(() => undefined, false), stop: new Promise(() => undefined),
-      }).catch((e: unknown) => e);
+      }, true).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(CliError);
       expect((err as CliError).exitCode).toBe(EXIT_NEEDS_SETUP);
       expect(await ps.state.getSetting(VAULT_DIR_SETTING, null)).toBeNull(); // nothing was bound
