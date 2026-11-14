@@ -224,20 +224,23 @@ export class SyncEngine {
    * and right after pull applied a version of it, so a rule never applies
    * half-way through one file. An unreadable file keeps the rules as they were.
    * With onlyFolders the file is outside the whitelist and never on disk:
-   * its text is the server's head instead.
+   * its text is the server's head instead, and any failure to fetch it
+   * fails the cycle, which is retried: rules kept from before (none, at
+   * start) could let through what the file ignores.
    */
   private async loadVaultIgnore(): Promise<void> {
     let text: string | null;
-    try {
-      if (this.opts.onlyFolders) {
-        text = await fetchVaultIgnoreText(this.ctx);
-      } else {
-        const data = await this.opts.adapter.read(VAULT_IGNORE_FILE);
-        text = data === null ? null : new TextDecoder().decode(data);
+    if (this.opts.onlyFolders) {
+      text = await fetchVaultIgnoreText(this.ctx);
+    } else {
+      let data: Uint8Array | null;
+      try {
+        data = await this.opts.adapter.read(VAULT_IGNORE_FILE);
+      } catch (err) {
+        if (isCycleError(err)) throw err;
+        return;
       }
-    } catch (err) {
-      if (isCycleError(err)) throw err;
-      return;
+      text = data === null ? null : new TextDecoder().decode(data);
     }
     if (text === this.vaultIgnoreText) return;
     const first = this.vaultIgnoreText === undefined;
@@ -266,7 +269,8 @@ export class SyncEngine {
   /**
    * Before every cycle: the vault's .obsyncignore as it is on disk now and,
    * on a device that never pulled, as the server has it, before anything else arrives.
-   * With onlyFolders: the server's head once per engine start; pull fetches
+   * With onlyFolders: the server's head once per engine start (each cycle
+   * until a fetch succeeds); pull fetches
    * it again whenever a new version of the file arrives.
    */
   private async prepareVaultIgnore(): Promise<void> {

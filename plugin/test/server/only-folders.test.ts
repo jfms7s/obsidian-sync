@@ -1,6 +1,8 @@
 // A device that syncs only some folders (the CLI's --only): nothing outside
 // them arrives, leaves, or is deleted on its account, on either side.
-import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
+import { fileIdFor } from '../../src/crypto/objects';
+import { equalBytes } from '../../src/util/bytes';
 import { makeClient, settle } from '../helpers/client';
 import { files, newUser, text, type User } from '../helpers/fixture';
 import { startServer, type TestServer } from '../helpers/server';
@@ -88,11 +90,24 @@ describe('a device that syncs only some folders', () => {
     await settle([a, b]);
     expect(b.net.log.filter((r) => r.path.endsWith('/history')).length).toBe(histories);
   });
+
+  it('keeps the real path of a file that moves into a listed folder', async () => {
+    const { a, b } = await devices(await newUser(srv));
+    await a.adapter.write('work/x.md', text('moved\n'));
+    await settle([a, b]);
+    await a.adapter.rename('work/x.md', 'mimir/x.md');
+    await settle([a, b]);
+    expect(files(b.adapter)).toEqual({ 'mimir/x.md': 'moved\n' });
+    const [rec] = await b.state.filesByPath('mimir/x.md');
+    expect(rec).toMatchObject({ path: 'mimir/x.md', deleted: false });
+    expect(rec?.ignored).toBeFalsy();
+    expect(JSON.stringify(await b.state.allFiles())).not.toContain('work/');
+  });
 });
 
 describe('the vault ignore file on a device that syncs only some folders', () => {
-  /** a's vault with an ignore file for mimir/private/, and a new device b that has settled with it. */
-  async function ruled() {
+  /** a's vault with an ignore file for mimir/private/, and a new device b that has not synced yet. */
+  async function ruledVault() {
     const user = await newUser(srv);
     const a = await makeClient(srv, user, { name: 'Laptop', vault: 'create' });
     await a.adapter.write('mimir/private/x.md', text('private\n'));
@@ -102,6 +117,12 @@ describe('the vault ignore file on a device that syncs only some folders', () =>
     await a.adapter.write(IGNORE, text('mimir/private/\n'));
     await settle([a]);
     const b = await makeClient(srv, user, { name: 'Pod', vault: a.vaultId, onlyFolders: ['mimir/', 'people/'] });
+    return { a, b };
+  }
+
+  /** ruledVault, with b settled. */
+  async function ruled() {
+    const { a, b } = await ruledVault();
     await settle([a, b]);
     return { a, b };
   }
@@ -119,6 +140,33 @@ describe('the vault ignore file on a device that syncs only some folders', () =>
     expect(files(b.adapter)['mimir/private/x.md']).toBe('private\n');
     expect(files(b.adapter)[IGNORE]).toBeUndefined();
     expect(files(a.adapter)[IGNORE]).toBe('');
+  });
+
+  it('drops the rules when the vault ignore file is deleted', async () => {
+    const { a, b } = await ruled();
+    expect(files(b.adapter)['mimir/private/x.md']).toBeUndefined();
+    await a.adapter.remove(IGNORE);
+    await settle([a, b]);
+    expect(files(b.adapter)['mimir/private/x.md']).toBe('private\n');
+  });
+
+  it('syncs nothing until the vault ignore file could be read, and then tries again', async () => {
+    const { a, b } = await ruledVault();
+    const ignoreId = await fileIdFor(b.ring.namingKey, IGNORE);
+    const realHistory = b.api.history.bind(b.api);
+    // The server's head of the ignore file fails to decrypt (CryptoError, not a network error).
+    const spy = vi.spyOn(b.api, 'history').mockImplementation(async (vaultId, fileId) => {
+      const versions = await realHistory(vaultId, fileId);
+      if (!equalBytes(fileId, ignoreId)) return versions;
+      return versions.map((v) => ({ ...v, encMeta: v.encMeta.map((x, i) => (i === v.encMeta.length - 1 ? x ^ 1 : x)) }));
+    });
+    await b.engine.runCycle();
+    await b.engine.runCycle();
+    expect(b.engine.status).toBe('error');
+    expect(files(b.adapter)).toEqual({});
+    spy.mockRestore();
+    await settle([a, b]);
+    expect(files(b.adapter)).toEqual({ 'mimir/ok.md': 'ok\n' });
   });
 
   it('does not push a local .obsyncignore', async () => {
