@@ -26,8 +26,24 @@ describe('--only', () => {
   });
 
   it('parseOnlyFolders refuses anything that is not a plain folder with a trailing slash', () => {
-    for (const bad of ['', '/', 'mimir', '/mimir/', './mimir/', '../x/', 'a/../b/', 'a//b/', 'a/*/', 'a?/', '!a/', '[a]/', '#a/', ' mimir/', '.obsync-outside/', '.obsync-outside/a/'])
-      expect(() => parseOnlyFolders([bad]), bad).toThrow(CliError);
+    for (const bad of [
+      '', '/', 'mimir', '/mimir/', './mimir/', '../x/', 'a/../b/', 'a//b/', 'a/*/', 'a?/', '!a/', '[a]/', '#a/', ' mimir/',
+      '.obsync-outside/', '.obsync-outside/a/', '.OBSYNC-Outside/', '.obsync-cli-only/', '.Obsync-Cli-Only/a/', 'secret:x/', 'SECRE~1/',
+    ]) {
+      expect(() => parseOnlyFolders(['fine/', bad]), bad).toThrow(CliError);
+      // The list may be private: a refusal tells the folder by its position, never by name.
+      const message = (() => {
+        try {
+          parseOnlyFolders(['fine/', bad]);
+        } catch (err) {
+          return (err as Error).message;
+        }
+        return '';
+      })();
+      expect(message, bad).toMatch(/^--only number 2: /);
+      if (bad.length > 1) expect(message, bad).not.toContain(bad);
+      expect(message, bad).not.toContain('fine');
+    }
   });
 
   it('sameFolders compares two lists as sets', () => {

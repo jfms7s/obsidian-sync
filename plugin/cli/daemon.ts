@@ -79,7 +79,7 @@ export async function boundFolder(o: SyncOptions): Promise<{ dir: string; only: 
     await o.ps.state.setSetting(VAULT_DIR_SETTING, dir);
     await o.ps.state.setSetting(ONLY_SETTING, o.only);
     await o.ps.save();
-    o.log.info(`syncing ${dir} from now on${o.only ? `, only ${o.only.join(', ')}` : ''}`);
+    o.log.info(`syncing ${dir} from now on${o.only ? `, only ${o.only.length} folder${o.only.length === 1 ? '' : 's'}` : ''}`);
     only = o.only;
   } else {
     if (bound !== dir) throw new CliError(`this state syncs ${bound}, not ${dir}; use --name for another vault folder`, EXIT_NEEDS_SETUP);

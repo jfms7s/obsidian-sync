@@ -9,8 +9,11 @@ import { CliError } from './exit';
 /** The setting holding the --only list a state was set up with (null: every folder). */
 export const ONLY_SETTING = 'cli.onlyFolders';
 
-/** Where the engine keeps the records of versions outside the list: never a folder to keep. */
-const OUTSIDE_FOLDER = '.obsync-outside';
+/**
+ * Names obsync keeps for itself at the vault root (compared case-folded): the
+ * engine's records of versions outside the list, and the marker file.
+ */
+const OWN_NAMES = ['.obsync-outside', ONLY_MARKER_FILE];
 const PATTERN_CHARACTERS = /[*?[\]!#\\]/;
 
 function folderProblem(f: string): string | null {
@@ -20,21 +23,25 @@ function folderProblem(f: string): string | null {
   if (segments.some((s) => s === '' || s === '.' || s === '..')) return 'use a plain folder path from the vault root';
   if (PATTERN_CHARACTERS.test(path)) return 'no pattern characters (* ? [ ] ! # \\)';
   if (segments.some((s) => s.trim() !== s)) return 'no spaces at the start or end of a name';
-  if (segments[0] === OUTSIDE_FOLDER) return `${OUTSIDE_FOLDER}/ is obsync's own`;
+  if (OWN_NAMES.includes(segments[0]!.toLowerCase())) return 'that name at the vault root is obsync\'s own';
   try {
     if (normalizePath(path) !== path) return 'not a normalized vault path';
-  } catch (err) {
-    return (err as Error).message;
+  } catch {
+    return 'not a valid vault path'; // normalizePath's message would name the folder
   }
   return null;
 }
 
-/** The --only arguments, checked, once each and sorted; throws CliError (exit 1) on the first bad one. */
+/**
+ * The --only arguments, checked, once each and sorted; throws CliError (exit 1)
+ * on the first bad one. Messages never name a folder (the list may be private):
+ * a bad one is told by its position.
+ */
 export function parseOnlyFolders(args: readonly string[]): string[] {
-  for (const f of args) {
+  args.forEach((f, i) => {
     const why = folderProblem(f);
-    if (why !== null) throw new CliError(`--only ${JSON.stringify(f)}: ${why}`);
-  }
+    if (why !== null) throw new CliError(`--only number ${i + 1}: ${why}`);
+  });
   return [...new Set(args)].sort();
 }
 

@@ -253,6 +253,7 @@ describe('obsync-cli against the real server', () => {
     const r = await cli(['sync', '--vault-dir', vaultDir, '--once', '--only', 'mimir/', ...S()]);
     expect(r.code).toBe(2);
     expect(r.err).toMatch(/another --only list/);
+    expect(r.err).not.toContain('mimir');
     expect(await readdir(vaultDir, { recursive: true })).toEqual(before);
   });
 
@@ -304,6 +305,8 @@ describe('obsync-cli --only', () => {
   it('syncs only the listed folders and writes the marker', async () => {
     const r = await cli(['sync', ...N, '--vault-dir', d, '--init', '--only', 'mimir/', '--only', 'people/', '--once']);
     expect(r.code, r.err).toBe(0);
+    expect(r.err).toMatch(/from now on, only 2 folders/);
+    expect(r.err).not.toMatch(/mimir|people/); // the log names no listed folder
     expect(await tree()).toEqual(['.obsync-cli-only', 'mimir/a.md', 'people/p.md']);
     expect(await readFile(marker(), 'utf8')).toBe('mimir/\npeople/\n');
     expect((await stat(marker())).mode & 0o777).toBe(0o644);
@@ -316,6 +319,7 @@ describe('obsync-cli --only', () => {
     const other = await cli(['sync', ...N, '--vault-dir', d, '--once', '--only', 'mimir/']);
     expect(other.code).toBe(2);
     expect(other.err).toMatch(/this state was set up with another --only list; see obsync-cli status/);
+    expect(other.err).not.toMatch(/mimir|people/);
     const same = await cli(['sync', ...N, '--vault-dir', d, '--once', '--only', 'people/', '--only', 'mimir/']);
     expect(same.code, same.err).toBe(0);
   });
