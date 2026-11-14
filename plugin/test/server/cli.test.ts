@@ -2,7 +2,7 @@
 // run by Node as a user would, logs in, unlocks, chooses the vault and
 // syncs a real folder with the test server, next to an engine device.
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { build } from 'esbuild';
@@ -248,6 +248,14 @@ describe('obsync-cli against the real server', () => {
     }
   });
 
+  it('refuses to add --only to a state that synced without it', async () => {
+    const before = await readdir(vaultDir, { recursive: true });
+    const r = await cli(['sync', '--vault-dir', vaultDir, '--once', '--only', 'mimir/', ...S()]);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/another --only list/);
+    expect(await readdir(vaultDir, { recursive: true })).toEqual(before);
+  });
+
   it('logs out: the device is revoked and the state deleted', async () => {
     const cliDevice = () => phone.api.listDevices().then((ds) => ds.find((d) => d.name === 'Desktop CLI'));
     expect((await cliDevice())?.revoked).toBe(false);
@@ -256,5 +264,71 @@ describe('obsync-cli against the real server', () => {
     expect(r.code, r.err).toBe(0);
     expect((await cliDevice())?.revoked ?? true).toBe(true);
     expect((await cli(['status', ...S()])).code).toBe(2);
+  });
+});
+
+describe('obsync-cli --only', () => {
+  let a: SimClient;
+  let d: string;
+  const N = ['--name', 'only'];
+  const marker = () => join(d, '.obsync-cli-only');
+  /** The files in the folder, its subfolders' files as 'folder/name'. */
+  const tree = async () =>
+    (await readdir(d, { recursive: true, withFileTypes: true }))
+      .filter((e) => e.isFile())
+      .map((e) => join(e.parentPath, e.name).slice(d.length + 1))
+      .sort();
+
+  beforeAll(async () => {
+    const user = await newUser(srv);
+    a = await makeClient(srv, user, { name: 'a', vault: 'create' });
+    await a.adapter.write('mimir/a.md', text('mimir\n'));
+    await a.adapter.write('people/p.md', text('people\n'));
+    await a.adapter.write('work/w.md', text('work\n'));
+    await a.engine.runCycle();
+    d = join(work, 'only-vault');
+    await mkdir(d);
+    const login = await cli(['login', '--server', srv.url, '--username', user.username, '--password-fd', '3', ...N], user.password);
+    expect(login.code, login.err).toBe(0);
+    expect((await cli(['unlock', '--passphrase-fd', '3', ...N], PASSPHRASE)).code).toBe(0);
+    expect((await cli(['vaults', '--choose', a.vaultId, ...N])).code).toBe(0);
+  });
+
+  it('refuses --only without --init on the first sync (exit 2)', async () => {
+    const r = await cli(['sync', ...N, '--vault-dir', d, '--only', 'mimir/', '--once']);
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/--init/);
+    expect(await readdir(d)).toEqual([]);
+  });
+
+  it('syncs only the listed folders and writes the marker', async () => {
+    const r = await cli(['sync', ...N, '--vault-dir', d, '--init', '--only', 'mimir/', '--only', 'people/', '--once']);
+    expect(r.code, r.err).toBe(0);
+    expect(await tree()).toEqual(['.obsync-cli-only', 'mimir/a.md', 'people/p.md']);
+    expect(await readFile(marker(), 'utf8')).toBe('mimir/\npeople/\n');
+    expect((await stat(marker())).mode & 0o777).toBe(0o644);
+  });
+
+  it('uses the stored list without --only, and refuses another one', async () => {
+    const plain = await cli(['sync', ...N, '--vault-dir', d, '--once']);
+    expect(plain.code, plain.err).toBe(0);
+    expect(await tree()).toEqual(['.obsync-cli-only', 'mimir/a.md', 'people/p.md']);
+    const other = await cli(['sync', ...N, '--vault-dir', d, '--once', '--only', 'mimir/']);
+    expect(other.code).toBe(2);
+    expect(other.err).toMatch(/this state was set up with another --only list; see obsync-cli status/);
+    const same = await cli(['sync', ...N, '--vault-dir', d, '--once', '--only', 'people/', '--only', 'mimir/']);
+    expect(same.code, same.err).toBe(0);
+  });
+
+  it('rewrites the marker at start', async () => {
+    await writeFile(marker(), 'x/\n');
+    const r = await cli(['sync', ...N, '--vault-dir', d, '--once']);
+    expect(r.code, r.err).toBe(0);
+    expect(await readFile(marker(), 'utf8')).toBe('mimir/\npeople/\n');
+  });
+
+  it('shows the list in status', async () => {
+    const r = await cli(['status', ...N]);
+    expect(r.out).toMatch(/^only: {5}mimir\/, people\/$/m);
   });
 });

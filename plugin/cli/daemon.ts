@@ -9,6 +9,7 @@ import {
 import { CliError, EXIT_ERROR, EXIT_NEEDS_SETUP, EXIT_OK } from './exit';
 import { FsAdapter } from './fs-adapter';
 import type { Logger } from './log';
+import { ONLY_SETTING, sameFolders, syncMarker } from './only';
 import type { PersistentState } from './state';
 import { MAX_NOTICES, writeStatus, type DaemonStatus } from './status';
 
@@ -31,6 +32,8 @@ export interface SyncOptions {
   vaultDir: string;
   once: boolean;
   init: boolean;
+  /** --only: sync only these folders (parsed); null when not given. */
+  only: string[] | null;
   trash: boolean;
   /** The vault's Obsidian configuration folder: never synced. */
   configDir: string;
@@ -50,11 +53,12 @@ const inside = (child: string, parent: string): boolean => {
 };
 
 /**
- * The folder this state syncs. The first sync needs --init, which records
- * it; later runs refuse any other folder, so a typo in the unit file cannot
- * make the CLI upload some other folder.
+ * The folder this state syncs, and the --only list it keeps (null: every
+ * folder). The first sync needs --init, which records both; later runs
+ * refuse any other folder or list, so a typo in the unit file cannot make
+ * the CLI upload some other folder or drop folders it kept.
  */
-async function boundFolder(o: SyncOptions): Promise<string> {
+export async function boundFolder(o: SyncOptions): Promise<{ dir: string; only: string[] | null }> {
   // Each of these needs a person (exit 2): restarting the unit would not help.
   let dir: string;
   try {
@@ -65,16 +69,28 @@ async function boundFolder(o: SyncOptions): Promise<string> {
   const stateDir = await realpath(o.ps.dir);
   if (inside(stateDir, dir)) throw new CliError(`the state directory ${o.ps.dir} is inside the vault folder: it holds the keys and must not be synced`, EXIT_NEEDS_SETUP);
   const bound = await o.ps.state.getSetting<string | null>(VAULT_DIR_SETTING, null);
+  let only: string[] | null;
   if (bound === null) {
     if (!o.init) throw new CliError(`this state has not synced a folder yet: check that ${dir} is the vault folder, then run the first sync with --init`, EXIT_NEEDS_SETUP);
+    // The state's records are of every folder: a list now would leave them with no file on disk.
+    if (o.only !== null && (await o.ps.state.allFiles()).length > 0) {
+      throw new CliError('this state has synced every folder before: use --name for a new state to sync only some folders', EXIT_NEEDS_SETUP);
+    }
     await o.ps.state.setSetting(VAULT_DIR_SETTING, dir);
+    await o.ps.state.setSetting(ONLY_SETTING, o.only);
     await o.ps.save();
-    o.log.info(`syncing ${dir} from now on`);
-    return dir;
+    o.log.info(`syncing ${dir} from now on${o.only ? `, only ${o.only.join(', ')}` : ''}`);
+    only = o.only;
+  } else {
+    if (bound !== dir) throw new CliError(`this state syncs ${bound}, not ${dir}; use --name for another vault folder`, EXIT_NEEDS_SETUP);
+    await checkNotEmptied(o.ps, dir);
+    only = await o.ps.state.getSetting<string[] | null>(ONLY_SETTING, null);
+    if (o.only !== null && (only === null || !sameFolders(o.only, only))) {
+      throw new CliError('this state was set up with another --only list; see obsync-cli status', EXIT_NEEDS_SETUP);
+    }
   }
-  if (bound !== dir) throw new CliError(`this state syncs ${bound}, not ${dir}; use --name for another vault folder`, EXIT_NEEDS_SETUP);
-  await checkNotEmptied(o.ps, dir);
-  return dir;
+  await syncMarker(dir, only);
+  return { dir, only };
 }
 
 /**
@@ -136,7 +152,7 @@ const pausedReason = (hb: Heartbeat) => `Obsidian is syncing this folder${hb.dev
 export async function runSync(o: SyncOptions): Promise<number> {
   const { ps, log } = o;
   await checkSetup(ps);
-  const dir = await boundFolder(o);
+  const { dir, only } = await boundFolder(o);
   const adapter = await FsAdapter.create(dir, {
     trash: o.trash,
     unwatched: (folder) => folder === '.git' || folder === o.configDir,
@@ -145,6 +161,7 @@ export async function runSync(o: SyncOptions): Promise<number> {
   const session = await openSyncSession({
     state: ps.state, adapter, configDir: o.configDir, autoRun: !o.once,
     webSocket: o.once ? null : o.webSocket,
+    ...(only ? { onlyFolders: only } : {}),
     ...(o.fetch ? { fetch: o.fetch } : {}),
   });
   if (!session.ok) {
