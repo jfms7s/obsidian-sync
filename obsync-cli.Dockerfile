@@ -13,7 +13,7 @@
 # State (the login and the unlocked keys) lives in the /state volume.
 
 # node:22.23.5-bookworm-slim, index digest as of 2026-11-14.
-FROM --platform=$BUILDPLATFORM node:22.23.5-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS build
+FROM --platform=$BUILDPLATFORM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS build
 
 WORKDIR /src
 # manifest.json carries the version the bundle reports.
@@ -31,7 +31,7 @@ RUN npm run build:cli \
  && mkdir -p /out/state
 
 # The same Node image, for the target platform.
-FROM node:22.23.5-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
+FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1
 
 COPY --from=build /src/plugin/dist/obsync-cli.mjs /app/obsync-cli.mjs
 # The node user is uid 1000; a fresh named volume takes this owner.
