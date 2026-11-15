@@ -17,22 +17,22 @@
     "test:convergence": "vitest run --project convergence"
   },
   "dependencies": {
-    "@bufbuild/protobuf": "2.16.0",
+    "@bufbuild/protobuf": "2.17.0",
     "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
     "@scure/bip39": "2.4.0",
     "node-diff3": "3.2.1"
   },
   "devDependencies": {
-    "@bufbuild/protoc-gen-es": "2.16.0",
+    "@bufbuild/protoc-gen-es": "2.17.0",
     "@types/node": "22.20.5",
-    "@vitest/coverage-v8": "5.0.3",
+    "@vitest/coverage-v8": "5.1.0",
     "esbuild": "0.28.2",
-    "fake-indexeddb": "6.2.5",
+    "fake-indexeddb": "6.2.8",
     "obsidian": "1.8.7",
     "typescript": "7.0.2",
-    "vite": "8.3.4",
-    "vitest": "5.0.3"
+    "vite": "8.3.8",
+    "vitest": "5.1.0"
   },
   "overrides": {
     "moment": "2.31.0"
